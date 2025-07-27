@@ -23,7 +23,7 @@ logs/
 db.sqlite*
 *.db
 *.db-journal
-*.sql
+# *.sql
 *.psql
 *.dump
 
