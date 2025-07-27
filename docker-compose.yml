@@ -1,0 +1,115 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: walletpulse-db
+    environment:
+      POSTGRES_DB: walletpulse
+      POSTGRES_USER: walletpulse
+      POSTGRES_PASSWORD: secure_password_2024
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server/src/database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - walletpulse-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U walletpulse -d walletpulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: walletpulse-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - walletpulse-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  # WalletPulse Server
+  server:
+    build: 
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: walletpulse-server
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=walletpulse
+      - DB_USER=walletpulse
+      - DB_PASSWORD=secure_password_2024
+      - DB_SSL=false
+      - PORT=5001
+    ports:
+      - "5001:5001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - walletpulse-network
+    volumes:
+      - ./server:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # WalletPulse Client
+  client:
+    build: 
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: walletpulse-client
+    environment:
+      - REACT_APP_API_URL=http://localhost:5001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - server
+    networks:
+      - walletpulse-network
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # pgAdmin (Database Management UI)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: walletpulse-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@walletpulse.com
+      PGADMIN_DEFAULT_PASSWORD: admin_password
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    networks:
+      - walletpulse-network
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  walletpulse-network:
+    driver: bridge

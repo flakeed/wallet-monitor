@@ -1,0 +1,28 @@
+{
+  "name": "wallet-pulse",
+  "version": "2.0.0",
+  "description": "Multi-wallet Solana monitoring application",
+  "main": "server/src/server.js",
+  "scripts": {
+    "start": "cd server && npm start",
+    "build": "cd server && npm install && cd ../client && npm install && npm run build",
+    "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm start\"",
+    "start:server": "cd server && npm start",
+    "start:client": "cd client && npm start",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/wallet-pulse.git"
+  },
+  "keywords": ["solana", "wallet", "monitoring", "blockchain", "crypto"],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^7.6.0"
+  }
+}
