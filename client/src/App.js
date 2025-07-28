@@ -86,6 +86,27 @@ console.log('transactions',transactions)
     }
   };
 
+const addWalletsBulk = async (wallets) => {
+  try {
+    const response = await fetch(`${API_BASE}/wallets/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallets })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to import wallets');
+    }
+
+    setRefreshKey(prev => prev + 1);
+    return { success: true, message: data.message, results: data.results };
+  } catch (err) {
+    throw new Error(err.message);
+  }
+};
+
   const removeWallet = async (address) => {
     try {
       const response = await fetch(`${API_BASE}/wallets/${address}`, {
@@ -160,9 +181,11 @@ console.log('transactions',transactions)
           onToggle={toggleMonitoring}
         />
 
-        <WalletManager onAddWallet={addWallet} />
+       <WalletManager 
+  onAddWallet={addWallet}
+  onAddWalletsBulk={addWalletsBulk}
+/>
 
-        {/* Фильтры транзакций */}
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">Transaction Filters</h3>
