@@ -10,7 +10,7 @@ const app = express();
 const port = process.env.PORT || 5001;
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://crypto-monitor-f21kndk9h-flakeeds-projects.vercel.app'],
+    origin: ['http://localhost:3000', 'http://localhost:3001','https://wallet-monitor-client.vercel.app'],
     optionsSuccessStatus: 200,
 }));
 app.use(express.json());
