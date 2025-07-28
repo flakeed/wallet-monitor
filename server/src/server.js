@@ -277,6 +277,133 @@ app.get('/api/stats/transactions', async (req, res) => {
     }
 });
 
+app.post('/api/wallets/bulk', async (req, res) => {
+    try {
+        const { wallets } = req.body;
+
+        if (!wallets || !Array.isArray(wallets)) {
+            return res.status(400).json({ error: 'Wallets array is required' });
+        }
+
+        if (wallets.length === 0) {
+            return res.status(400).json({ error: 'At least one wallet is required' });
+        }
+
+        if (wallets.length > 100) {
+            return res.status(400).json({ error: 'Maximum 100 wallets allowed per bulk import' });
+        }
+
+        const results = {
+            total: wallets.length,
+            successful: 0,
+            failed: 0,
+            errors: [],
+            successfulWallets: []
+        };
+
+        for (const wallet of wallets) {
+            if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+                results.failed++;
+                results.errors.push({
+                    address: wallet.address || 'invalid',
+                    name: wallet.name || null,
+                    error: 'Invalid Solana wallet address format'
+                });
+                continue;
+            }
+        }
+
+        for (const wallet of wallets) {
+            const hasError = results.errors.some(error => error.address === wallet.address);
+            if (hasError) continue;
+
+            try {
+                const addedWallet = await monitoringService.addWallet(wallet.address, wallet.name || null);
+                results.successful++;
+                results.successfulWallets.push({
+                    address: wallet.address,
+                    name: wallet.name || null,
+                    id: addedWallet.id
+                });
+            } catch (error) {
+                results.failed++;
+                results.errors.push({
+                    address: wallet.address,
+                    name: wallet.name || null,
+                    error: error.message
+                });
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+        res.json({
+            success: true,
+            message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
+            results
+        });
+
+    } catch (error) {
+        console.error('Error in bulk wallet import:', error);
+        res.status(500).json({ error: 'Failed to import wallets' });
+    }
+});
+
+app.get('/api/wallets/bulk-template', (req, res) => {
+    const template = `# Bulk Wallet Import Template
+# Format: address,name (name is optional)
+# One wallet per line
+# Lines starting with # are ignored
+
+# Example wallets (replace with real addresses):
+9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
+53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader
+Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
+7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet`;
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="wallet-import-template.txt"');
+    res.send(template);
+});
+
+app.post('/api/wallets/validate', (req, res) => {
+    try {
+        const { wallets } = req.body;
+
+        if (!wallets || !Array.isArray(wallets)) {
+            return res.status(400).json({ error: 'Wallets array is required' });
+        }
+
+        const validation = {
+            total: wallets.length,
+            valid: 0,
+            invalid: 0,
+            errors: []
+        };
+
+        for (const wallet of wallets) {
+            if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+                validation.invalid++;
+                validation.errors.push({
+                    address: wallet.address || 'missing',
+                    name: wallet.name || null,
+                    error: 'Invalid Solana wallet address format'
+                });
+            } else {
+                validation.valid++;
+            }
+        }
+
+        res.json({
+            success: true,
+            validation
+        });
+
+    } catch (error) {
+        console.error('Error validating wallets:', error);
+        res.status(500).json({ error: 'Failed to validate wallets' });
+    }
+});
 
 app.get('/api/stats/tokens', async (req, res) => {
     try {
