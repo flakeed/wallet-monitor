@@ -106,6 +106,27 @@ app.delete('/api/wallets/:address', async (req, res) => {
     }
 });
 
+app.post('/api/webhook', async (req, res) => {
+    try {
+        const data = req.body;
+        console.log(`[${new Date().toISOString()}] Received Solana node webhook:`, JSON.stringify(data, null, 2));
+
+        if (process.env.WEBHOOK_AUTH_HEADER) {
+            const authHeader = req.headers['authorization'];
+            if (authHeader !== process.env.WEBHOOK_AUTH_HEADER) {
+                return res.status(401).json({ error: 'Unauthorized webhook request' });
+            }
+        }
+
+        await monitoringService.processWebhook(data);
+
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error('❌ Error processing webhook:', error.message);
+        res.status(500).json({ error: 'Failed to process webhook' });
+    }
+});
+
 app.get('/api/transactions', async (req, res) => {
     try {
         const hours = parseInt(req.query.hours) || 24;

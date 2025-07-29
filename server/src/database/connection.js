@@ -5,17 +5,17 @@ const path = require('path');
 class Database {
     constructor() {
         this.pool = new Pool({
-            // user: process.env.DB_USER || 'walletpulse',
-            // host: process.env.DB_HOST || 'localhost',
-            // database: process.env.DB_NAME || 'walletpulse',
-            // password: process.env.DB_PASSWORD,
-            // port: process.env.DB_PORT || 5432,
-            // ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
-            // max: 20,
-            // idleTimeoutMillis: 30000,
-            // connectionTimeoutMillis: 2000,
+            user: process.env.DB_USER || 'walletpulse',
+            host: process.env.DB_HOST || 'localhost',
+            database: process.env.DB_NAME || 'walletpulse',
+            password: process.env.DB_PASSWORD,
+            port: process.env.DB_PORT || 5432,
+            ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+            max: 20,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 2000,
 
-            connectionString: process.env.DATABASE_URL,
+            // connectionString: process.env.DATABASE_URL,
         });
 
         this.pool.on('error', (err) => {
