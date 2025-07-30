@@ -1,15 +1,15 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const axios = require('axios');
 const Database = require('../database/connection');
-const { fetchTokenMetadata, fetchHistoricalSolPrice } = require('./tokenService');
+const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
-        this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed'); 
+        this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
         this.isMonitoring = false;
         this.processedSignatures = new Set();
-        this.webhookUrl = process.env.WEBHOOK_URL; 
+        this.webhookUrl = process.env.WEBHOOK_URL;
         this.stats = {
             totalScans: 0,
             totalWallets: 0,
@@ -31,7 +31,7 @@ class WalletMonitoringService {
 
         this.monitoringInterval = setInterval(async () => {
             await this.performMonitoringCycle();
-        }, 60000); 
+        }, 60000);
     }
 
     async performMonitoringCycle() {
@@ -86,7 +86,7 @@ class WalletMonitoringService {
 
             const signature = data.signature;
             const accountAddresses = data.accountKeys;
-            const blockTime = data.blockTime || Math.floor(Date.now() / 1000); 
+            const blockTime = data.blockTime || Math.floor(Date.now() / 1000);
 
             const wallet = await this.findWalletInEvent(accountAddresses);
             if (!wallet) {
@@ -139,21 +139,39 @@ class WalletMonitoringService {
             tokens: txData.tokenChanges || []
         };
 
-        try {
-            await axios.post(this.webhookUrl, payload, {
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(process.env.WEBHOOK_AUTH_HEADER && {
-                        'Authorization': process.env.WEBHOOK_AUTH_HEADER
-                    })
-                },
-                timeout: 5000
-            });
-            console.log(`✅ Webhook sent for transaction ${txData.signature}`);
-        } catch (error) {
-            console.error(`❌ Error sending webhook for ${txData.signature}:`, error.message);
-            this.stats.errors++;
+        const maxRetries = 3;
+        let attempt = 0;
+
+        while (attempt < maxRetries) {
+            try {
+                console.log(`[${new Date().toISOString()}] Sending webhook for ${txData.signature} (attempt ${attempt + 1})`);
+                await axios.post(this.webhookUrl, payload, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(process.env.WEBHOOK_AUTH_HEADER && {
+                            'Authorization': process.env.WEBHOOK_AUTH_HEADER
+                        })
+                    },
+                    timeout: 5000
+                });
+                console.log(`✅ Webhook sent for transaction ${txData.signature}`);
+                return;
+            } catch (error) {
+                attempt++;
+                if (error.response?.status === 429) {
+                    const delay = Math.pow(2, attempt) * 1000; 
+                    console.warn(`[${new Date().toISOString()}] Webhook rate limit (429) for ${txData.signature}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                } else {
+                    console.error(`❌ Error sending webhook for ${txData.signature}:`, error.message);
+                    this.stats.errors++;
+                    return;
+                }
+            }
         }
+
+        console.error(`❌ Failed to send webhook for ${txData.signature} after ${maxRetries} attempts`);
+        this.stats.errors++;
     }
 
     async checkWalletTransactions(wallet) {
@@ -418,7 +436,8 @@ class WalletMonitoringService {
             this.isMonitoring = false;
         }
         await this.db.close();
-        console.log('✅ Monitoring service closed');
+        await redis.quit();
+        console.log('✅ Monitoring service and Redis connection closed');
     }
 }
 

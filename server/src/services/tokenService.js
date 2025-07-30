@@ -3,59 +3,122 @@ const { TokenListProvider } = require('@solana/spl-token-registry');
 const axios = require('axios');
 const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
+const Redis = require('ioredis');
 
-let tokenMap = new Map();
-let solPriceCache = new Map();
-let lastPriceRequest = 0;
-const PRICE_REQUEST_DELAY = 1000; 
+const redis = new Redis({
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+    password: process.env.REDIS_PASSWORD || undefined,
+    db: 0,
+});
 
-const requestQueue = [];
+redis.on('connect', () => {
+    console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
+});
+redis.on('error', (err) => {
+    console.error(`[${new Date().toISOString()}] ❌ Redis connection error:`, err.message);
+});
+
+const promiseStore = new Map();
+
 let isProcessingQueue = false;
+const REQUEST_DELAY = 500;
+const TOKEN_CACHE_TTL = 24 * 60 * 60;
+const PRICE_CACHE_TTL = 60 * 60; 
+const PROMISE_TTL = 5 * 60;
+let lastPriceRequest = 0;
+const PRICE_REQUEST_DELAY = 1000;
 
 (async () => {
     try {
         const tokens = await new TokenListProvider().resolve();
         const tokenList = tokens.filterByChainId(101).getList();
-        tokenMap = new Map(tokenList.map((t) => [t.address, t]));
-        console.log(`✅ Loaded ${tokenMap.size} tokens from registry`);
+        console.log(`[${new Date().toISOString()}] ✅ Loaded ${tokenList.length} tokens from registry`);
+
+        const pipeline = redis.pipeline();
+        for (const token of tokenList) {
+            pipeline.set(
+                `token:${token.address}`,
+                JSON.stringify(token),
+                'EX',
+                TOKEN_CACHE_TTL
+            );
+        }
+        await pipeline.exec();
+        console.log(`[${new Date().toISOString()}] ✅ Stored ${tokenList.length} tokens in Redis`);
+
+        await redis.del('helius:queue');
+        console.log(`[${new Date().toISOString()}] ✅ Cleared stale Helius queue`);
     } catch (e) {
-        console.error('Failed to load token registry:', e.message);
+        console.error(`[${new Date().toISOString()}] Failed to load token registry:`, e.message);
     }
 })();
 
 async function processQueue() {
-    if (isProcessingQueue || requestQueue.length === 0) return;
+    if (isProcessingQueue) return;
 
     isProcessingQueue = true;
-    while (requestQueue.length > 0) {
-        const { requestId, mint, connection, resolve, reject } = requestQueue.shift();
+    while (true) {
+        const requestData = await redis.rpop('helius:queue');
+        if (!requestData) break;
+
+        let request;
+        try {
+            request = JSON.parse(requestData);
+        } catch (e) {
+            console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, e.message);
+            continue;
+        }
+
+        const { requestId, mint, connection: rpcEndpoint } = request;
+        const connection = new Connection(rpcEndpoint, 'confirmed');
         console.log(`[${new Date().toISOString()}] Processing Helius request ${requestId} for mint ${mint}`);
 
         try {
             const result = await processHeliusRequest(mint, connection);
-            resolve(result);
+            const promise = promiseStore.get(requestId);
+            if (promise) {
+                promise.resolve(result);
+            } else {
+                console.warn(`[${new Date().toISOString()}] No promise found for request ${requestId}`);
+            }
         } catch (error) {
             console.error(`[${new Date().toISOString()}] Error processing Helius request ${requestId} for mint ${mint}:`, error.message);
-            reject(error);
+            const promise = promiseStore.get(requestId);
+            if (promise) {
+                promise.reject(error);
+            }
         }
 
-        await new Promise(resolve => setTimeout(resolve, 500));
+        promiseStore.delete(requestId);
+        await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY));
     }
     isProcessingQueue = false;
+
+    redis.llen('helius:queue', (err, length) => {
+        if (err) {
+            console.error(`[${new Date().toISOString()}] Error checking queue length:`, err.message);
+            return;
+        }
+        if (length > 0) {
+            setImmediate(processQueue);
+        }
+    });
 }
 
 async function processHeliusRequest(mint, connection) {
-    if (tokenMap.has(mint)) {
-        console.log(`[${new Date().toISOString()}] Using cached metadata for mint ${mint}`);
-        return tokenMap.get(mint);
+    const cachedToken = await redis.get(`token:${mint}`);
+    if (cachedToken) {
+        console.log(`[${new Date().toISOString()}] Using Redis cached metadata for mint ${mint}`);
+        return JSON.parse(cachedToken);
     }
 
     const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
     if (!HELIUS_API_KEY) {
-        console.warn('HELIUS_API_KEY not set — trying on-chain metadata');
+        console.warn(`[${new Date().toISOString()}] HELIUS_API_KEY not set — trying on-chain metadata`);
         const onChainData = await fetchOnChainMetadata(mint, connection);
         const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', logoURI: null, decimals: 0 };
-        tokenMap.set(mint, data);
+        await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
         return data;
     }
 
@@ -123,7 +186,7 @@ async function processHeliusRequest(mint, connection) {
                 logoURI: logoURI || null,
             };
 
-            tokenMap.set(mint, tokenData);
+            await redis.set(`token:${mint}`, JSON.stringify(tokenData), 'EX', TOKEN_CACHE_TTL);
             return tokenData;
         }
 
@@ -134,7 +197,7 @@ async function processHeliusRequest(mint, connection) {
 
     const onChainData = await fetchOnChainMetadata(mint, connection);
     const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', logoURI: null, decimals: 0 };
-    tokenMap.set(mint, data);
+    await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
     return data;
 }
 
@@ -142,15 +205,42 @@ async function fetchTokenMetadata(mint, connection) {
     return new Promise((resolve, reject) => {
         const requestId = uuidv4();
         console.log(`[${new Date().toISOString()}] Enqueued Helius request ${requestId} for mint ${mint}`);
-        requestQueue.push({ requestId, mint, connection, resolve, reject });
-        processQueue();
+
+        promiseStore.set(requestId, { resolve, reject });
+
+        redis.lpush('helius:queue', JSON.stringify({
+            requestId,
+            mint,
+            connection: connection.rpcEndpoint,
+        }), (err) => {
+            if (err) {
+                console.error(`[${new Date().toISOString()}] Error enqueuing request ${requestId}:`, err.message);
+                promiseStore.delete(requestId);
+                reject(err);
+                return;
+            }
+
+            if (!isProcessingQueue) {
+                setImmediate(processQueue);
+            }
+        });
+
+        setTimeout(() => {
+            if (promiseStore.has(requestId)) {
+                console.warn(`[${new Date().toISOString()}] Cleaning up stale promise for request ${requestId}`);
+                promiseStore.delete(requestId);
+                reject(new Error(`Request ${requestId} timed out`));
+            }
+        }, PROMISE_TTL * 1000);
     });
 }
 
 async function fetchHistoricalSolPrice(timestamp) {
-    const cacheKey = timestamp.toISOString().slice(0, 16);
-    if (solPriceCache.has(cacheKey)) {
-        return solPriceCache.get(cacheKey);
+    const cacheKey = `solprice:${timestamp.toISOString().slice(0, 16)}`;
+    const cachedPrice = await redis.get(cacheKey);
+    if (cachedPrice) {
+        console.log(`[${new Date().toISOString()}] Using Redis cached SOL price for ${cacheKey}: $${cachedPrice}`);
+        return parseFloat(cachedPrice);
     }
 
     const time_now = Date.now();
@@ -169,7 +259,7 @@ async function fetchHistoricalSolPrice(timestamp) {
 
         if (response.data && response.data.length > 0) {
             const price = parseFloat(response.data[0][4]);
-            solPriceCache.set(cacheKey, price);
+            await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
             console.log(`[${new Date().toISOString()}] ✅ Fetched historical SOL price for ${cacheKey}: $${price}`);
             return price;
         }
@@ -192,7 +282,7 @@ async function fetchHistoricalSolPrice(timestamp) {
             );
 
             const price = parseFloat(response.data.price);
-            solPriceCache.set(cacheKey, price);
+            await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
             console.log(`[${new Date().toISOString()}] ✅ Fetched current SOL price for ${cacheKey}: $${price}`);
             return price;
         } catch (e) {
@@ -202,7 +292,7 @@ async function fetchHistoricalSolPrice(timestamp) {
 
     console.warn(`[${new Date().toISOString()}] Using fallback price for ${cacheKey}`);
     const fallbackPrice = 180;
-    solPriceCache.set(cacheKey, fallbackPrice);
+    await redis.set(cacheKey, fallbackPrice, 'EX', PRICE_CACHE_TTL);
     return fallbackPrice;
 }
 
@@ -264,7 +354,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                     console.warn(`[${new Date().toISOString()}] No pre-balance for post ${i}:`, post);
                     return;
                 }
-                const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount); 
+                const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
                 const uiChange = Number(post.uiTokenAmount.uiAmount) - Number(pre.uiTokenAmount.uiAmount);
                 console.log(`[${new Date().toISOString()}] Mint ${post.mint}: pre=${pre.uiTokenAmount.uiAmount}, post=${post.uiTokenAmount.uiAmount}, uiChange=${uiChange}, rawChange=${rawChange}`);
                 if (uiChange <= 0) return;
@@ -272,7 +362,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                 tokenChangesRaw.push({
                     mint: post.mint,
                     rawChange: rawChange,
-                    uiChange: uiChange,  
+                    uiChange: uiChange,
                     decimals: post.uiTokenAmount.decimals,
                 });
             });
@@ -289,7 +379,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                         symbol: 'Unknown',
                         name: 'Unknown Token',
                         logoURI: null,
-                        amount: t.uiChange, 
+                        amount: t.uiChange,
                         decimals: t.decimals,
                     });
                     continue;
@@ -302,7 +392,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                     symbol: tokenInfo.symbol,
                     name: tokenInfo.name,
                     logoURI: tokenInfo.logoURI,
-                    amount: t.uiChange, 
+                    amount: t.uiChange,
                     decimals: tokenInfo.decimals,
                 });
             }
@@ -317,9 +407,9 @@ async function getPurchasesTransactions(walletAddress, connection) {
                 solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
             } catch (error) {
                 console.warn(`[${new Date().toISOString()}] Using fallback SOL price for transaction ${sig.signature}`);
-                solPrice = 180; 
+                solPrice = 180;
             }
-            
+
             const spentSOL = +(-solChange).toFixed(6);
             const spentUSD = +(solPrice * spentSOL).toFixed(2);
 
@@ -357,4 +447,5 @@ module.exports = {
     fetchTokenMetadata,
     getPurchasesTransactions,
     getWalletData,
+    redis,
 };

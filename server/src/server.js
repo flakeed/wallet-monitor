@@ -5,12 +5,13 @@ require('dotenv').config();
 
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
+const { redis } = require('./services/tokenService'); 
 
 const app = express();
 const port = process.env.PORT || 5001;
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001','https://wallet-monitor-client.vercel.app'],
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://wallet-monitor-client.vercel.app'],
     optionsSuccessStatus: 200,
 }));
 app.use(express.json());
@@ -131,7 +132,7 @@ app.get('/api/transactions', async (req, res) => {
     try {
         const hours = parseInt(req.query.hours) || 24;
         const limit = parseInt(req.query.limit) || 50;
-        const type = req.query.type; 
+        const type = req.query.type;
 
         const transactions = await db.getRecentTransactions(hours, limit, type);
 
@@ -442,12 +443,14 @@ app.get('/api/stats/tokens', async (req, res) => {
 process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
+    await redis.quit();
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
+    await redis.quit();
     process.exit(0);
 });
 
