@@ -5,12 +5,8 @@ const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
 
-const redis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
-    db: 0,
-});
+// Initialize Redis client using REDIS_URL
+const redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
 
 redis.on('connect', () => {
     console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
