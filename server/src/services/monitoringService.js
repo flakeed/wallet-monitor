@@ -373,17 +373,16 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
-        try {
-            new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
-            console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
-            await this.checkWalletTransactions(wallet);
-            return wallet;
-        } catch (error) {
-            throw new Error(`Failed to add wallet: ${error.message}`);
-        }
+async addWallet(address, name = null) {
+    try {
+        new PublicKey(address); // Validate Solana address
+        const wallet = await this.db.addWallet(address, name);
+        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+        return wallet;
+    } catch (error) {
+        throw new Error(`Failed to add wallet: ${error.message}`);
     }
+}
 
     async removeWallet(address) {
         try {

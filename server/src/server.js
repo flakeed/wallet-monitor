@@ -361,7 +361,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
         res.json({
             success: true,
-            message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
+            message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed. Wallets will be monitored in the next cycle.`,
             results
         });
 
