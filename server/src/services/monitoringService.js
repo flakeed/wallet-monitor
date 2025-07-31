@@ -2,7 +2,7 @@ const { Connection, PublicKey } = require('@solana/web3.js');
 const axios = require('axios');
 const Database = require('../database/connection');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
-
+const WebSocket = require('ws');
 class WalletMonitoringService {
 constructor() {
         this.db = new Database();
