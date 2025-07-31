@@ -1,17 +1,19 @@
 const express = require('express');
 const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
+const WebSocket = require('ws'); 
 require('dotenv').config();
 const { redis } = require('./services/tokenService'); 
 
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
+const { redis } = require('./services/tokenService'); 
 
 const app = express();
 const port = process.env.PORT || 5001;
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001','https://wallet-monitor-client.vercel.app'],
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://wallet-monitor-client.vercel.app'],
     optionsSuccessStatus: 200,
 }));
 app.use(express.json());
@@ -27,10 +29,66 @@ setTimeout(async () => {
         console.error('❌ Failed to start monitoring service:', error.message);
     }
 }, 2000);
+const NODE_WEBSOCKET_URL = 'ws://45.134.108.167:5006/ws';
+let ws;
+
+function connectWebSocket() {
+    ws = new WebSocket(NODE_WEBSOCKET_URL);
+
+    ws.on('open', () => {
+        console.log(`[${new Date().toISOString()}] Connected to node WebSocket: ${NODE_WEBSOCKET_URL}`);
+    });
+
+    ws.on('message', async (data) => {
+        try {
+            const message = JSON.parse(data); 
+            console.log(`[${new Date().toISOString()}] Received from node WebSocket:`, JSON.stringify(message, null, 2));
+
+            const normalizedData = Array.isArray(message) ? message : [message];
+
+            await monitoringService.processWebhook(normalizedData);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] Error processing node WebSocket message:`, error.message);
+        }
+    });
+
+    ws.on('error', (error) => {
+        console.error(`[${new Date().toISOString()}] WebSocket error:`, error.message);
+    });
+
+    ws.on('close', () => {
+        console.log(`[${new Date().toISOString()}] WebSocket closed, reconnecting in 5 seconds...`);
+        setTimeout(connectWebSocket, 5000); 
+    });
+}
+
+connectWebSocket();
+
+app.post('/api/webhook', async (req, res) => {
+    try {
+        const data = req.body;
+        console.log(`[${new Date().toISOString()}] Received webhook (Helius):`, JSON.stringify(data, null, 2));
+
+        // if (process.env.WEBHOOK_AUTH_HEADER && req.headers['authorization'] !== process.env.WEBHOOK_AUTH_HEADER) {
+        //     return res.status(401).json({ error: 'Unauthorized' });
+        // }
+
+        await monitoringService.processWebhook(data);
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] Error processing webhook:`, error);
+        res.status(500).json({ error: 'Failed to process webhook' });
+    }
+});
 
 app.get('/api/wallets', async (req, res) => {
     try {
-        const wallets = await db.getActiveWallets();
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const offset = (page - 1) * limit;
+
+        const wallets = await db.getActiveWallets({ limit, offset });
+        const total = await db.getWalletCount();
 
         const walletsWithStats = await Promise.all(
             wallets.map(async (wallet) => {
@@ -53,7 +111,10 @@ app.get('/api/wallets', async (req, res) => {
             })
         );
 
-        res.json(walletsWithStats);
+        res.json({
+            wallets: walletsWithStats,
+            pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+        });
     } catch (error) {
         console.error('Error fetching wallets:', error);
         res.status(500).json({ error: 'Failed to fetch wallets' });
@@ -63,13 +124,8 @@ app.get('/api/wallets', async (req, res) => {
 app.post('/api/wallets', async (req, res) => {
     try {
         const { address, name } = req.body;
-
-        if (!address) {
-            return res.status(400).json({ error: 'Wallet address is required' });
-        }
-
-        if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-            return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+        if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+            return res.status(400).json({ error: 'Invalid Solana wallet address' });
         }
 
         const wallet = await monitoringService.addWallet(address, name);
@@ -78,22 +134,18 @@ app.post('/api/wallets', async (req, res) => {
             wallet,
             message: 'Wallet added for webhook monitoring'
         });
+        res.json({ success: true, wallet, message: 'Wallet added' });
     } catch (error) {
         console.error('Error adding wallet:', error);
-        if (error.message.includes('already exists')) {
-            res.status(409).json({ error: 'Wallet is already being monitored' });
-        } else {
-            res.status(500).json({ error: error.message });
-        }
+        res.status(error.message.includes('already exists') ? 409 : 500).json({ error: error.message });
     }
 });
 
 app.delete('/api/wallets/:address', async (req, res) => {
     try {
-        const address = req.params.address.trim();
-
+        const { address } = req.params;
         if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-            return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+            return res.status(400).json({ error: 'Invalid Solana wallet address' });
         }
 
         await monitoringService.removeWallet(address);
@@ -102,13 +154,10 @@ app.delete('/api/wallets/:address', async (req, res) => {
             success: true,
             message: 'Wallet removed from webhook monitoring'
         });
+        res.json({ success: true, message: 'Wallet removed' });
     } catch (error) {
         console.error('Error removing wallet:', error);
-        if (error.message.includes('Wallet not found')) {
-            res.status(404).json({ error: 'Wallet not found in monitoring list' });
-        } else {
-            res.status(500).json({ error: 'Failed to remove wallet' });
-        }
+        res.status(error.message.includes('not found') ? 404 : 500).json({ error: error.message });
     }
 });
 
@@ -116,12 +165,14 @@ app.get('/api/transactions', async (req, res) => {
     try {
         const hours = parseInt(req.query.hours) || 24;
         const limit = parseInt(req.query.limit) || 50;
-        const type = req.query.type; 
+        const page = parseInt(req.query.page) || 1;
+        const offset = (page - 1) * limit;
+        const type = req.query.type;
 
-        const transactions = await db.getRecentTransactions(hours, limit, type);
+        const transactions = await db.getRecentTransactions(hours, limit, offset, type);
+        const total = await db.getTransactionCount(hours, type);
 
         const groupedTransactions = {};
-
         transactions.forEach(row => {
             if (!groupedTransactions[row.signature]) {
                 groupedTransactions[row.signature] = {
@@ -132,10 +183,7 @@ app.get('/api/transactions', async (req, res) => {
                     solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
                     usdSpent: row.usd_spent ? Number(row.usd_spent).toFixed(2) : null,
                     usdReceived: row.usd_received ? Number(row.usd_received).toFixed(2) : null,
-                    wallet: {
-                        address: row.wallet_address,
-                        name: row.wallet_name
-                    },
+                    wallet: { address: row.wallet_address, name: row.wallet_name },
                     tokensBought: [],
                     tokensSold: []
                 };
@@ -150,7 +198,6 @@ app.get('/api/transactions', async (req, res) => {
                     amount: Number(row.token_amount),
                     decimals: row.decimals
                 };
-
                 if (row.operation_type === 'buy') {
                     groupedTransactions[row.signature].tokensBought.push(tokenData);
                 } else if (row.operation_type === 'sell') {
@@ -159,8 +206,10 @@ app.get('/api/transactions', async (req, res) => {
             }
         });
 
-        const result = Object.values(groupedTransactions);
-        res.json(result);
+        res.json({
+            transactions: Object.values(groupedTransactions),
+            pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+        });
     } catch (error) {
         console.error('Error fetching transactions:', error);
         res.status(500).json({ error: 'Failed to fetch transactions' });
@@ -168,14 +217,12 @@ app.get('/api/transactions', async (req, res) => {
 });
 
 app.get('/api/monitoring/status', (req, res) => {
-    const status = monitoringService.getStatus();
-    res.json(status);
+    res.json(monitoringService.getStatus());
 });
 
 app.post('/api/monitoring/toggle', async (req, res) => {
     try {
         const { action } = req.body;
-
         if (action === 'start') {
             await monitoringService.startMonitoring();
             res.json({ success: true, message: 'Webhook monitoring started' });
@@ -183,7 +230,7 @@ app.post('/api/monitoring/toggle', async (req, res) => {
             monitoringService.stopMonitoring();
             res.json({ success: true, message: 'Webhook monitoring stopped' });
         } else {
-            res.status(400).json({ error: 'Invalid action. Use "start" or "stop"' });
+            res.status(400).json({ error: 'Invalid action' });
         }
     } catch (error) {
         console.error('Error toggling monitoring:', error);
@@ -352,7 +399,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
             return res.status(400).json({ error: 'At least one wallet is required' });
         }
 
-        if (wallets.length > 100) {
+        if (wallets.length > 500) {
             return res.status(400).json({ error: 'Maximum 100 wallets allowed per bulk import' });
         }
 
@@ -402,7 +449,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
         res.json({
             success: true,
-            message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
+            message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed. Wallets will be monitored in the next cycle.`,
             results
         });
 
@@ -496,4 +543,5 @@ process.on('SIGTERM', async () => {
 app.listen(port, () => {
     console.log(`🚀 Server running on http://localhost:${port}`);
     console.log(`📡 Webhook monitoring will be initialized shortly...`);
+    console.log(`📊 Monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
 });

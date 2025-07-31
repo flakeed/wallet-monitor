@@ -353,7 +353,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                     console.warn(`[${new Date().toISOString()}] No pre-balance for post ${i}:`, post);
                     return;
                 }
-                const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount); 
+                const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
                 const uiChange = Number(post.uiTokenAmount.uiAmount) - Number(pre.uiTokenAmount.uiAmount);
                 console.log(`[${new Date().toISOString()}] Mint ${post.mint}: pre=${pre.uiTokenAmount.uiAmount}, post=${post.uiTokenAmount.uiAmount}, uiChange=${uiChange}, rawChange=${rawChange}`);
                 if (uiChange <= 0) return;
@@ -361,7 +361,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                 tokenChangesRaw.push({
                     mint: post.mint,
                     rawChange: rawChange,
-                    uiChange: uiChange,  
+                    uiChange: uiChange,
                     decimals: post.uiTokenAmount.decimals,
                 });
             });
@@ -378,7 +378,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                         symbol: 'Unknown',
                         name: 'Unknown Token',
                         logoURI: null,
-                        amount: t.uiChange, 
+                        amount: t.uiChange,
                         decimals: t.decimals,
                     });
                     continue;
@@ -391,7 +391,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
                     symbol: tokenInfo.symbol,
                     name: tokenInfo.name,
                     logoURI: tokenInfo.logoURI,
-                    amount: t.uiChange, 
+                    amount: t.uiChange,
                     decimals: tokenInfo.decimals,
                 });
             }
@@ -406,9 +406,9 @@ async function getPurchasesTransactions(walletAddress, connection) {
                 solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
             } catch (error) {
                 console.warn(`[${new Date().toISOString()}] Using fallback SOL price for transaction ${sig.signature}`);
-                solPrice = 180; 
+                solPrice = 180;
             }
-            
+
             const spentSOL = +(-solChange).toFixed(6);
             const spentUSD = +(solPrice * spentSOL).toFixed(2);
 
