@@ -3,6 +3,7 @@ const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const WebSocket = require('ws'); 
 require('dotenv').config();
+const { redis } = require('./services/tokenService'); 
 
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
@@ -456,7 +457,6 @@ process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
     await redis.quit();
-    if (ws) ws.close();
     process.exit(0);
 });
 
@@ -464,7 +464,6 @@ process.on('SIGTERM', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
     await redis.quit();
-    if (ws) ws.close(); 
     process.exit(0);
 });
 

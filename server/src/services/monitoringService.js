@@ -1,5 +1,5 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
-const axios = require('axios');
+const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 
@@ -375,14 +375,14 @@ class WalletMonitoringService {
 
 async addWallet(address, name = null) {
     try {
-        new PublicKey(address); // Validate Solana address
+        new PublicKey(address);
         const wallet = await this.db.addWallet(address, name);
         console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
         return wallet;
     } catch (error) {
         throw new Error(`Failed to add wallet: ${error.message}`);
+        }
     }
-}
 
     async removeWallet(address) {
         try {
@@ -436,7 +436,6 @@ async addWallet(address, name = null) {
         }
         await this.db.close();
         await redis.quit();
-        console.log('✅ Monitoring service and Redis connection closed');
     }
 }
 

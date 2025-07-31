@@ -4,8 +4,12 @@ const axios = require('axios');
 const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
+let tokenMap = new Map();
+let solPriceCache = new Map();
 
-// Initialize Redis client using REDIS_URL
+const requestQueue = [];
+let isProcessingQueue = false;
+
 const redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
 
 redis.on('connect', () => {
@@ -17,7 +21,6 @@ redis.on('error', (err) => {
 
 const promiseStore = new Map();
 
-let isProcessingQueue = false;
 const REQUEST_DELAY = 500;
 const TOKEN_CACHE_TTL = 24 * 60 * 60;
 const PRICE_CACHE_TTL = 60 * 60; 
@@ -255,7 +258,7 @@ async function fetchHistoricalSolPrice(timestamp) {
 
         if (response.data && response.data.length > 0) {
             const price = parseFloat(response.data[0][4]);
-            await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
+await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
             console.log(`[${new Date().toISOString()}] ✅ Fetched historical SOL price for ${cacheKey}: $${price}`);
             return price;
         }
@@ -278,7 +281,7 @@ async function fetchHistoricalSolPrice(timestamp) {
             );
 
             const price = parseFloat(response.data.price);
-            await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
+await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
             console.log(`[${new Date().toISOString()}] ✅ Fetched current SOL price for ${cacheKey}: $${price}`);
             return price;
         } catch (e) {
