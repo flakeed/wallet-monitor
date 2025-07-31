@@ -1,4 +1,6 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
+const axios = require('axios');
+const WebSocket = require('ws');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
 
@@ -17,6 +19,10 @@ class WalletMonitoringService {
             errors: 0,
             lastScanDuration: 0
         };
+        this.websocket = null;
+        this.websocketUrl = 'ws://45.134.108.167:5006/ws';
+        this.apiUrl = 'http://45.134.108.167:5005';
+        this.reconnectInterval = 5000; 
     }
 
     async startMonitoring() {
@@ -28,11 +34,102 @@ class WalletMonitoringService {
         console.log('🚀 Starting wallet monitoring...');
         this.isMonitoring = true;
 
+        this.startWebSocket();
+
         this.monitoringInterval = setInterval(async () => {
             await this.performMonitoringCycle();
         }, 30000);
 
         await this.performMonitoringCycle();
+    }
+
+    startWebSocket() {
+        this.websocket = new WebSocket(this.websocketUrl);
+
+        this.websocket.on('open', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Connected to WebSocket: ${this.websocketUrl}`);
+        });
+
+        this.websocket.on('message', async (data) => {
+            try {
+                const webhookData = JSON.parse(data.toString());
+                console.log(`[${new Date().toISOString()}] 📥 Received webhook:`, webhookData);
+                await redis.lpush('webhook:log', JSON.stringify(webhookData)); 
+                await this.processWebhook(webhookData);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error processing webhook:`, error.message);
+                this.stats.errors++;
+            }
+        });
+
+        this.websocket.on('error', (error) => {
+            console.error(`[${new Date().toISOString()}] ❌ WebSocket error:`, error.message);
+            this.stats.errors++;
+        });
+
+        this.websocket.on('close', () => {
+            console.log(`[${new Date().toISOString()}] 🔌 WebSocket disconnected. Reconnecting in ${this.reconnectInterval}ms...`);
+            setTimeout(() => this.startWebSocket(), this.reconnectInterval);
+        });
+    }
+
+    async processWebhook(webhookData) {
+        const { signature, walletAddress, blockTime } = webhookData;
+
+        if (!signature || !walletAddress || !blockTime) {
+            console.warn(`[${new Date().toISOString()}] Invalid webhook data:`, webhookData);
+            return;
+        }
+
+        const wallet = await this.db.getWalletByAddress(walletAddress);
+        if (!wallet) {
+            console.log(`[${new Date().toISOString()}] Wallet ${walletAddress} not monitored, skipping`);
+            return;
+        }
+
+        if (this.processedSignatures.has(signature)) {
+            console.log(`[${new Date().toISOString()}] Transaction ${signature} already processed, skipping`);
+            return;
+        }
+
+        const processedTx = await this.processTransaction(
+            { signature, blockTime, transactionData: webhookData.transactionData },
+            wallet
+        );
+
+        if (processedTx) {
+            this.processedSignatures.add(signature);
+            console.log(`[${new Date().toISOString()}] ✅ Processed webhook transaction ${signature} for wallet ${walletAddress}`);
+            if (processedTx.type === 'buy') {
+                this.stats.totalBuyTransactions++;
+            } else if (processedTx.type === 'sell') {
+                this.stats.totalSellTransactions++;
+            }
+            await this.db.updateWalletStats(wallet.id);
+        }
+    }
+
+    async fetchTransactionFromHelius(signature) {
+        try {
+            const response = await axios.get(`${this.apiUrl}/transaction/${signature}`, {
+                timeout: 10000
+            });
+            const tx = response.data;
+
+            return {
+                meta: {
+                    preBalances: tx.preBalances || [],
+                    postBalances: tx.postBalances || [],
+                    preTokenBalances: tx.preTokenBalances || [],
+                    postTokenBalances: tx.postTokenBalances || []
+                },
+                blockTime: tx.blockTime,
+                transaction: tx.transaction || {}
+            };
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] Error fetching transaction ${signature} from Helius:`, error.message);
+            return null;
+        }
     }
 
     async performMonitoringCycle() {
@@ -84,6 +181,10 @@ class WalletMonitoringService {
         if (this.monitoringInterval) {
             clearInterval(this.monitoringInterval);
             this.monitoringInterval = null;
+        }
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
         }
         this.isMonitoring = false;
         console.log('⏹️ Monitoring stopped');
@@ -138,9 +239,15 @@ class WalletMonitoringService {
                 return null;
             }
 
-            const tx = await this.connection.getParsedTransaction(sig.signature, {
-                maxSupportedTransactionVersion: 0
-            });
+            let tx = sig.transactionData;
+            if (!tx) {
+                tx = await this.fetchTransactionFromHelius(sig.signature);
+                if (!tx) {
+                    tx = await this.connection.getParsedTransaction(sig.signature, {
+                        maxSupportedTransactionVersion: 0
+                    });
+                }
+            }
 
             if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
                 return null;
@@ -285,14 +392,14 @@ class WalletMonitoringService {
         }
     }
 
-async addWallet(address, name = null) {
-    try {
-        new PublicKey(address);
-        const wallet = await this.db.addWallet(address, name);
-        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
-        return wallet;
-    } catch (error) {
-        throw new Error(`Failed to add wallet: ${error.message}`);
+    async addWallet(address, name = null) {
+        try {
+            new PublicKey(address);
+            const wallet = await this.db.addWallet(address, name);
+            console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+            return wallet;
+        } catch (error) {
+            throw new Error(`Failed to add wallet: ${error.message}`);
         }
     }
 
