@@ -1,5 +1,5 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
-const { fetchTokenMetadata, fetchHistoricalSolPrice } = require('./tokenService');
+const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
 
 class WalletMonitoringService {
@@ -285,15 +285,14 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
-        try {
-            new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
-            console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
-            await this.checkWalletTransactions(wallet);
-            return wallet;
-        } catch (error) {
-            throw new Error(`Failed to add wallet: ${error.message}`);
+async addWallet(address, name = null) {
+    try {
+        new PublicKey(address);
+        const wallet = await this.db.addWallet(address, name);
+        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+        return wallet;
+    } catch (error) {
+        throw new Error(`Failed to add wallet: ${error.message}`);
         }
     }
 
@@ -345,6 +344,7 @@ class WalletMonitoringService {
     async close() {
         this.stopMonitoring();
         await this.db.close();
+        await redis.quit();
     }
 }
 
