@@ -10,7 +10,7 @@ class WebhookService {
         this.monitoringService = new WalletMonitoringService();
         this.db = new Database();
         this.ws = null;
-        this.reconnectInterval = 5000; // Reconnect after 5 seconds
+        this.reconnectInterval = 5000; 
         this.maxReconnectAttempts = 10;
         this.reconnectAttempts = 0;
         this.isConnecting = false;

@@ -73,7 +73,7 @@ async processQueue() {
                 console.error(`[${new Date().toISOString()}] ❌ Error processing signature ${signature}:`, error.message);
             }
 
-            await new Promise(resolve => setTimeout(resolve, 300)); // Rate limit
+            await new Promise(resolve => setTimeout(resolve, 300));
         }
 
         this.isProcessingQueue = false;
@@ -87,7 +87,6 @@ async processQueue() {
 async processWebhookMessage(message) {
         const { signature, walletAddress } = message;
 
-        // Enqueue signature to Redis
         const requestId = require('uuid').v4();
         await this.redis.lpush(this.queueKey, JSON.stringify({
             requestId,
