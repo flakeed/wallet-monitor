@@ -18,17 +18,26 @@ constructor() {
             errors: 0,
             lastScanDuration: 0
         };
-        this.ws = null; 
-        this.connectWebSocket(); 
+        this.ws = null;
+        this.connectWebSocket();
     }
 
-connectWebSocket() {
-        if (!this.webhookUrl || !this.webhookUrl.startsWith('ws://') && !this.webhookUrl.startsWith('wss://')) {
+    connectWebSocket() {
+        if (!this.webhookUrl || (!this.webhookUrl.startsWith('ws://') && !this.webhookUrl.startsWith('wss://'))) {
             console.warn(`[${new Date().toISOString()}] ⚠️ Invalid WebSocket URL: ${this.webhookUrl}`);
+            this.stats.errors++;
             return;
         }
 
-        this.ws = new WebSocket(this.webhookUrl);
+        try {
+            this.ws = new WebSocket(this.webhookUrl, {
+                headers: process.env.WEBHOOK_AUTH_HEADER ? { Authorization: process.env.WEBHOOK_AUTH_HEADER } : {}
+            });
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Failed to create WebSocket instance:`, error.message);
+            this.stats.errors++;
+            return;
+        }
 
         this.ws.on('open', () => {
             console.log(`[${new Date().toISOString()}] ✅ Connected to WebSocket: ${this.webhookUrl}`);
@@ -41,6 +50,7 @@ connectWebSocket() {
 
         this.ws.on('close', () => {
             console.warn(`[${new Date().toISOString()}] WebSocket closed, attempting to reconnect in 5 seconds...`);
+            this.ws = null;
             setTimeout(() => this.connectWebSocket(), 5000);
         });
     }
@@ -189,58 +199,58 @@ connectWebSocket() {
         return wallets.find(wallet => accountAddresses.includes(wallet.address));
     }
 
-    async sendWebhookNotification(wallet, txData) {
-        if (!this.webhookUrl) {
-            console.warn('⚠️ Webhook URL not set, skipping notification');
-            return;
-        }
+    // async sendWebhookNotification(wallet, txData) {
+    //     if (!this.webhookUrl) {
+    //         console.warn('⚠️ Webhook URL not set, skipping notification');
+    //         return;
+    //     }
 
-        const payload = {
-            walletAddress: wallet.address,
-            walletName: wallet.name || null,
-            signature: txData.signature,
-            transactionType: txData.type,
-            solAmount: txData.solAmount,
-            usdAmount: txData.usdAmount,
-            tokensChanged: txData.tokensChanged,
-            timestamp: new Date(txData.blockTime * 1000).toISOString(),
-            tokens: txData.tokenChanges || []
-        };
+    //     const payload = {
+    //         walletAddress: wallet.address,
+    //         walletName: wallet.name || null,
+    //         signature: txData.signature,
+    //         transactionType: txData.type,
+    //         solAmount: txData.solAmount,
+    //         usdAmount: txData.usdAmount,
+    //         tokensChanged: txData.tokensChanged,
+    //         timestamp: new Date(txData.blockTime * 1000).toISOString(),
+    //         tokens: txData.tokenChanges || []
+    //     };
 
-        const maxRetries = 3;
-        let attempt = 0;
+    //     const maxRetries = 3;
+    //     let attempt = 0;
 
-        while (attempt < maxRetries) {
-            try {
-                console.log(`[${new Date().toISOString()}] Sending webhook for ${txData.signature} (attempt ${attempt + 1})`);
-                await axios.post(this.webhookUrl, payload, {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...(process.env.WEBHOOK_AUTH_HEADER && {
-                            'Authorization': process.env.WEBHOOK_AUTH_HEADER
-                        })
-                    },
-                    timeout: 5000
-                });
-                console.log(`✅ Webhook sent for transaction ${txData.signature}`);
-                return;
-            } catch (error) {
-                attempt++;
-                if (error.response?.status === 429) {
-                    const delay = Math.pow(2, attempt) * 1000; 
-                    console.warn(`[${new Date().toISOString()}] Webhook rate limit (429) for ${txData.signature}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                } else {
-                    console.error(`❌ Error sending webhook for ${txData.signature}:`, error.message);
-                    this.stats.errors++;
-                    return;
-                }
-            }
-        }
+    //     while (attempt < maxRetries) {
+    //         try {
+    //             console.log(`[${new Date().toISOString()}] Sending webhook for ${txData.signature} (attempt ${attempt + 1})`);
+    //             await axios.post(this.webhookUrl, payload, {
+    //                 headers: {
+    //                     'Content-Type': 'application/json',
+    //                     ...(process.env.WEBHOOK_AUTH_HEADER && {
+    //                         'Authorization': process.env.WEBHOOK_AUTH_HEADER
+    //                     })
+    //                 },
+    //                 timeout: 5000
+    //             });
+    //             console.log(`✅ Webhook sent for transaction ${txData.signature}`);
+    //             return;
+    //         } catch (error) {
+    //             attempt++;
+    //             if (error.response?.status === 429) {
+    //                 const delay = Math.pow(2, attempt) * 1000; 
+    //                 console.warn(`[${new Date().toISOString()}] Webhook rate limit (429) for ${txData.signature}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+    //                 await new Promise(resolve => setTimeout(resolve, delay));
+    //             } else {
+    //                 console.error(`❌ Error sending webhook for ${txData.signature}:`, error.message);
+    //                 this.stats.errors++;
+    //                 return;
+    //             }
+    //         }
+    //     }
 
-        console.error(`❌ Failed to send webhook for ${txData.signature} after ${maxRetries} attempts`);
-        this.stats.errors++;
-    }
+    //     console.error(`❌ Failed to send webhook for ${txData.signature} after ${maxRetries} attempts`);
+    //     this.stats.errors++;
+    // }
 
     async checkWalletTransactions(wallet) {
         try {
@@ -497,15 +507,15 @@ async addWallet(address, name = null) {
         }
     }
 
-    async close() {
-        if (this.monitoringInterval) {
-            clearInterval(this.monitoringInterval);
-            this.isMonitoring = false;
-        }
-        await this.db.close();
-        await redis.quit();
-        console.log('✅ Monitoring service and Redis connection closed');
-    }
+    // async close() {
+    //     if (this.monitoringInterval) {
+    //         clearInterval(this.monitoringInterval);
+    //         this.isMonitoring = false;
+    //     }
+    //     await this.db.close();
+    //     await redis.quit();
+    //     console.log('✅ Monitoring service and Redis connection closed');
+    // }
 }
 
 module.exports = WalletMonitoringService;
