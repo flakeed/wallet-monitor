@@ -1,45 +1,23 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const axios = require('axios');
-const WebSocket = require('ws');
 const Database = require('../database/connection');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
-        this.connection = new Connection(process.env.SOLANA_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=b5d777ae-7c05-4847-b50f-e842e86ee5f8', 'confirmed');
+        this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
         this.isMonitoring = false;
         this.processedSignatures = new Set();
-        this.webhookUrl = process.env.WEBHOOK_URL || 'ws://45.134.108.167:5006/ws';
+        this.webhookUrl = process.env.WEBHOOK_URL;
         this.stats = {
             totalScans: 0,
             totalWallets: 0,
             totalBuyTransactions: 0,
             totalSellTransactions: 0,
             errors: 0,
-            lastScanDuration: 0,
-            startTime: Date.now()
+            lastScanDuration: 0
         };
-        this.ws = null;
-        this.initializeWebSocket();
-    }
-
-    initializeWebSocket() {
-        if (this.webhookUrl.startsWith('ws')) {
-            this.ws = new WebSocket(this.webhookUrl);
-            this.ws.on('open', () => {
-                console.log(`[${new Date().toISOString()}] ✅ WebSocket connected to ${this.webhookUrl}`);
-            });
-            this.ws.on('error', (err) => {
-                console.error(`[${new Date().toISOString()}] ❌ WebSocket error:`, err.message);
-                this.stats.errors++;
-                setTimeout(() => this.initializeWebSocket(), 5000); 
-            });
-            this.ws.on('close', () => {
-                console.log(`[${new Date().toISOString()}] ⚠️ WebSocket closed, attempting reconnect...`);
-                setTimeout(() => this.initializeWebSocket(), 5000);
-            });
-        }
     }
 
     async startMonitoring() {
@@ -48,23 +26,12 @@ class WalletMonitoringService {
             return;
         }
 
-        console.log('🚀 Starting wallet monitoring...');
+        console.log('🚀 Starting wallet monitoring via Solana node webhooks...');
         this.isMonitoring = true;
 
         this.monitoringInterval = setInterval(async () => {
             await this.performMonitoringCycle();
         }, 60000);
-        await this.performMonitoringCycle(); 
-    }
-
-    async stopMonitoring() {
-        if (!this.isMonitoring) {
-            console.log('⚠️ Monitoring is not running');
-            return;
-        }
-        clearInterval(this.monitoringInterval);
-        this.isMonitoring = false;
-        console.log('🛑 Monitoring stopped');
     }
 
     async performMonitoringCycle() {
@@ -74,36 +41,38 @@ class WalletMonitoringService {
 
         try {
             const wallets = await this.db.getActiveWallets();
-            console.log(`🔍 Scanning ${wallets.length} wallets...`);
+            console.log(`🔍 Backup scanning ${wallets.length} wallets...`);
 
-            const batchSize = 10;
-            for (let i = 0; i < wallets.length; i += batchSize) {
-                const batch = wallets.slice(i, i + batchSize);
-                const results = await Promise.allSettled(
-                    batch.map(wallet => this.checkWalletTransactions(wallet))
-                );
-                results.forEach((result, index) => {
-                    if (result.status === 'fulfilled') {
-                        processedSignatures += result.value.newTransactions;
-                    } else {
-                        console.error(`❌ Error checking wallet ${batch[index].address}:`, result.reason.message);
-                        errors++;
-                    }
-                });
-                await new Promise(resolve => setTimeout(resolve, 1000)); 
+            for (const wallet of wallets) {
+                try {
+                    const result = await this.checkWalletTransactions(wallet);
+                    processedSignatures += result.newTransactions;
+                } catch (error) {
+                    console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
+                    errors++;
+                }
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
 
             const scanDuration = Date.now() - scanStartTime;
+
             this.stats.totalScans++;
             this.stats.totalWallets = wallets.length;
             this.stats.errors += errors;
             this.stats.lastScanDuration = scanDuration;
 
-            await this.db.addMonitoringStats(processedSignatures, wallets.length, scanDuration, errors);
+            await this.db.addMonitoringStats(
+                processedSignatures,
+                wallets.length,
+                scanDuration,
+                errors
+            );
 
-            console.log(`✅ Scan completed: ${processedSignatures} new transactions in ${scanDuration}ms`);
+            if (processedSignatures > 0) {
+                console.log(`✅ Backup scan completed: ${processedSignatures} new transactions in ${scanDuration}ms`);
+            }
         } catch (error) {
-            console.error('❌ Error in monitoring cycle:', error.message);
+            console.error('❌ Error in backup monitoring cycle:', error.message);
             this.stats.errors++;
         }
     }
@@ -111,29 +80,34 @@ class WalletMonitoringService {
     async processWebhook(data) {
         try {
             if (!data || !data.signature || !data.accountKeys) {
-                console.warn('⚠️ Invalid webhook data:', data);
+                console.warn('⚠️ Invalid webhook data received:', data);
                 return;
             }
 
             const signature = data.signature;
-            if (this.processedSignatures.has(signature)) {
-                console.log(`⚠️ Transaction ${signature} already processed`);
-                return;
-            }
-
             const accountAddresses = data.accountKeys;
             const blockTime = data.blockTime || Math.floor(Date.now() / 1000);
+
             const wallet = await this.findWalletInEvent(accountAddresses);
             if (!wallet) {
                 console.warn(`⚠️ No monitored wallet found in webhook: ${signature}`);
                 return;
             }
 
+            if (this.processedSignatures.has(signature)) {
+                console.log(`⚠️ Transaction ${signature} already processed`);
+                return;
+            }
+
             const txData = await this.processTransaction({ signature, blockTime }, wallet);
             if (txData) {
                 this.processedSignatures.add(signature);
-                if (txData.type === 'buy') this.stats.totalBuyTransactions++;
-                else if (txData.type === 'sell') this.stats.totalSellTransactions++;
+                if (txData.type === 'buy') {
+                    this.stats.totalBuyTransactions++;
+                } else if (txData.type === 'sell') {
+                    this.stats.totalSellTransactions++;
+                }
+
                 await this.sendWebhookNotification(wallet, txData);
             }
         } catch (error) {
@@ -148,6 +122,11 @@ class WalletMonitoringService {
     }
 
     async sendWebhookNotification(wallet, txData) {
+        if (!this.webhookUrl) {
+            console.warn('⚠️ Webhook URL not set, skipping notification');
+            return;
+        }
+
         const payload = {
             walletAddress: wallet.address,
             walletName: wallet.name || null,
@@ -166,25 +145,22 @@ class WalletMonitoringService {
         while (attempt < maxRetries) {
             try {
                 console.log(`[${new Date().toISOString()}] Sending webhook for ${txData.signature} (attempt ${attempt + 1})`);
-                if (this.webhookUrl.startsWith('ws') && this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify(payload));
-                    console.log(`✅ WebSocket notification sent for ${txData.signature}`);
-                } else {
-                    await axios.post(this.webhookUrl.replace('ws', 'http'), payload, {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            ...(process.env.WEBHOOK_AUTH_HEADER && { 'Authorization': process.env.WEBHOOK_AUTH_HEADER })
-                        },
-                        timeout: 5000
-                    });
-                    console.log(`✅ HTTP webhook sent for ${txData.signature}`);
-                }
+                await axios.post(this.webhookUrl, payload, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(process.env.WEBHOOK_AUTH_HEADER && {
+                            'Authorization': process.env.WEBHOOK_AUTH_HEADER
+                        })
+                    },
+                    timeout: 5000
+                });
+                console.log(`✅ Webhook sent for transaction ${txData.signature}`);
                 return;
             } catch (error) {
                 attempt++;
                 if (error.response?.status === 429) {
-                    const delay = Math.pow(2, attempt) * 1000;
-                    console.warn(`[${new Date().toISOString()}] Webhook rate limit (429), retrying in ${delay}ms`);
+                    const delay = Math.pow(2, attempt) * 1000; 
+                    console.warn(`[${new Date().toISOString()}] Webhook rate limit (429) for ${txData.signature}, retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                 } else {
                     console.error(`❌ Error sending webhook for ${txData.signature}:`, error.message);
@@ -201,20 +177,31 @@ class WalletMonitoringService {
     async checkWalletTransactions(wallet) {
         try {
             const pubkey = new PublicKey(wallet.address);
-            const signatures = await this.connection.getSignaturesForAddress(pubkey, { limit: 10 });
+            const signatures = await this.connection.getSignaturesForAddress(pubkey, {
+                limit: 10
+            });
+
             let newTransactionsCount = 0;
 
             for (const sig of signatures) {
-                if (this.processedSignatures.has(sig.signature)) continue;
+                if (this.processedSignatures.has(sig.signature)) {
+                    continue;
+                }
 
                 const txData = await this.processTransaction(sig, wallet);
                 if (txData) {
                     newTransactionsCount++;
                     this.processedSignatures.add(sig.signature);
-                    if (txData.type === 'buy') this.stats.totalBuyTransactions++;
-                    else if (txData.type === 'sell') this.stats.totalSellTransactions++;
+
+                    if (txData.type === 'buy') {
+                        this.stats.totalBuyTransactions++;
+                    } else if (txData.type === 'sell') {
+                        this.stats.totalSellTransactions++;
+                    }
+
                     await this.sendWebhookNotification(wallet, txData);
                 }
+
                 await new Promise(resolve => setTimeout(resolve, 300));
             }
 
@@ -232,10 +219,17 @@ class WalletMonitoringService {
 
     async processTransaction(sig, wallet) {
         try {
-            if (!sig.signature || !sig.blockTime) return null;
+            if (!sig.signature || !sig.blockTime) {
+                return null;
+            }
 
-            const tx = await this.connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
-            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) return null;
+            const tx = await this.connection.getParsedTransaction(sig.signature, {
+                maxSupportedTransactionVersion: 0
+            });
+
+            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
+                return null;
+            }
 
             const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
             let transactionType, solAmount;
@@ -250,7 +244,9 @@ class WalletMonitoringService {
             }
 
             const tokenChanges = this.analyzeTokenChanges(tx.meta, transactionType);
-            if (tokenChanges.length === 0) return null;
+            if (tokenChanges.length === 0) {
+                return null;
+            }
 
             return await this.db.withTransaction(async (client) => {
                 const solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
@@ -266,18 +262,29 @@ class WalletMonitoringService {
                     RETURNING id, signature, transaction_type
                 `;
 
-                const result = await client.query(query, [
-                    wallet.id,
-                    sig.signature,
-                    new Date(sig.blockTime * 1000).toISOString(),
-                    transactionType,
-                    solAmount,
-                    usdAmount
-                ]);
+                let result;
+                try {
+                    result = await client.query(query, [
+                        wallet.id,
+                        sig.signature,
+                        new Date(sig.blockTime * 1000).toISOString(),
+                        transactionType,
+                        solAmount,
+                        usdAmount
+                    ]);
+                } catch (error) {
+                    if (error.code === '23505') {
+                        return null;
+                    }
+                    throw error;
+                }
 
-                if (!result.rows[0]) return null;
+                if (!result.rows[0]) {
+                    return null;
+                }
 
                 const transaction = result.rows[0];
+
                 for (const tokenChange of tokenChanges) {
                     await this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType);
                 }
@@ -303,8 +310,12 @@ class WalletMonitoringService {
         const tokenChanges = [];
 
         (meta.postTokenBalances || []).forEach((post) => {
-            const pre = meta.preTokenBalances?.find(p => p.mint === post.mint && p.accountIndex === post.accountIndex);
-            if (!pre || post.mint === WRAPPED_SOL_MINT) return;
+            const pre = meta.preTokenBalances?.find(p =>
+                p.mint === post.mint && p.accountIndex === post.accountIndex
+            );
+
+            if (!pre) return;
+            if (post.mint === WRAPPED_SOL_MINT) return;
 
             const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
             if (transactionType === 'buy' && rawChange <= 0) return;
@@ -323,7 +334,9 @@ class WalletMonitoringService {
     async saveTokenOperationInTransaction(client, transactionId, tokenChange, transactionType) {
         try {
             const tokenInfo = await fetchTokenMetadata(tokenChange.mint, this.connection);
-            if (!tokenInfo) return;
+            if (!tokenInfo) {
+                return;
+            }
 
             const tokenUpsertQuery = `
                 INSERT INTO tokens (mint, symbol, name, logo_uri, decimals) 
@@ -360,29 +373,31 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
-        try {
-            new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
-            console.log(`✅ Added wallet: ${name || address.slice(0, 8)}...`);
-            return wallet;
-        } catch (error) {
-            throw new Error(`Failed to add wallet: ${error.message}`);
-        }
+async addWallet(address, name = null) {
+    try {
+        new PublicKey(address); // Validate Solana address
+        const wallet = await this.db.addWallet(address, name);
+        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+        return wallet;
+    } catch (error) {
+        throw new Error(`Failed to add wallet: ${error.message}`);
     }
+}
 
     async removeWallet(address) {
         try {
             const wallet = await this.db.getWalletByAddress(address);
-            if (!wallet) throw new Error('Wallet not found');
-
-            const transactions = await this.db.getRecentTransactions(24 * 7);
-            const walletSignatures = transactions
-                .filter(tx => tx.wallet_address === address)
-                .map(tx => tx.signature);
-            walletSignatures.forEach(sig => this.processedSignatures.delete(sig));
-            await this.db.removeWallet(address);
-            console.log(`🗑️ Removed wallet: ${address.slice(0, 8)}...`);
+            if (wallet) {
+                const transactions = await this.db.getRecentTransactions(24 * 7);
+                const walletSignatures = transactions
+                    .filter(tx => tx.wallet_address === address)
+                    .map(tx => tx.signature);
+                walletSignatures.forEach(sig => this.processedSignatures.delete(sig));
+                await this.db.removeWallet(address);
+                console.log(`🗑️ Removed wallet and associated data: ${address.slice(0, 8)}...`);
+            } else {
+                throw new Error('Wallet not found');
+            }
         } catch (error) {
             throw new Error(`Failed to remove wallet: ${error.message}`);
         }
@@ -394,7 +409,7 @@ class WalletMonitoringService {
             processedSignatures: this.processedSignatures.size,
             stats: {
                 ...this.stats,
-                uptime: this.isMonitoring ? Date.now() - this.stats.startTime : 0
+                uptime: this.isMonitoring ? Date.now() - (this.stats.startTime || Date.now()) : 0
             }
         };
     }
@@ -419,11 +434,9 @@ class WalletMonitoringService {
             clearInterval(this.monitoringInterval);
             this.isMonitoring = false;
         }
-        if (this.ws) {
-            this.ws.close();
-        }
         await this.db.close();
-        console.log('✅ Monitoring service closed');
+        await redis.quit();
+        console.log('✅ Monitoring service and Redis connection closed');
     }
 }
 
