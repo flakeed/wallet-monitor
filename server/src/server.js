@@ -23,6 +23,54 @@ setTimeout(() => {
     monitoringService.startMonitoring();
 }, 2000);
 
+app.get('/api/test-transaction', async (req, res) => {
+    try {
+        const connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
+        
+        // Используем адрес кошелька для теста (можно заменить на ваш адрес)
+        const address = req.query.address || '9JebwPTGwP4YCgNWimZL3yHnk6gEXR8M7RMrPA2pSBBD';
+        const publicKey = new PublicKey(address);
+
+        console.log(`[${new Date().toISOString()}] Fetching signatures for address: ${address}`);
+        const signatures = await connection.getSignaturesForAddress(publicKey, { limit: 1 });
+
+        if (signatures.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: `No transactions found for address: ${address}`
+            });
+        }
+
+        const signature = signatures[0].signature;
+        console.log(`[${new Date().toISOString()}] Fetching transaction: ${signature}`);
+        const transaction = await connection.getParsedTransaction(signature, {
+            maxSupportedTransactionVersion: 0
+        });
+
+        if (!transaction) {
+            return res.status(404).json({
+                success: false,
+                message: `No transaction details found for signature: ${signature}`
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Transaction fetched successfully',
+            signature,
+            transaction: transaction
+        });
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] Error fetching transaction:`, error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch transaction',
+            error: error.message,
+            cause: error.cause || null
+        });
+    }
+});
+
 app.get('/api/wallets', async (req, res) => {
     try {
         const wallets = await db.getActiveWallets();
@@ -311,7 +359,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
             return res.status(400).json({ error: 'At least one wallet is required' });
         }
 
-        if (wallets.length > 100) {
+        if (wallets.length > 500) {
             return res.status(400).json({ error: 'Maximum 100 wallets allowed per bulk import' });
         }
 
