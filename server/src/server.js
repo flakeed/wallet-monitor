@@ -6,7 +6,7 @@ const { redis } = require('./services/tokenService');
 
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
-
+const WebhookService = require('./webhookService');
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -17,10 +17,11 @@ app.use(cors({
 app.use(express.json());
 
 const monitoringService = new WalletMonitoringService();
+const webhookService = new WebhookService();
 const db = new Database();
 
-setTimeout(() => {
-    monitoringService.startMonitoring();
+setTimeout(async () => {
+    await webhookService.start();
 }, 2000);
 
 app.get('/api/wallets', async (req, res) => {
@@ -422,6 +423,7 @@ app.get('/api/stats/tokens', async (req, res) => {
 process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
+    await webhookService.stop(); 
     await redis.quit();
     process.exit(0);
 });
@@ -429,6 +431,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
+    await webhookService.stop(); 
     await redis.quit();
     process.exit(0);
 });

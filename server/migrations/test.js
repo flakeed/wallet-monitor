@@ -1,4 +1,3 @@
-// server/src/scripts/hotfixDatabase.js
 const Database = require('../src/database/connection');
 require('dotenv').config();
 
@@ -12,7 +11,6 @@ async function hotfixDatabase() {
         try {
             await client.query('BEGIN');
             
-            // 1. Обновляем схему таблицы transactions для использования DEFAULT 0
             console.log('📝 Updating transactions table constraints...');
             
             const alterCommands = [
@@ -31,7 +29,6 @@ async function hotfixDatabase() {
                 }
             }
             
-            // 2. Обновляем существующие записи с NULL значениями
             console.log('📝 Updating existing NULL values...');
             
             const updateCommands = [
@@ -50,7 +47,6 @@ async function hotfixDatabase() {
                 }
             }
             
-            // 3. Делаем колонки NOT NULL после установки дефолтов
             console.log('📝 Setting NOT NULL constraints...');
             
             const notNullCommands = [
@@ -72,7 +68,6 @@ async function hotfixDatabase() {
             await client.query('COMMIT');
             console.log('✅ Hotfix completed successfully!');
             
-            // Показываем статистику
             const statsQuery = `
                 SELECT 
                     COUNT(*) as total_transactions,
@@ -108,7 +103,6 @@ async function hotfixDatabase() {
     }
 }
 
-// Запускаем если файл вызван напрямую
 if (require.main === module) {
     hotfixDatabase();
 }

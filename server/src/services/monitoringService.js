@@ -1,12 +1,12 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
-
+const Redis = require('ioredis');
 class WalletMonitoringService {
-    constructor() {
+constructor() {
         this.db = new Database();
         this.connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
-        this.isMonitoring = false;
+        this.isMonitoring = true; // Set to true since WebSocket drives monitoring
         this.monitoringInterval = null;
         this.processedSignatures = new Set();
         this.stats = {
@@ -17,22 +17,89 @@ class WalletMonitoringService {
             errors: 0,
             lastScanDuration: 0
         };
+this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
+        this.isProcessingQueue = false;
+        this.queueKey = 'webhook:queue';
+    }
+stopMonitoring() {
+        this.isMonitoring = false;
+        console.log('⏹️ Monitoring stopped');
     }
 
-    async startMonitoring() {
-        if (this.isMonitoring) {
-            console.log('⚠️ Monitoring is already running');
-            return;
+async processQueue() {
+        if (this.isProcessingQueue) return;
+        this.isProcessingQueue = true;
+
+        while (true) {
+            const requestData = await this.redis.rpop(this.queueKey);
+            if (!requestData) break;
+
+            let request;
+            try {
+                request = JSON.parse(requestData);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, error.message);
+                continue;
+            }
+
+            const { requestId, signature, walletAddress } = request;
+            console.log(`[${new Date().toISOString()}] 🔄 Processing queued signature ${signature} (requestId: ${requestId})`);
+
+            try {
+                const wallet = await this.db.getWalletByAddress(walletAddress);
+                if (!wallet) {
+                    console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
+                    continue;
+                }
+
+                const sigStatus = await this.connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+                if (!sigStatus.value || sigStatus.value.err) {
+                    console.warn(`[${new Date().toISOString()}] ⚠️ Invalid or failed transaction ${signature}`);
+                    continue;
+                }
+
+                const blockTime = sigStatus.value.blockTime;
+                if (!blockTime) {
+                    console.warn(`[${new Date().toISOString()}] ⚠️ No blockTime for signature ${signature}`);
+                    continue;
+                }
+
+                const sigObject = { signature, blockTime };
+                const txData = await this.monitoringService.processTransaction(sigObject, wallet);
+                if (txData) {
+                    console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature} for wallet ${walletAddress}`);
+                }
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error processing signature ${signature}:`, error.message);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 300)); // Rate limit
         }
 
-        console.log('🚀 Starting wallet monitoring...');
-        this.isMonitoring = true;
+        this.isProcessingQueue = false;
 
-        this.monitoringInterval = setInterval(async () => {
-            await this.performMonitoringCycle();
-        }, 30000);
+        const queueLength = await this.redis.llen(this.queueKey);
+        if (queueLength > 0) {
+            setImmediate(() => this.processQueue());
+        }
+    }
 
-        await this.performMonitoringCycle();
+async processWebhookMessage(message) {
+        const { signature, walletAddress } = message;
+
+        // Enqueue signature to Redis
+        const requestId = require('uuid').v4();
+        await this.redis.lpush(this.queueKey, JSON.stringify({
+            requestId,
+            signature,
+            walletAddress,
+            timestamp: Date.now()
+        }));
+        console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature} with requestId ${requestId}`);
+
+        if (!this.isProcessingQueue) {
+            this.processQueue();
+        }
     }
 
     async performMonitoringCycle() {
@@ -343,8 +410,11 @@ async addWallet(address, name = null) {
 
     async close() {
         this.stopMonitoring();
+        if (this.ws) {
+            this.ws.close();
+        }
+        await this.redis.quit();
         await this.db.close();
-        await redis.quit();
     }
 }
 
