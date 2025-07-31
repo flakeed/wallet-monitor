@@ -4,7 +4,7 @@ const Database = require('../database/connection');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 
 class WalletMonitoringService {
-    constructor() {
+constructor() {
         this.db = new Database();
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
         this.isMonitoring = false;
@@ -18,6 +18,74 @@ class WalletMonitoringService {
             errors: 0,
             lastScanDuration: 0
         };
+        this.ws = null; 
+        this.connectWebSocket(); 
+    }
+
+connectWebSocket() {
+        if (!this.webhookUrl || !this.webhookUrl.startsWith('ws://') && !this.webhookUrl.startsWith('wss://')) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Invalid WebSocket URL: ${this.webhookUrl}`);
+            return;
+        }
+
+        this.ws = new WebSocket(this.webhookUrl);
+
+        this.ws.on('open', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Connected to WebSocket: ${this.webhookUrl}`);
+        });
+
+        this.ws.on('error', (error) => {
+            console.error(`[${new Date().toISOString()}] ❌ WebSocket error:`, error.message);
+            this.stats.errors++;
+        });
+
+        this.ws.on('close', () => {
+            console.warn(`[${new Date().toISOString()}] WebSocket closed, attempting to reconnect in 5 seconds...`);
+            setTimeout(() => this.connectWebSocket(), 5000);
+        });
+    }
+
+    async sendWebhookNotification(wallet, txData) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ WebSocket not connected, cannot send notification for ${txData.signature}`);
+            this.stats.errors++;
+            return;
+        }
+
+        const payload = {
+            walletAddress: wallet.address,
+            walletName: wallet.name || null,
+            signature: txData.signature,
+            transactionType: txData.type,
+            solAmount: txData.solAmount,
+            usdAmount: txData.usdAmount,
+            tokensChanged: txData.tokensChanged,
+            timestamp: new Date(txData.blockTime * 1000).toISOString(),
+            tokens: txData.tokenChanges || []
+        };
+
+        try {
+            console.log(`[${new Date().toISOString()}] Sending WebSocket notification for ${txData.signature}`);
+            this.ws.send(JSON.stringify(payload));
+            console.log(`[${new Date().toISOString()}] ✅ WebSocket notification sent for transaction ${txData.signature}`);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error sending WebSocket notification for ${txData.signature}:`, error.message);
+            this.stats.errors++;
+        }
+    }
+
+    async close() {
+        if (this.monitoringInterval) {
+            clearInterval(this.monitoringInterval);
+            this.isMonitoring = false;
+        }
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.close();
+            console.log(`[${new Date().toISOString()}] ✅ WebSocket connection closed`);
+        }
+        await this.db.close();
+        await redis.quit();
+        console.log(`[${new Date().toISOString()}] ✅ Monitoring service and Redis connection closed`);
     }
 
     async startMonitoring() {
@@ -375,7 +443,7 @@ class WalletMonitoringService {
 
 async addWallet(address, name = null) {
     try {
-        new PublicKey(address); // Validate Solana address
+        new PublicKey(address); 
         const wallet = await this.db.addWallet(address, name);
         console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
         return wallet;
