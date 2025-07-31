@@ -25,6 +25,27 @@ class Database {
         this.initDatabase();
     }
 
+    async getWalletCount() {
+    try {
+        const query = `
+            SELECT COUNT(*) as total
+            FROM wallets
+            WHERE is_active = TRUE
+        `;
+        const result = await this.pool.query(query);
+        return parseInt(result.rows[0].total, 10);
+    } catch (error) {
+        console.error('❌ Error in getWalletCount:', error);
+        throw error;
+    }
+}
+
+    async getAllTokens() {
+        const query = `SELECT mint, symbol, name, logo_uri, decimals FROM tokens`;
+        const result = await this.pool.query(query);
+        return result.rows;
+    }
+
     async initDatabase() {
         try {
             const client = await this.pool.connect();

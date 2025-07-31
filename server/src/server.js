@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
+const WebSocket = require('ws'); 
 require('dotenv').config();
 
 const WalletMonitoringService = require('./services/monitoringService');
@@ -19,9 +20,57 @@ app.use(express.json());
 const monitoringService = new WalletMonitoringService();
 const db = new Database();
 
-setTimeout(() => {
-    monitoringService.startMonitoring();
-}, 2000);
+const NODE_WEBSOCKET_URL = 'ws://45.134.108.167:5006/ws';
+let ws;
+
+function connectWebSocket() {
+    ws = new WebSocket(NODE_WEBSOCKET_URL);
+
+    ws.on('open', () => {
+        console.log(`[${new Date().toISOString()}] Connected to node WebSocket: ${NODE_WEBSOCKET_URL}`);
+    });
+
+    ws.on('message', async (data) => {
+        try {
+            const message = JSON.parse(data); 
+            console.log(`[${new Date().toISOString()}] Received from node WebSocket:`, JSON.stringify(message, null, 2));
+
+            const normalizedData = Array.isArray(message) ? message : [message];
+
+            await monitoringService.processWebhook(normalizedData);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] Error processing node WebSocket message:`, error.message);
+        }
+    });
+
+    ws.on('error', (error) => {
+        console.error(`[${new Date().toISOString()}] WebSocket error:`, error.message);
+    });
+
+    ws.on('close', () => {
+        console.log(`[${new Date().toISOString()}] WebSocket closed, reconnecting in 5 seconds...`);
+        setTimeout(connectWebSocket, 5000); 
+    });
+}
+
+connectWebSocket();
+
+app.post('/api/webhook', async (req, res) => {
+    try {
+        const data = req.body;
+        console.log(`[${new Date().toISOString()}] Received webhook (Helius):`, JSON.stringify(data, null, 2));
+
+        // if (process.env.WEBHOOK_AUTH_HEADER && req.headers['authorization'] !== process.env.WEBHOOK_AUTH_HEADER) {
+        //     return res.status(401).json({ error: 'Unauthorized' });
+        // }
+
+        await monitoringService.processWebhook(data);
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] Error processing webhook:`, error);
+        res.status(500).json({ error: 'Failed to process webhook' });
+    }
+});
 
 app.get('/api/wallets', async (req, res) => {
     try {
@@ -90,23 +139,6 @@ app.delete('/api/wallets/:address', async (req, res) => {
     } catch (error) {
         console.error('Error removing wallet:', error);
         res.status(error.message.includes('not found') ? 404 : 500).json({ error: error.message });
-    }
-});
-
-app.post('/api/webhook', async (req, res) => {
-    try {
-        const data = req.body;
-        console.log(`[${new Date().toISOString()}] Received webhook:`, JSON.stringify(data, null, 2));
-
-        // if (process.env.WEBHOOK_AUTH_HEADER && req.headers['authorization'] !== process.env.WEBHOOK_AUTH_HEADER) {
-        //     return res.status(401).json({ error: 'Unauthorized' });
-        // }
-
-        await monitoringService.processWebhook(data);
-        res.status(200).json({ success: true });
-    } catch (error) {
-        console.error('Error processing webhook:', error);
-        res.status(500).json({ error: 'Failed to process webhook' });
     }
 });
 
@@ -424,6 +456,7 @@ process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
     await redis.quit();
+    if (ws) ws.close();
     process.exit(0);
 });
 
@@ -431,6 +464,7 @@ process.on('SIGTERM', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
     await redis.quit();
+    if (ws) ws.close(); 
     process.exit(0);
 });
 
