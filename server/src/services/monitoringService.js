@@ -1,11 +1,15 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
+const WebhookService = require('./WebhookService');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
+        this.connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
+        this.webhookService = new WebhookService();
+        this.isMonitoring = false;
         this.connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
         this.isMonitoring = false;
         this.processedSignatures = new Set();
@@ -16,7 +20,8 @@ class WalletMonitoringService {
             totalBuyTransactions: 0,
             totalSellTransactions: 0,
             errors: 0,
-            lastScanDuration: 0
+            lastScanDuration: 0,
+            startTime: null
         };
     }
 
@@ -26,6 +31,19 @@ class WalletMonitoringService {
             return;
         }
 
+        console.log('🚀 Starting wallet monitoring with webhooks...');
+        this.isMonitoring = true;
+        this.stats.startTime = Date.now();
+
+        try {
+            await this.webhookService.initialize();
+            console.log('✅ Webhook monitoring started successfully');
+        } catch (error) {
+            console.error('❌ Failed to start webhook monitoring:', error.message);
+            this.isMonitoring = false;
+            throw error;
+        }
+    }
         console.log('🚀 Starting wallet monitoring via Solana node webhooks...');
         this.isMonitoring = true;
 
@@ -61,13 +79,41 @@ class WalletMonitoringService {
             this.stats.errors += errors;
             this.stats.lastScanDuration = scanDuration;
 
-            await this.db.addMonitoringStats(
-                processedSignatures,
-                wallets.length,
-                scanDuration,
-                errors
-            );
+    stopMonitoring() {
+        if (!this.isMonitoring) {
+            console.log('⚠️ Monitoring is not running');
+            return;
+        }
 
+        console.log('⏹️ Stopping monitoring...');
+        this.webhookService.close();
+        this.isMonitoring = false;
+        console.log('✅ Monitoring stopped');
+    }
+
+    async addWallet(address, name = null) {
+        try {
+            new PublicKey(address);
+            
+            const wallet = await this.webhookService.addWallet(address, name);
+            
+            this.stats.totalWallets++;
+            
+            return wallet;
+        } catch (error) {
+            throw new Error(`Failed to add wallet: ${error.message}`);
+        }
+    }
+
+    async removeWallet(address) {
+        try {
+            await this.webhookService.removeWallet(address);
+            
+            this.stats.totalWallets = Math.max(0, this.stats.totalWallets - 1);
+            
+        } catch (error) {
+            throw new Error(`Failed to remove wallet: ${error.message}`);
+        }
             if (processedSignatures > 0) {
                 console.log(`✅ Backup scan completed: ${processedSignatures} new transactions in ${scanDuration}ms`);
             }
@@ -174,16 +220,68 @@ class WalletMonitoringService {
         this.stats.errors++;
     }
 
-    async checkWalletTransactions(wallet) {
+    getStatus() {
+        const webhookStatus = this.webhookService.getStatus();
+        
+        return {
+            isMonitoring: this.isMonitoring,
+            webhook: {
+                isConnected: webhookStatus.isConnected,
+                activeWallets: webhookStatus.activeWallets,
+                processedSignatures: webhookStatus.processedSignatures,
+                reconnectAttempts: webhookStatus.reconnectAttempts
+            },
+            stats: {
+                ...this.stats,
+                uptime: this.stats.startTime ? Date.now() - this.stats.startTime : 0,
+                webhookStats: webhookStatus.stats
+            }
+        };
+    }
+
+    async getDetailedStats() {
         try {
+            const webhookStats = await this.webhookService.getDetailedStats();
+            const dbStats = await this.db.getMonitoringStats();
+            const topTokens = await this.db.getTopTokens(5);
+            
+            return {
+                ...this.getStatus(),
+                database: dbStats,
+                topTokens,
+                webhook: webhookStats
+            };
+        } catch (error) {
+            console.error('❌ Error getting detailed stats:', error.message);
+            return this.getStatus();
+        }
+    }
+
+    async manualSyncWallet(walletAddress, limit = 10) {
+        try {
+            console.log(`🔄 Manual sync for wallet ${walletAddress.slice(0, 8)}...`);
+            
+            const wallet = await this.db.getWalletByAddress(walletAddress);
+            if (!wallet) {
+                throw new Error('Wallet not found');
+            }
             const pubkey = new PublicKey(wallet.address);
             const signatures = await this.connection.getSignaturesForAddress(pubkey, {
                 limit: 10
             });
 
-            let newTransactionsCount = 0;
+            const pubkey = new PublicKey(walletAddress);
+            const signatures = await this.connection.getSignaturesForAddress(pubkey, { limit });
 
+            let processedCount = 0;
             for (const sig of signatures) {
+                try {
+                    const txData = await this.processTransactionManually(sig, wallet);
+                    if (txData) {
+                        processedCount++;
+                    }
+                } catch (error) {
+                    console.error(`❌ Error processing transaction ${sig.signature}:`, error.message);
                 if (this.processedSignatures.has(sig.signature)) {
                     continue;
                 }
@@ -201,9 +299,12 @@ class WalletMonitoringService {
 
                     await this.sendWebhookNotification(wallet, txData);
                 }
-
+                
                 await new Promise(resolve => setTimeout(resolve, 300));
             }
+
+            console.log(`✅ Manual sync completed: ${processedCount} transactions processed`);
+            return { processedCount, totalChecked: signatures.length };
 
             if (newTransactionsCount > 0) {
                 console.log(`✅ ${wallet.name || wallet.address.slice(0, 8)}...: ${newTransactionsCount} new transactions`);
@@ -212,14 +313,20 @@ class WalletMonitoringService {
 
             return { newTransactions: newTransactionsCount };
         } catch (error) {
-            console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
+            console.error(`❌ Error in manual sync for ${walletAddress}:`, error.message);
             throw error;
         }
     }
 
-    async processTransaction(sig, wallet) {
+    async processTransactionManually(sig, wallet) {
         try {
             if (!sig.signature || !sig.blockTime) {
+                return null;
+            }
+
+            const existingTx = await this.db.getTransactionBySignature(sig.signature);
+            if (existingTx) {
+                console.log(`ℹ️ Transaction already exists: ${sig.signature.slice(0, 8)}...`);
                 return null;
             }
 
@@ -233,7 +340,7 @@ class WalletMonitoringService {
 
             const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
             let transactionType, solAmount;
-            if (solChange < 0) {
+            if (solChange < -0.001) {
                 transactionType = 'buy';
                 solAmount = Math.abs(solChange);
             } else if (solChange > 0.001) {
@@ -289,6 +396,8 @@ class WalletMonitoringService {
                     await this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType);
                 }
 
+                await this.db.updateWalletStats(wallet.id);
+
                 return {
                     signature: sig.signature,
                     type: transactionType,
@@ -300,7 +409,7 @@ class WalletMonitoringService {
                 };
             });
         } catch (error) {
-            console.error(`❌ Error processing transaction ${sig.signature}:`, error.message);
+            console.error(`❌ Error processing transaction manually ${sig.signature}:`, error.message);
             return null;
         }
     }
@@ -373,63 +482,17 @@ class WalletMonitoringService {
         }
     }
 
-async addWallet(address, name = null) {
-    try {
-        new PublicKey(address);
-        const wallet = await this.db.addWallet(address, name);
-        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
-        return wallet;
-    } catch (error) {
-        throw new Error(`Failed to add wallet: ${error.message}`);
-        }
+    async getWalletInfoFromNode(address) {
+        return await this.webhookService.getWalletInfoFromNode(address);
     }
 
-    async removeWallet(address) {
-        try {
-            const wallet = await this.db.getWalletByAddress(address);
-            if (wallet) {
-                const transactions = await this.db.getRecentTransactions(24 * 7);
-                const walletSignatures = transactions
-                    .filter(tx => tx.wallet_address === address)
-                    .map(tx => tx.signature);
-                walletSignatures.forEach(sig => this.processedSignatures.delete(sig));
-                await this.db.removeWallet(address);
-                console.log(`🗑️ Removed wallet and associated data: ${address.slice(0, 8)}...`);
-            } else {
-                throw new Error('Wallet not found');
-            }
-        } catch (error) {
-            throw new Error(`Failed to remove wallet: ${error.message}`);
-        }
-    }
-
-    getStatus() {
-        return {
-            isMonitoring: this.isMonitoring,
-            processedSignatures: this.processedSignatures.size,
-            stats: {
-                ...this.stats,
-                uptime: this.isMonitoring ? Date.now() - (this.stats.startTime || Date.now()) : 0
-            }
-        };
-    }
-
-    async getDetailedStats() {
-        try {
-            const dbStats = await this.db.getMonitoringStats();
-            const topTokens = await this.db.getTopTokens(5);
-            return {
-                ...this.getStatus(),
-                database: dbStats,
-                topTokens
-            };
-        } catch (error) {
-            console.error('❌ Error getting detailed stats:', error.message);
-            return this.getStatus();
-        }
+    async getNodeStats() {
+        return await this.webhookService.getNodeStats();
     }
 
     async close() {
+        console.log('🛑 Shutting down monitoring service...');
+        this.stopMonitoring();
         if (this.monitoringInterval) {
             clearInterval(this.monitoringInterval);
             this.isMonitoring = false;

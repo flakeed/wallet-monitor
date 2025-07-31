@@ -1,5 +1,4 @@
--- server/src/database/schema.sql
--- PostgreSQL Schema for WalletPulse with Sales Support
+-- PostgreSQL Schema for WalletPulse with Sales Support (Updated)
 
 -- Enable UUID extension for better IDs
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -73,12 +72,12 @@ CREATE TABLE IF NOT EXISTS wallet_stats (
     FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
 );
 
--- Performance monitoring table
+-- Performance monitoring table (добавлена для поддержки addMonitoringStats)
 CREATE TABLE IF NOT EXISTS monitoring_stats (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     processed_signatures INTEGER DEFAULT 0,
     total_wallets_monitored INTEGER DEFAULT 0,
-    last_scan_duration INTEGER, -- in milliseconds
+    scan_duration INTEGER, -- in milliseconds
     errors_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -97,7 +96,7 @@ CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint);
 CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON tokens(symbol);
 CREATE INDEX IF NOT EXISTS idx_wallet_stats_wallet_id ON wallet_stats(wallet_id);
 
--- Create composite indexes for common queries
+-- Composite indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON transactions(wallet_id, block_time DESC);
 CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON token_operations(token_id, amount DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON transactions(transaction_type, block_time DESC);
@@ -109,7 +108,7 @@ BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
 CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON wallets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON tokens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -163,7 +162,6 @@ WHERE t.block_time >= NOW() - INTERVAL '24 hours'
 ORDER BY t.block_time DESC;
 
 -- Migration script для существующих данных
--- Переименовываем старую таблицу token_purchases в token_operations и добавляем поля
 DO $$
 BEGIN
     -- Проверяем, существует ли старая таблица token_purchases
@@ -181,19 +179,28 @@ BEGIN
         
         RAISE NOTICE 'Migrated token_purchases to token_operations';
     END IF;
-END $$;
 
--- Добавляем новые колонки в transactions если их нет
-DO $$
-BEGIN
+    -- Добавляем новые колонки в transactions если их нет
     IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'sol_received') THEN
-        ALTER TABLE transactions ADD COLUMN sol_received DECIMAL(20, 9);
+        ALTER TABLE transactions ADD COLUMN sol_received DECIMAL(20, 9) DEFAULT 0;
     END IF;
     
     IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'usd_received') THEN
-        ALTER TABLE transactions ADD COLUMN usd_received DECIMAL(15, 2);
+        ALTER TABLE transactions ADD COLUMN usd_received DECIMAL(15, 2) DEFAULT 0;
+    END IF;
+    
+    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'transaction_type') THEN
+        ALTER TABLE transactions ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'buy';
     END IF;
     
     -- Устанавливаем тип транзакции для существующих записей
     UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
+END $$;
+
+-- Добавить колонку total_wallets_monitored в monitoring_stats, если её нет
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'monitoring_stats' AND column_name = 'total_wallets_monitored') THEN
+        ALTER TABLE monitoring_stats RENAME COLUMN total_wallets TO total_wallets_monitored;
+    END IF;
 END $$;
