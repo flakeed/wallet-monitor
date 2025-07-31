@@ -19,8 +19,13 @@ app.use(express.json());
 const monitoringService = new WalletMonitoringService();
 const db = new Database();
 
-setTimeout(() => {
-    monitoringService.startMonitoring();
+setTimeout(async () => {
+    try {
+        await monitoringService.startMonitoring();
+        console.log('✅ Monitoring service started successfully');
+    } catch (error) {
+        console.error('❌ Failed to start monitoring service:', error.message);
+    }
 }, 2000);
 
 app.get('/api/wallets', async (req, res) => {
@@ -71,7 +76,7 @@ app.post('/api/wallets', async (req, res) => {
         res.json({
             success: true,
             wallet,
-            message: 'Wallet added for monitoring'
+            message: 'Wallet added for webhook monitoring'
         });
     } catch (error) {
         console.error('Error adding wallet:', error);
@@ -95,7 +100,7 @@ app.delete('/api/wallets/:address', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Wallet and all associated data removed successfully'
+            message: 'Wallet removed from webhook monitoring'
         });
     } catch (error) {
         console.error('Error removing wallet:', error);
@@ -167,22 +172,79 @@ app.get('/api/monitoring/status', (req, res) => {
     res.json(status);
 });
 
-app.post('/api/monitoring/toggle', (req, res) => {
+app.post('/api/monitoring/toggle', async (req, res) => {
     try {
         const { action } = req.body;
 
         if (action === 'start') {
-            monitoringService.startMonitoring();
-            res.json({ success: true, message: 'Monitoring started' });
+            await monitoringService.startMonitoring();
+            res.json({ success: true, message: 'Webhook monitoring started' });
         } else if (action === 'stop') {
             monitoringService.stopMonitoring();
-            res.json({ success: true, message: 'Monitoring stopped' });
+            res.json({ success: true, message: 'Webhook monitoring stopped' });
         } else {
             res.status(400).json({ error: 'Invalid action. Use "start" or "stop"' });
         }
     } catch (error) {
         console.error('Error toggling monitoring:', error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/monitoring/detailed-status', async (req, res) => {
+    try {
+        const detailedStats = await monitoringService.getDetailedStats();
+        res.json(detailedStats);
+    } catch (error) {
+        console.error('Error fetching detailed status:', error);
+        res.status(500).json({ error: 'Failed to fetch detailed status' });
+    }
+});
+
+app.post('/api/wallets/:address/sync', async (req, res) => {
+    try {
+        const address = req.params.address.trim();
+        const limit = parseInt(req.body.limit) || 10;
+
+        if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+            return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+        }
+
+        const result = await monitoringService.manualSyncWallet(address, limit);
+        res.json({
+            success: true,
+            message: `Manual sync completed for ${address.slice(0, 8)}...`,
+            result
+        });
+    } catch (error) {
+        console.error('Error in manual sync:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/node/wallet/:address', async (req, res) => {
+    try {
+        const address = req.params.address.trim();
+
+        if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+            return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+        }
+
+        const walletInfo = await monitoringService.getWalletInfoFromNode(address);
+        res.json(walletInfo);
+    } catch (error) {
+        console.error('Error fetching wallet info from node:', error);
+        res.status(500).json({ error: 'Failed to fetch wallet info from node' });
+    }
+});
+
+app.get('/api/node/stats', async (req, res) => {
+    try {
+        const nodeStats = await monitoringService.getNodeStats();
+        res.json(nodeStats);
+    } catch (error) {
+        console.error('Error fetching node stats:', error);
+        res.status(500).json({ error: 'Failed to fetch node stats' });
     }
 });
 
@@ -422,18 +484,16 @@ app.get('/api/stats/tokens', async (req, res) => {
 process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
-    await redis.quit();
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
-    await redis.quit();
     process.exit(0);
 });
 
 app.listen(port, () => {
     console.log(`🚀 Server running on http://localhost:${port}`);
-    console.log(`📊 Monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
+    console.log(`📡 Webhook monitoring will be initialized shortly...`);
 });

@@ -426,6 +426,87 @@ async getWalletStats(walletId) {
             };
         }
     }
+
+    async getTransactionBySignature(signature) {
+    try {
+        const query = `
+            SELECT t.*, w.address as wallet_address, w.name as wallet_name
+            FROM transactions t
+            JOIN wallets w ON t.wallet_id = w.id
+            WHERE t.signature = $1
+        `;
+        
+        const result = await this.pool.query(query, [signature]);
+        return result.rows[0] || null;
+    } catch (error) {
+        console.error('Error getting transaction by signature:', error.message);
+        throw error;
+    }
+}
+
+async withTransaction(callback) {
+    const client = await this.pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        const result = await callback(client);
+        await client.query('COMMIT');
+        return result;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+async addMonitoringStats(processedSignatures, totalWallets, scanDuration, errors) {
+    try {
+        const query = `
+            INSERT INTO monitoring_stats (
+                processed_signatures, 
+                total_wallets, 
+                scan_duration, 
+                errors, 
+                created_at
+            ) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        `;
+        
+        await this.pool.query(query, [
+            processedSignatures,
+            totalWallets,
+            scanDuration,
+            errors
+        ]);
+        
+    } catch (error) {
+        console.error('Error adding monitoring stats:', error.message);
+        // Не бросаем ошибку, так как это не критично
+    }
+}
+
+async getWebhookStats() {
+    try {
+        const query = `
+            SELECT 
+                COUNT(*) as total_webhooks_today,
+                COUNT(CASE WHEN created_at >= NOW() - INTERVAL '1 hour' THEN 1 END) as webhooks_last_hour,
+                MAX(created_at) as last_webhook_time
+            FROM transactions 
+            WHERE created_at >= CURRENT_DATE
+        `;
+        
+        const result = await this.pool.query(query);
+        return result.rows[0];
+    } catch (error) {
+        console.error('Error getting webhook stats:', error.message);
+        return {
+            total_webhooks_today: 0,
+            webhooks_last_hour: 0,
+            last_webhook_time: null
+        };
+    }
+}
 }
 
 module.exports = Database;
