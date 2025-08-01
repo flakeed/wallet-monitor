@@ -33,21 +33,19 @@ class WebhookService {
             this.isConnecting = false;
         });
 
-        this.ws.on('message', async (data) => {
-            try {
-                const message = JSON.parse(data.toString());
-                console.log(`[${new Date().toISOString()}] 📩 Received webhook message:`, message);
-
-                if (!message.signature) {
-                    console.warn(`[${new Date().toISOString()}] ⚠️ Missing signature in webhook message`);
-                    return;
-                }
-
-                await this.processWebhookMessage(message);
-            } catch (error) {
-                console.error(`[${new Date().toISOString()}] ❌ Error processing webhook message:`, error.message);
-            }
-        });
+this.ws.on('message', (data) => {
+    messageCount++;
+    console.log(`\n🔥 MESSAGE #${messageCount} RECEIVED:`);
+    console.log('📏 Size:', data.length, 'bytes');
+    console.log('📄 Raw data:', data.toString());
+    
+    try {
+        const parsed = JSON.parse(data.toString());
+        console.log('📦 Parsed JSON:', JSON.stringify(parsed, null, 2));
+    } catch (e) {
+        console.log('❌ Not valid JSON');
+    }
+});
 
         this.ws.on('error', (error) => {
             console.error(`[${new Date().toISOString()}] ❌ WebSocket error:`, error.message);
