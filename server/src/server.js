@@ -436,7 +436,7 @@ process.on('SIGTERM', async () => {
     process.exit(0);
 });
 
-app.listen(port, () => {
-    console.log(`🚀 Server running on http://localhost:${port}`);
+app.listen(port,'158.220.125.26', () => {
+    console.log(`🚀 Server running on http://158.220.125.26:${port}`);
     console.log(`📊 Monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
 });
