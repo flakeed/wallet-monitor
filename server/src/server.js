@@ -72,6 +72,7 @@ app.get('/api/transactions/stream', (req, res) => {
       return;
     }
     console.log(`[${new Date().toISOString()}] ✅ New SSE client connected`);
+    sseClients.add(res);
   });
 
   subscriber.on('message', (channel, message) => {
@@ -379,8 +380,8 @@ app.post('/api/wallets/bulk', async (req, res) => {
       return res.status(400).json({ error: 'At least one wallet is required' });
     }
 
-    if (wallets.length > 100) {
-      return res.status(400).json({ error: 'Maximum 100 wallets allowed per bulk import' });
+    if (wallets.length > 500) {
+      return res.status(400).json({ error: 'Maximum 500 wallets allowed per bulk import' });
     }
 
     const results = {
@@ -403,27 +404,32 @@ app.post('/api/wallets/bulk', async (req, res) => {
       }
     }
 
-    for (const wallet of wallets) {
-      const hasError = results.errors.some((error) => error.address === wallet.address);
-      if (hasError) continue;
+    const batchSize = 50;
+    for (let i = 0; i < wallets.length; i += batchSize) {
+      const batch = wallets.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (wallet) => {
+          const hasError = results.errors.some((error) => error.address === wallet.address);
+          if (hasError) return;
 
-      try {
-        const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null);
-        results.successful++;
-        results.successfulWallets.push({
-          address: wallet.address,
-          name: wallet.name || null,
-          id: addedWallet.id,
-        });
-      } catch (error) {
-        results.failed++;
-        results.errors.push({
-          address: wallet.address,
-          name: wallet.name || null,
-          error: error.message,
-        });
-      }
-
+          try {
+            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null);
+            results.successful++;
+            results.successfulWallets.push({
+              address: wallet.address,
+              name: wallet.name || null,
+              id: addedWallet.id,
+            });
+          } catch (error) {
+            results.failed++;
+            results.errors.push({
+              address: wallet.address,
+              name: wallet.name || null,
+              error: error.message,
+            });
+          }
+        })
+      );
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
@@ -444,6 +450,7 @@ app.get('/api/wallets/bulk-template', (req, res) => {
 # Format: address,name (name is optional)
 # One wallet per line
 # Lines starting with # are ignored
+# Maximum 500 wallets
 
 # Example wallets (replace with real addresses):
 9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
