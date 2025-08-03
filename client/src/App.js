@@ -7,7 +7,7 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 
-const API_BASE = 'http://localhost:5001/api';
+const API_BASE = '/api';
 
 function App() {
   const [wallets, setWallets] = useState([]);
@@ -150,13 +150,13 @@ const addWalletsBulk = async (wallets) => {
     fetchData();
   }, [refreshKey]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchData();
-    }, 30000);
+  // useEffect(() => {
+  //   const interval = setInterval(() => {
+  //     fetchData();
+  //   }, 30000);
 
-    return () => clearInterval(interval);
-  }, [timeframe, transactionType]);
+  //   return () => clearInterval(interval);
+  // }, [timeframe, transactionType]);
 
   if (loading) {
     return (

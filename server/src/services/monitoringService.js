@@ -6,7 +6,8 @@ const Redis = require('ioredis');
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
-        this.connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
+        // Используем правильный RPC URL для вашей ноды
+        this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', 'confirmed');
         this.isMonitoring = false; // WebSocket теперь управляет мониторингом
         this.monitoringInterval = null;
         this.processedSignatures = new Set();
@@ -22,6 +23,8 @@ class WalletMonitoringService {
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
+        
+        console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized with RPC: ${this.connection.rpcEndpoint}`);
     }
 
     startMonitoring() {
@@ -85,7 +88,8 @@ class WalletMonitoringService {
                 console.error(`[${new Date().toISOString()}] ❌ Error processing signature ${signature}:`, error.message);
             }
 
-            await new Promise(resolve => setTimeout(resolve, 300));
+            // УБИРАЕМ ЗАДЕРЖКУ для моментальной обработки
+            // await new Promise(resolve => setTimeout(resolve, 300)); - УДАЛЕНО
         }
 
         this.isProcessingQueue = false;
@@ -109,7 +113,8 @@ class WalletMonitoringService {
         console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature} with requestId ${requestId}`);
 
         if (!this.isProcessingQueue) {
-            this.processQueue();
+            // НЕМЕДЛЕННО запускаем обработку очереди
+            setImmediate(() => this.processQueue());
         }
     }
 
@@ -140,7 +145,8 @@ class WalletMonitoringService {
                     }
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 300));
+                // УБИРАЕМ ЗАДЕРЖКУ между транзакциями
+                // await new Promise(resolve => setTimeout(resolve, 300)); - УДАЛЕНО
             }
 
             if (newTransactionsCount > 0) {
@@ -174,8 +180,11 @@ class WalletMonitoringService {
                 return null;
             }
 
+            console.log(`[${new Date().toISOString()}] 🔍 Fetching transaction data for ${sig.signature.slice(0, 20)}...`);
+
             const tx = await this.connection.getParsedTransaction(sig.signature, {
-                maxSupportedTransactionVersion: 0
+                maxSupportedTransactionVersion: 0,
+                commitment: 'confirmed'
             });
 
             if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
@@ -238,11 +247,13 @@ class WalletMonitoringService {
 
                 const transaction = result.rows[0];
 
-                for (const tokenChange of tokenChanges) {
-                    await this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType);
-                }
+                // ПАРАЛЛЕЛЬНО сохраняем токены для ускорения
+                const tokenSavePromises = tokenChanges.map(tokenChange => 
+                    this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType)
+                );
+                await Promise.all(tokenSavePromises);
 
-                console.log(`[${new Date().toISOString()}] ✅ Saved ${transactionType} transaction ${sig.signature}: ${solAmount} SOL ($${usdAmount})`);
+                console.log(`[${new Date().toISOString()}] ✅ Saved ${transactionType} transaction ${sig.signature}: ${solAmount} SOL (${usdAmount.toFixed(2)})`);
 
                 return {
                     signature: sig.signature,
@@ -290,6 +301,7 @@ class WalletMonitoringService {
 
     async saveTokenOperationInTransaction(client, transactionId, tokenChange, transactionType) {
         try {
+            // УСКОРЯЕМ получение метаданных токена
             const tokenInfo = await fetchTokenMetadata(tokenChange.mint, this.connection);
             if (!tokenInfo) {
                 console.warn(`[${new Date().toISOString()}] ⚠️ No metadata found for token ${tokenChange.mint}`);
@@ -368,6 +380,7 @@ class WalletMonitoringService {
         return {
             isMonitoring: this.isMonitoring,
             processedSignatures: this.processedSignatures.size,
+            rpcEndpoint: this.connection.rpcEndpoint,
             stats: {
                 ...this.stats,
                 uptime: Date.now() - this.stats.startTime

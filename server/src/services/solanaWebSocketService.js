@@ -5,25 +5,35 @@ const Database = require('../database/connection');
 
 class SolanaWebSocketService {
     constructor() {
-        this.solanaRpc=process.env.SOLANA_RPC_URL;
-        this.rpcUrl = process.env.WEBHOOK_URL;
-        this.wsUrl = this.rpcUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+        // Используем правильные URL для подключения к вашей ноде
+        this.solanaRpc = process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005';
+        this.wsUrl = process.env.WEBHOOK_URL || 'ws://45.134.108.167:5006/ws';
+        
         this.connection = new Connection(this.solanaRpc, 'confirmed');
         this.monitoringService = new WalletMonitoringService();
         this.db = new Database();
         this.ws = null;
         this.subscriptions = new Map(); // wallet -> subscription id
-        this.reconnectInterval = 5000;
-        this.maxReconnectAttempts = 10;
+        this.reconnectInterval = 3000; // Уменьшили интервал переподключения
+        this.maxReconnectAttempts = 20; // Увеличили количество попыток
         this.reconnectAttempts = 0;
         this.isConnecting = false;
         this.messageId = 0;
         this.pendingRequests = new Map();
         this.messageCount = 0;
+        this.isStarted = false;
     }
 
     async start() {
+        if (this.isStarted) {
+            console.log(`[${new Date().toISOString()}] 🔄 WebSocket service already started`);
+            return;
+        }
+
         console.log(`[${new Date().toISOString()}] 🚀 Starting Solana WebSocket client for ${this.wsUrl}`);
+        console.log(`[${new Date().toISOString()}] 📡 Using RPC endpoint: ${this.solanaRpc}`);
+        
+        this.isStarted = true;
         await this.connect();
         await this.subscribeToWallets();
     }
@@ -32,7 +42,11 @@ class SolanaWebSocketService {
         if (this.isConnecting) return;
         this.isConnecting = true;
 
-        this.ws = new WebSocket(this.wsUrl);
+        console.log(`[${new Date().toISOString()}] 🔌 Connecting to WebSocket: ${this.wsUrl}`);
+        this.ws = new WebSocket(this.wsUrl, {
+            handshakeTimeout: 10000,
+            perMessageDeflate: false
+        });
 
         this.ws.on('open', () => {
             console.log(`[${new Date().toISOString()}] ✅ Connected to Solana WebSocket at ${this.wsUrl}`);
@@ -42,15 +56,15 @@ class SolanaWebSocketService {
 
         this.ws.on('message', (data) => {
             this.messageCount++;
-            console.log(`[${new Date().toISOString()}] WebSocket message #${this.messageCount} received`);
+            console.log(`[${new Date().toISOString()}] 📨 WebSocket message #${this.messageCount} received`);
             
             try {
                 const message = JSON.parse(data.toString());
-                console.log(`[${new Date().toISOString()}] Parsed message:`, JSON.stringify(message, null, 2));
+                console.log(`[${new Date().toISOString()}] 📋 Parsed message:`, JSON.stringify(message, null, 2));
                 this.handleMessage(message);
             } catch (error) {
-                console.error(`[${new Date().toISOString()}] Error parsing WebSocket message:`, error.message);
-                console.log(`[${new Date().toISOString()}] Raw message:`, data.toString());
+                console.error(`[${new Date().toISOString()}] ❌ Error parsing WebSocket message:`, error.message);
+                console.log(`[${new Date().toISOString()}] 📄 Raw message:`, data.toString());
             }
         });
 
@@ -61,11 +75,30 @@ class SolanaWebSocketService {
         this.ws.on('close', (code, reason) => {
             console.log(`[${new Date().toISOString()}] 🔌 WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
             this.isConnecting = false;
-            this.handleReconnect();
+            if (this.isStarted) {
+                this.handleReconnect();
+            }
         });
 
-        return new Promise((resolve) => {
-            this.ws.on('open', resolve);
+        this.ws.on('ping', (data) => {
+            console.log(`[${new Date().toISOString()}] 🏓 Received ping, sending pong`);
+            this.ws.pong(data);
+        });
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Connection timeout'));
+            }, 10000);
+
+            this.ws.on('open', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+
+            this.ws.on('error', (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            });
         });
     }
 
@@ -77,7 +110,7 @@ class SolanaWebSocketService {
 
             if (message.error) {
                 console.error(`[${new Date().toISOString()}] ❌ ${type} error:`, message.error);
-                reject(new Error(message.error.message));
+                reject(new Error(message.error.message || JSON.stringify(message.error)));
             } else {
                 console.log(`[${new Date().toISOString()}] ✅ ${type} success:`, message.result);
                 resolve(message.result);
@@ -90,6 +123,8 @@ class SolanaWebSocketService {
             await this.handleAccountNotification(message.params);
         } else if (message.method === 'signatureNotification') {
             await this.handleSignatureNotification(message.params);
+        } else if (message.method === 'logsNotification') {
+            await this.handleLogsNotification(message.params);
         }
     }
 
@@ -108,8 +143,7 @@ class SolanaWebSocketService {
             const newLamports = result.value.lamports;
             console.log(`[${new Date().toISOString()}] 💰 Balance change detected for wallet ${walletAddress.slice(0, 8)}... New balance: ${newLamports / 1e9} SOL`);
             
-            // Получаем последние транзакции для этого кошелька
-            // Это нужно для получения signature транзакции, которая вызвала изменение баланса
+            // НЕМЕДЛЕННО проверяем транзакции без задержек
             await this.checkRecentTransactions(walletAddress);
 
         } catch (error) {
@@ -127,9 +161,32 @@ class SolanaWebSocketService {
                 return;
             }
 
-            // Здесь можно добавить дополнительную обработку уведомлений о подписях
+            console.log(`[${new Date().toISOString()}] ✅ Transaction confirmed via signature notification`);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error handling signature notification:`, error.message);
+        }
+    }
+
+    async handleLogsNotification(params) {
+        try {
+            const { result, subscription } = params;
+            console.log(`[${new Date().toISOString()}] 📋 Logs notification for subscription ${subscription}:`, result);
+
+            // Находим кошелек по subscription ID
+            const walletAddress = this.findWalletBySubscription(subscription);
+            if (!walletAddress) {
+                console.warn(`[${new Date().toISOString()}] ⚠️ No wallet found for logs subscription ${subscription}`);
+                return;
+            }
+
+            if (result.value && result.value.signature) {
+                console.log(`[${new Date().toISOString()}] 🔍 Transaction detected via logs: ${result.value.signature}`);
+                // НЕМЕДЛЕННО проверяем транзакции
+                await this.checkRecentTransactions(walletAddress);
+            }
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error handling logs notification:`, error.message);
         }
     }
 
@@ -158,8 +215,8 @@ class SolanaWebSocketService {
             console.log(`[${new Date().toISOString()}] 🔍 Checking recent transactions for ${walletAddress.slice(0, 8)}...`);
             
             const pubkey = new PublicKey(walletAddress);
-            // Получаем только последние 3 транзакции - новые транзакции будут в начале списка
-            const signatures = await this.connection.getSignaturesForAddress(pubkey, { limit: 3 });
+            // Получаем только последние 5 транзакций - новые транзакции будут в начале списка
+            const signatures = await this.connection.getSignaturesForAddress(pubkey, { limit: 5 });
 
             let processedCount = 0;
 
@@ -183,7 +240,7 @@ class SolanaWebSocketService {
                     const txData = await this.monitoringService.processTransaction(sig, wallet);
                     if (txData) {
                         processedCount++;
-                        console.log(`[${new Date().toISOString()}] ✅ Successfully processed ${txData.type} transaction: ${txData.solAmount} SOL (${txData.usdAmount.toFixed(2)})`);
+                        console.log(`[${new Date().toISOString()}] ✅ Successfully processed ${txData.type} transaction: ${txData.solAmount} SOL ($${txData.usdAmount.toFixed(2)})`);
                         
                         // Логируем детали токенов
                         if (txData.tokensChanged > 0) {
@@ -196,13 +253,13 @@ class SolanaWebSocketService {
                     console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature.slice(0, 20)}...:`, error.message);
                 }
 
-                // Добавляем задержку между обработкой транзакций чтобы не перегружать RPC
-                await new Promise(resolve => setTimeout(resolve, 500));
+                // УБИРАЕМ ЗАДЕРЖКУ - обрабатываем транзакции моментально
+                // await new Promise(resolve => setTimeout(resolve, 500)); - УДАЛЕНО
             }
 
             if (processedCount > 0) {
                 console.log(`[${new Date().toISOString()}] 📊 Processed ${processedCount} new transaction(s) for ${walletAddress.slice(0, 8)}...`);
-                // Обновляем статистику кошелька
+                // Обновляем статистику кошелька НЕМЕДЛЕННО
                 await this.db.updateWalletStats(wallet.id);
             }
 
@@ -218,8 +275,8 @@ class SolanaWebSocketService {
 
             for (const wallet of wallets) {
                 await this.subscribeToWallet(wallet.address);
-                // Добавляем небольшую задержку между подписками
-                await new Promise(resolve => setTimeout(resolve, 100));
+                // УБИРАЕМ ЗАДЕРЖКУ между подписками
+                // await new Promise(resolve => setTimeout(resolve, 100)); - УДАЛЕНО
             }
 
             console.log(`[${new Date().toISOString()}] ✅ Successfully subscribed to all wallets`);
@@ -230,20 +287,31 @@ class SolanaWebSocketService {
 
     async subscribeToWallet(walletAddress) {
         try {
+            console.log(`[${new Date().toISOString()}] 🔔 Subscribing to wallet ${walletAddress.slice(0, 8)}...`);
+
             // Подписываемся на изменения аккаунта
             const accountSubscriptionId = await this.sendRequest('accountSubscribe', [
                 walletAddress,
-                { commitment: 'confirmed' }
+                { 
+                    commitment: 'confirmed',
+                    encoding: 'base64' 
+                }
             ], 'accountSubscribe');
+
+            // Также подписываемся на логи для более быстрого обнаружения транзакций
+            const logsSubscriptionId = await this.sendRequest('logsSubscribe', [
+                { mentions: [walletAddress] },
+                { commitment: 'confirmed' }
+            ], 'logsSubscribe');
 
             this.subscriptions.set(walletAddress, {
                 account: accountSubscriptionId,
-                logs: null // Можно добавить подписку на логи если нужно
+                logs: logsSubscriptionId
             });
 
-            console.log(`[${new Date().toISOString()}] ✅ Subscribed to wallet ${walletAddress.slice(0, 8)}... (account: ${accountSubscriptionId})`);
+            console.log(`[${new Date().toISOString()}] ✅ Subscribed to wallet ${walletAddress.slice(0, 8)}... (account: ${accountSubscriptionId}, logs: ${logsSubscriptionId})`);
 
-            return accountSubscriptionId;
+            return { account: accountSubscriptionId, logs: logsSubscriptionId };
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error subscribing to wallet ${walletAddress}:`, error.message);
             throw error;
@@ -285,7 +353,7 @@ class SolanaWebSocketService {
             // Добавляем кошелек в базу данных
             const wallet = await this.monitoringService.addWallet(walletAddress, name);
             
-            // Подписываемся на обновления этого кошелька
+            // Подписываемся на обновления этого кошелька НЕМЕДЛЕННО
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 await this.subscribeToWallet(walletAddress);
             }
@@ -332,19 +400,20 @@ class SolanaWebSocketService {
             console.log(`[${new Date().toISOString()}] 📤 Sending ${type} request:`, JSON.stringify(request));
             this.ws.send(JSON.stringify(request));
 
-            // Таймаут для запросов
+            // Увеличиваем таймаут для более надежной работы
             setTimeout(() => {
                 if (this.pendingRequests.has(id)) {
                     this.pendingRequests.delete(id);
                     reject(new Error(`Request ${type} (id: ${id}) timed out`));
                 }
-            }, 30000);
+            }, 60000); // 60 секунд вместо 30
         });
     }
 
     async handleReconnect() {
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             console.error(`[${new Date().toISOString()}] ❌ Max reconnect attempts reached. Stopping WebSocket client.`);
+            this.isStarted = false;
             return;
         }
 
@@ -380,14 +449,18 @@ class SolanaWebSocketService {
 
         return {
             isConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
+            isStarted: this.isStarted,
             subscriptions: this.subscriptions.size,
             messageCount: this.messageCount,
             reconnectAttempts: this.reconnectAttempts,
+            wsUrl: this.wsUrl,
+            rpcUrl: this.solanaRpc,
             activeWallets: subscriptionDetails
         };
     }
 
     async stop() {
+        this.isStarted = false;
         console.log(`[${new Date().toISOString()}] ⏹️ Stopping Solana WebSocket client`);
         
         // Отписываемся от всех кошельков

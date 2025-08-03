@@ -12,7 +12,7 @@
     "start": "react-scripts start",
     "build": "react-scripts build"
   },
-  "proxy": "http://localhost:5001",
+  "proxy": "http://158.220.125.26:5001",
   "browserslist": {
     "production": [
       ">0.2%",
