@@ -2,7 +2,7 @@ const WebSocket = require('ws');
 const { Connection, PublicKey, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 
 const WEBHOOK_URL = 'ws://45.134.108.167:5006/ws';
-const RPC_URL = 'https://api.devnet.solana.com'; /
+const RPC_URL = 'https://api.devnet.solana.com';
 const WALLET_ADDRESS = '9JebwPTGwP4YCgNWimZL3yHnk6gEXR8M7RMrPA2pSBBD'; 
 
 class WalletSubscription {
