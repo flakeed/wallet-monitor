@@ -34,16 +34,15 @@ class WebhookService {
         });
 
 this.ws.on('message', (data) => {
+        try {
     messageCount++;
-    console.log(`\n🔥 MESSAGE #${messageCount} RECEIVED:`);
-    console.log('📏 Size:', data.length, 'bytes');
-    console.log('📄 Raw data:', data.toString());
-    
-    try {
+    console.log(`message #${messageCount} received:`);
+    console.log('raw data:', data.toString());
+
         const parsed = JSON.parse(data.toString());
-        console.log('📦 Parsed JSON:', JSON.stringify(parsed, null, 2));
+        console.log('Parsed JSON:', JSON.stringify(parsed, null, 2));
     } catch (e) {
-        console.log('❌ Not valid JSON');
+        console.log('Not valid JSON');
     }
 });
 
