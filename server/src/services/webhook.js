@@ -21,7 +21,7 @@ class WalletSubscription {
         this.ws = new WebSocket(WEBHOOK_URL);
 
         this.ws.on('open', () => {
-            console.log(`[${new Date().toISOString()}] ✅ Connected to Solana WebSocket at ${WEBHOOK_URL}`);
+            console.log(`[${new Date().toISOString()}] Connected to Solana WebSocket at ${WEBHOOK_URL}`);
             const subscriptionMessage = {
                 jsonrpc: '2.0',
                 id: 1,
@@ -29,29 +29,29 @@ class WalletSubscription {
                 params: [WALLET_ADDRESS, { commitment: 'confirmed' }]
             };
             this.ws.send(JSON.stringify(subscriptionMessage));
-            console.log(`[${new Date().toISOString()}] 📡 Subscribed to wallet: ${WALLET_ADDRESS}`);
+            console.log(`[${new Date().toISOString()}] Subscribed to wallet: ${WALLET_ADDRESS}`);
         });
 
         this.ws.on('message', (data) => {
             this.messageCount++;
-            console.log(`[${new Date().toISOString()}] 📬 WebSocket message #${this.messageCount} received:`);
+            console.log(`[${new Date().toISOString()}] WebSocket message #${this.messageCount} received:`);
             try {
                 const message = JSON.parse(data.toString());
                 console.log(`[${new Date().toISOString()}] Parsed message:`, JSON.stringify(message, null, 2));
             } catch (error) {
-                console.error(`[${new Date().toISOString()}] ❌ Error parsing WebSocket message:`, error.message);
+                console.error(`[${new Date().toISOString()}] Error parsing WebSocket message:`, error.message);
                 console.log(`[${new Date().toISOString()}] Raw message:`, data.toString());
             }
         });
 
         this.ws.on('error', (error) => {
-            console.error(`[${new Date().toISOString()}] ❌ WebSocket error:`, error.message);
+            console.error(`[${new Date().toISOString()}] WebSocket error:`, error.message);
         });
 
         this.ws.on('close', (code, reason) => {
-            console.log(`[${new Date().toISOString()}] 🔌 WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
+            console.log(`[${new Date().toISOString()}]  WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
             setTimeout(() => {
-                console.log(`[${new Date().toISOString()}] 🔄 Attempting to reconnect to WebSocket...`);
+                console.log(`[${new Date().toISOString()}]  Attempting to reconnect to WebSocket...`);
                 this.connectToWebhook();
             }, 5000);
         });
@@ -59,18 +59,18 @@ class WalletSubscription {
 
     async sendTestTransaction() {
         try {
-            console.log(`[${new Date().toISOString()}] 🚀 Creating transaction from ${WALLET_ADDRESS} to ${RECIPIENT_ADDRESS}`);
+            console.log(`[${new Date().toISOString()}]  Creating transaction from ${WALLET_ADDRESS} to ${RECIPIENT_ADDRESS}`);
             
             const balance = await this.connection.getBalance(this.wallet.publicKey);
-            console.log(`[${new Date().toISOString()}] 💰 Wallet balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+            console.log(`[${new Date().toISOString()}]  Wallet balance: ${balance / LAMPORTS_PER_SOL} SOL`);
             if (balance < 0.1 * LAMPORTS_PER_SOL) {
-                console.log(`[${new Date().toISOString()}] 📤 Requesting airdrop for ${WALLET_ADDRESS}`);
+                console.log(`[${new Date().toISOString()}] Requesting airdrop for ${WALLET_ADDRESS}`);
                 const airdropSignature = await this.connection.requestAirdrop(this.wallet.publicKey, LAMPORTS_PER_SOL);
                 await this.connection.confirmTransaction({
                     signature: airdropSignature,
                     ...(await this.connection.getLatestBlockhash('confirmed'))
                 }, 'confirmed');
-                console.log(`[${new Date().toISOString()}] ✅ Airdrop confirmed`);
+                console.log(`[${new Date().toISOString()}]  Airdrop confirmed`);
             }
 
             const transaction = new Transaction().add(
@@ -87,17 +87,17 @@ class WalletSubscription {
 
             transaction.sign(this.wallet);
             const signature = await this.connection.sendRawTransaction(transaction.serialize());
-            console.log(`[${new Date().toISOString()}] 📤 Transaction sent. Signature: ${signature}`);
+            console.log(`[${new Date().toISOString()}]  Transaction sent. Signature: ${signature}`);
 
             await this.connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
-            console.log(`[${new Date().toISOString()}] ✅ Transaction confirmed: ${signature}`);
+            console.log(`[${new Date().toISOString()}]  Transaction confirmed: ${signature}`);
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error sending transaction:`, error.message);
+            console.error(`[${new Date().toISOString()}]  Error sending transaction:`, error.message);
         }
     }
 
     async start() {
-        console.log(`[${new Date().toISOString()}] 🚀 Starting wallet subscription test`);
+        console.log(`[${new Date().toISOString()}]  Starting wallet subscription test`);
         this.connectToWebhook();
         setTimeout(() => this.sendTestTransaction(), 2000);
     }
