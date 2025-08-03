@@ -10,8 +10,8 @@ function connectToWebhook() {
     });
 
     ws.on('message', (data) => {
-        console.log(`[${new Date().toISOString()}] 📬 WebSocket message received:`);
         try {
+                    console.log(`[${new Date().toISOString()}] 📬 WebSocket message received:`);
             const message = JSON.parse(data);
             console.log(`[${new Date().toISOString()}] Received WebSocket message:`, JSON.stringify(message, null, 2));
         } catch (error) {
