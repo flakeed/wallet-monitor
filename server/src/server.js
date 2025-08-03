@@ -6,7 +6,8 @@ const { redis } = require('./services/tokenService');
 
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
-const WebhookService = require('./services/webhookService');
+const SolanaWebSocketService = require('./services/solanaWebSocketService');
+
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -17,11 +18,17 @@ app.use(cors({
 app.use(express.json());
 
 const monitoringService = new WalletMonitoringService();
-const webhookService = new WebhookService();
+const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
 
+// Инициализация WebSocket сервиса с задержкой
 setTimeout(async () => {
-    await webhookService.start();
+    try {
+        await solanaWebSocketService.start();
+        console.log(`[${new Date().toISOString()}] 🚀 Solana WebSocket service started successfully`);
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Failed to start Solana WebSocket service:`, error.message);
+    }
 }, 2000);
 
 app.get('/api/wallets', async (req, res) => {
@@ -68,7 +75,9 @@ app.post('/api/wallets', async (req, res) => {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
 
-        const wallet = await monitoringService.addWallet(address, name);
+        // Используем новый WebSocket сервис для добавления кошелька
+        const wallet = await solanaWebSocketService.addWallet(address, name);
+        
         res.json({
             success: true,
             wallet,
@@ -92,7 +101,8 @@ app.delete('/api/wallets/:address', async (req, res) => {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
 
-        await monitoringService.removeWallet(address);
+        // Используем новый WebSocket сервис для удаления кошелька
+        await solanaWebSocketService.removeWallet(address);
 
         res.json({
             success: true,
@@ -164,8 +174,24 @@ app.get('/api/transactions', async (req, res) => {
 });
 
 app.get('/api/monitoring/status', (req, res) => {
-    const status = monitoringService.getStatus();
-    res.json(status);
+    try {
+        const monitoringStatus = monitoringService.getStatus();
+        const websocketStatus = solanaWebSocketService.getStatus();
+        
+        res.json({
+            monitoring: monitoringStatus,
+            websocket: websocketStatus,
+            combined: {
+                isActive: websocketStatus.isConnected,
+                totalWallets: websocketStatus.subscriptions,
+                messageCount: websocketStatus.messageCount,
+                reconnectAttempts: websocketStatus.reconnectAttempts
+            }
+        });
+    } catch (error) {
+        console.error('Error getting monitoring status:', error);
+        res.status(500).json({ error: 'Failed to get monitoring status' });
+    }
 });
 
 app.post('/api/monitoring/toggle', (req, res) => {
@@ -173,11 +199,11 @@ app.post('/api/monitoring/toggle', (req, res) => {
         const { action } = req.body;
 
         if (action === 'start') {
-            monitoringService.startMonitoring();
-            res.json({ success: true, message: 'Monitoring started' });
+            solanaWebSocketService.start();
+            res.json({ success: true, message: 'WebSocket monitoring started' });
         } else if (action === 'stop') {
-            monitoringService.stopMonitoring();
-            res.json({ success: true, message: 'Monitoring stopped' });
+            solanaWebSocketService.stop();
+            res.json({ success: true, message: 'WebSocket monitoring stopped' });
         } else {
             res.status(400).json({ error: 'Invalid action. Use "start" or "stop"' });
         }
@@ -320,7 +346,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
             if (hasError) continue;
 
             try {
-                const addedWallet = await monitoringService.addWallet(wallet.address, wallet.name || null);
+                const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null);
                 results.successful++;
                 results.successfulWallets.push({
                     address: wallet.address,
@@ -420,10 +446,38 @@ app.get('/api/stats/tokens', async (req, res) => {
     }
 });
 
+// Новый эндпоинт для получения статуса WebSocket подключения
+app.get('/api/websocket/status', (req, res) => {
+    try {
+        const status = solanaWebSocketService.getStatus();
+        res.json(status);
+    } catch (error) {
+        console.error('Error getting WebSocket status:', error);
+        res.status(500).json({ error: 'Failed to get WebSocket status' });
+    }
+});
+
+// Эндпоинт для переподключения WebSocket
+app.post('/api/websocket/reconnect', async (req, res) => {
+    try {
+        await solanaWebSocketService.stop();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await solanaWebSocketService.start();
+        
+        res.json({
+            success: true,
+            message: 'WebSocket reconnected successfully'
+        });
+    } catch (error) {
+        console.error('Error reconnecting WebSocket:', error);
+        res.status(500).json({ error: 'Failed to reconnect WebSocket' });
+    }
+});
+
 process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
-    await webhookService.stop(); 
+    await solanaWebSocketService.stop();
     await redis.quit();
     process.exit(0);
 });
@@ -431,12 +485,13 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
     console.log('\n🛑 Shutting down server...');
     await monitoringService.close();
-    await webhookService.stop(); 
+    await solanaWebSocketService.stop();
     await redis.quit();
     process.exit(0);
 });
 
-app.listen(port,'158.220.125.26', () => {
+app.listen(port, '158.220.125.26', () => {
     console.log(`🚀 Server running on http://158.220.125.26:${port}`);
-    console.log(`📊 Monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
+    console.log(`📡 Solana WebSocket monitoring: Starting...`);
+    console.log(`📊 Legacy monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
 });
