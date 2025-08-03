@@ -5,9 +5,10 @@ const Database = require('../database/connection');
 
 class SolanaWebSocketService {
     constructor() {
-        this.rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+        this.solanaRpc=process.env.SOLANA_RPC_URL;
+        this.rpcUrl = process.env.WEBHOOK_URL;
         this.wsUrl = this.rpcUrl.replace('https://', 'wss://').replace('http://', 'ws://');
-        this.connection = new Connection(this.rpcUrl, 'confirmed');
+        this.connection = new Connection(this.solanaRpc, 'confirmed');
         this.monitoringService = new WalletMonitoringService();
         this.db = new Database();
         this.ws = null;
