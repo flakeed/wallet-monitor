@@ -10,11 +10,12 @@ function connectToWebhook() {
     });
 
     ws.on('message', (data) => {
+        console.log(`[${new Date().toISOString()}] 📬 WebSocket message received:`);
         try {
             const message = JSON.parse(data);
-            console.log(`[${new Date().toISOString()}] 📩 Received WebSocket message:`, JSON.stringify(message, null, 2));
+            console.log(`[${new Date().toISOString()}] Received WebSocket message:`, JSON.stringify(message, null, 2));
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error parsing WebSocket message:`, error.message);
+            console.error(`[${new Date().toISOString()}] Error parsing WebSocket message:`, error.message);
             console.log(`[${new Date().toISOString()}] Raw message:`, data.toString());
         }
     });
