@@ -6,9 +6,8 @@ const Redis = require('ioredis');
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
-        // Используем правильный RPC URL для вашей ноды
         this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', 'confirmed');
-        this.isMonitoring = false; // WebSocket теперь управляет мониторингом
+        this.isMonitoring = false;
         this.monitoringInterval = null;
         this.processedSignatures = new Set();
         this.stats = {
@@ -23,8 +22,7 @@ class WalletMonitoringService {
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
-        
-        console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized with RPC: ${this.connection.rpcEndpoint}`);
+        console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized`);
     }
 
     startMonitoring() {
@@ -57,8 +55,8 @@ class WalletMonitoringService {
                 continue;
             }
 
-            const { requestId, signature, walletAddress } = request;
-            console.log(`[${new Date().toISOString()}] 🔄 Processing queued signature ${signature} (requestId: ${requestId})`);
+            const { requestId, signature, walletAddress, blockTime } = request;
+            console.log(`[${new Date().toISOString()}] 🔄 Processing signature ${signature}`);
 
             try {
                 const wallet = await this.db.getWalletByAddress(walletAddress);
@@ -67,33 +65,32 @@ class WalletMonitoringService {
                     continue;
                 }
 
-                const sigStatus = await this.connection.getSignatureStatus(signature, { searchTransactionHistory: true });
-                if (!sigStatus.value || sigStatus.value.err) {
-                    console.warn(`[${new Date().toISOString()}] ⚠️ Invalid or failed transaction ${signature}`);
-                    continue;
-                }
-
-                const blockTime = sigStatus.value.blockTime;
-                if (!blockTime) {
-                    console.warn(`[${new Date().toISOString()}] ⚠️ No blockTime for signature ${signature}`);
-                    continue;
-                }
-
-                const sigObject = { signature, blockTime };
-                const txData = await this.processTransaction(sigObject, wallet);
+                const txData = await this.processTransaction({ signature, blockTime }, wallet);
                 if (txData) {
-                    console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature} for wallet ${walletAddress}`);
+                    console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature}`);
+                    // Publish to Redis for frontend
+                    await this.redis.publish('transactions', JSON.stringify({
+                        signature,
+                        walletAddress,
+                        transactionType: txData.type,
+                        solAmount: txData.solAmount,
+                        usdAmount: txData.usdAmount,
+                        tokens: txData.tokensChanged.map(tc => ({
+                            mint: tc.mint,
+                            amount: tc.rawChange / Math.pow(10, tc.decimals),
+                            symbol: tc.symbol,
+                            name: tc.name,
+                            logoURI: tc.logoURI
+                        })),
+                        timestamp: new Date(blockTime * 1000).toISOString()
+                    }));
                 }
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Error processing signature ${signature}:`, error.message);
             }
-
-            // УБИРАЕМ ЗАДЕРЖКУ для моментальной обработки
-            // await new Promise(resolve => setTimeout(resolve, 300)); - УДАЛЕНО
         }
 
         this.isProcessingQueue = false;
-
         const queueLength = await this.redis.llen(this.queueKey);
         if (queueLength > 0) {
             setImmediate(() => this.processQueue());
@@ -101,64 +98,19 @@ class WalletMonitoringService {
     }
 
     async processWebhookMessage(message) {
-        const { signature, walletAddress } = message;
-
+        const { signature, walletAddress, blockTime } = message;
         const requestId = require('uuid').v4();
         await this.redis.lpush(this.queueKey, JSON.stringify({
             requestId,
             signature,
             walletAddress,
+            blockTime,
             timestamp: Date.now()
         }));
-        console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature} with requestId ${requestId}`);
+        console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature}`);
 
         if (!this.isProcessingQueue) {
-            // НЕМЕДЛЕННО запускаем обработку очереди
             setImmediate(() => this.processQueue());
-        }
-    }
-
-    async checkWalletTransactions(wallet) {
-        try {
-            const pubkey = new PublicKey(wallet.address);
-
-            const signatures = await this.connection.getSignaturesForAddress(pubkey, {
-                limit: 10
-            });
-
-            let newTransactionsCount = 0;
-
-            for (const sig of signatures) {
-                if (this.processedSignatures.has(sig.signature)) {
-                    continue;
-                }
-
-                const txData = await this.processTransaction(sig, wallet);
-                if (txData) {
-                    newTransactionsCount++;
-                    this.processedSignatures.add(sig.signature);
-                    
-                    if (txData.type === 'buy') {
-                        this.stats.totalBuyTransactions++;
-                    } else if (txData.type === 'sell') {
-                        this.stats.totalSellTransactions++;
-                    }
-                }
-
-                // УБИРАЕМ ЗАДЕРЖКУ между транзакциями
-                // await new Promise(resolve => setTimeout(resolve, 300)); - УДАЛЕНО
-            }
-
-            if (newTransactionsCount > 0) {
-                console.log(`✅ ${wallet.name || wallet.address.slice(0, 8)}...: ${newTransactionsCount} new transactions`);
-                await this.db.updateWalletStats(wallet.id);
-            }
-
-            return { newTransactions: newTransactionsCount };
-
-        } catch (error) {
-            console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
-            throw error;
         }
     }
 
@@ -169,18 +121,14 @@ class WalletMonitoringService {
                 return null;
             }
 
-            // Проверяем, не обрабатывали ли мы уже эту транзакцию
             const existingTx = await this.db.pool.query(
                 'SELECT id FROM transactions WHERE signature = $1',
                 [sig.signature]
             );
-
             if (existingTx.rows.length > 0) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed`);
                 return null;
             }
-
-            console.log(`[${new Date().toISOString()}] 🔍 Fetching transaction data for ${sig.signature.slice(0, 20)}...`);
 
             const tx = await this.connection.getParsedTransaction(sig.signature, {
                 maxSupportedTransactionVersion: 0,
@@ -193,26 +141,23 @@ class WalletMonitoringService {
             }
 
             const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
-            
             let transactionType, solAmount;
-            if (solChange < -0.001) { // Увеличиваем минимальный порог
+            if (solChange < -0.001) {
                 transactionType = 'buy';
                 solAmount = Math.abs(solChange);
-            } else if (solChange > 0.001) { 
+            } else if (solChange > 0.001) {
                 transactionType = 'sell';
                 solAmount = solChange;
             } else {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - SOL change too small: ${solChange}`);
-                return null; 
+                return null;
             }
 
-            const tokenChanges = this.analyzeTokenChanges(tx.meta, transactionType);
+            const tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType);
             if (tokenChanges.length === 0) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
                 return null;
             }
-
-            console.log(`[${new Date().toISOString()}] 🔍 Processing ${transactionType} transaction ${sig.signature}: ${solAmount} SOL, ${tokenChanges.length} tokens`);
 
             return await this.db.withTransaction(async (client) => {
                 const solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
@@ -221,90 +166,74 @@ class WalletMonitoringService {
                 const query = `
                     INSERT INTO transactions (
                         wallet_id, signature, block_time, transaction_type,
-                        ${transactionType === 'buy' ? 'sol_spent, usd_spent' : 'sol_received, usd_received'}
+                        sol_spent, usd_spent, sol_received, usd_received
                     ) 
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING id, signature, transaction_type
                 `;
-
-                let result;
-                try {
-                    result = await client.query(query, [
-                        wallet.id,
-                        sig.signature,
-                        new Date(sig.blockTime * 1000).toISOString(),
-                        transactionType,
-                        solAmount,
-                        usdAmount
-                    ]);
-                } catch (error) {
-                    if (error.code === '23505') {
-                        console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already exists`);
-                        return null; 
-                    }
-                    throw error;
-                }
+                const result = await client.query(query, [
+                    wallet.id,
+                    sig.signature,
+                    new Date(sig.blockTime * 1000).toISOString(),
+                    transactionType,
+                    transactionType === 'buy' ? solAmount : 0,
+                    transactionType === 'buy' ? usdAmount : 0,
+                    transactionType === 'sell' ? solAmount : 0,
+                    transactionType === 'sell' ? usdAmount : 0
+                ]);
 
                 const transaction = result.rows[0];
-
-                // ПАРАЛЛЕЛЬНО сохраняем токены для ускорения
                 const tokenSavePromises = tokenChanges.map(tokenChange => 
                     this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType)
                 );
                 await Promise.all(tokenSavePromises);
-
-                console.log(`[${new Date().toISOString()}] ✅ Saved ${transactionType} transaction ${sig.signature}: ${solAmount} SOL (${usdAmount.toFixed(2)})`);
 
                 return {
                     signature: sig.signature,
                     type: transactionType,
                     solAmount,
                     usdAmount,
-                    tokensChanged: tokenChanges.length
+                    tokensChanged: tokenChanges
                 };
             });
-
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature}:`, error.message);
             return null;
         }
     }
 
-    analyzeTokenChanges(meta, transactionType) {
+    async analyzeTokenChanges(meta, transactionType) {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const tokenChanges = [];
 
-        (meta.postTokenBalances || []).forEach((post) => {
-            const pre = meta.preTokenBalances?.find(p =>
-                p.mint === post.mint && p.accountIndex === post.accountIndex
-            );
-
-            if (!pre) return;
-            if (post.mint === WRAPPED_SOL_MINT) return;
+        for (const post of meta.postTokenBalances || []) {
+            const pre = meta.preTokenBalances?.find(p => p.mint === post.mint && p.accountIndex === post.accountIndex);
+            if (!pre || post.mint === WRAPPED_SOL_MINT) continue;
 
             const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
-            
-            // Для покупок ожидаем положительное изменение токенов
-            if (transactionType === 'buy' && rawChange <= 0) return;
-            // Для продаж ожидаем отрицательное изменение токенов
-            if (transactionType === 'sell' && rawChange >= 0) return;
+            if ((transactionType === 'buy' && rawChange <= 0) || (transactionType === 'sell' && rawChange >= 0)) continue;
+
+            const tokenInfo = await fetchTokenMetadata(post.mint, this.connection);
+            if (!tokenInfo) continue;
 
             tokenChanges.push({
                 mint: post.mint,
                 rawChange: Math.abs(rawChange),
                 decimals: post.uiTokenAmount.decimals,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+                logoURI: tokenInfo.logoURI
             });
-        });
+        }
 
         return tokenChanges;
     }
 
     async saveTokenOperationInTransaction(client, transactionId, tokenChange, transactionType) {
         try {
-            // УСКОРЯЕМ получение метаданных токена
             const tokenInfo = await fetchTokenMetadata(tokenChange.mint, this.connection);
             if (!tokenInfo) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ No metadata found for token ${tokenChange.mint}`);
+                console.warn(`[${new Date().toISOString()}] ⚠️ No metadata for token ${tokenChange.mint}`);
                 return;
             }
 
@@ -319,7 +248,6 @@ class WalletMonitoringService {
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING id
             `;
-
             const tokenResult = await client.query(tokenUpsertQuery, [
                 tokenChange.mint,
                 tokenInfo.symbol,
@@ -335,13 +263,9 @@ class WalletMonitoringService {
                 INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
                 VALUES ($1, $2, $3, $4)
             `;
-
             await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
-
-            console.log(`[${new Date().toISOString()}] ✅ Saved token operation: ${transactionType} ${amount} ${tokenInfo.symbol}`);
-
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error saving token operation for ${tokenChange.mint}:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error saving token operation:`, error.message);
             throw error;
         }
     }
@@ -350,7 +274,7 @@ class WalletMonitoringService {
         try {
             new PublicKey(address);
             const wallet = await this.db.addWallet(address, name);
-            console.log(`[${new Date().toISOString()}] ✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}...`);
             return wallet;
         } catch (error) {
             throw new Error(`Failed to add wallet: ${error.message}`);
@@ -367,7 +291,7 @@ class WalletMonitoringService {
                     .map(tx => tx.signature);
                 walletSignatures.forEach(sig => this.processedSignatures.delete(sig));
                 await this.db.removeWallet(address);
-                console.log(`[${new Date().toISOString()}] 🗑️ Removed wallet and associated data: ${address.slice(0, 8)}...`);
+                console.log(`[${new Date().toISOString()}] 🗑️ Removed wallet: ${address.slice(0, 8)}...`);
             } else {
                 throw new Error('Wallet not found');
             }
