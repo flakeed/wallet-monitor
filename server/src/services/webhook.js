@@ -4,10 +4,10 @@ const bs58 = require('bs58');
 
 const WEBHOOK_URL = 'ws://45.134.108.167:5006/ws';
 const RPC_URL = 'https://api.devnet.solana.com'; 
-const WALLET_ADDRESS = 'GXnhhZsFxhA8uoEc8n2kARyDCnMrRRQ8gpQMQfv1v53L';
-const RECIPIENT_ADDRESS = '7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv'; 
+const WALLET_ADDRESS = 'ep3XjfiJrRpmiSqh6fTd14YwNBSHuSj6UA732c3Dw1k';
+const RECIPIENT_ADDRESS = 'FxuvBFb4prD1bHF7Efp5nQCaEoUnL2UaoaZxFGGHy4d5'; 
 
-const PRIVATE_KEY = '5GmcUocegHWxVJcWERbwi7S7zdLEoK4625sRKLzVQCtNdzWTuBGMrBuMbW4tSw5ZhfKMjkFjCCoh6FEDYJsiBWQN'; 
+const PRIVATE_KEY = '5pLo8f4T1HE2oMPC9RNCCrRpMyR97CCttvCgFy72G9BKetpnwU25pQt8WmzmQZ2Ycbx8yvnvYEPr6C9p1T1kysz2'; 
 
 class WalletSubscription {
     constructor() {
