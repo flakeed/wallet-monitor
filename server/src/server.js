@@ -1,17 +1,20 @@
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey } = require('@solana/web3.js');
-require('dotenv').config();
-const { redis } = require('./services/tokenService'); 
-
+const { createServer } = require('http');
+const { Server } = require('ws');
+const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const WebhookService = require('./services/webhookService');
+const { Connection, PublicKey } = require('@solana/web3.js');
+
 const app = express();
+const server = createServer(app);
+const wss = new Server({ server });
 const port = process.env.PORT || 5001;
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001','https://wallet-monitor-client.vercel.app'],
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://wallet-monitor-client.vercel.app'],
     optionsSuccessStatus: 200,
 }));
 app.use(express.json());
@@ -20,14 +23,37 @@ const monitoringService = new WalletMonitoringService();
 const webhookService = new WebhookService();
 const db = new Database();
 
-setTimeout(async () => {
-    await webhookService.start();
-}, 2000);
+// Start WebhookService immediately to ensure WebSocket connection
+webhookService.start();
+
+// WebSocket server for real-time transaction updates to frontend
+wss.on('connection', (ws) => {
+    console.log(`[${new Date().toISOString()}] ✅ WebSocket client connected`);
+    const redisSub = redis.duplicate();
+    redisSub.subscribe('transactions', (err) => {
+        if (err) {
+            console.error(`[${new Date().toISOString()}] ❌ WebSocket Redis subscription error:`, err.message);
+            return;
+        }
+        console.log(`[${new Date().toISOString()}] ✅ WebSocket subscribed to Redis transactions channel`);
+    });
+    redisSub.on('message', (channel, message) => {
+        if (channel === 'transactions') {
+            ws.send(message);
+        }
+    });
+    ws.on('close', () => {
+        redisSub.quit();
+        console.log(`[${new Date().toISOString()}] 🔌 WebSocket client disconnected`);
+    });
+    ws.on('error', (err) => {
+        console.error(`[${new Date().toISOString()}] ❌ WebSocket client error:`, err.message);
+    });
+});
 
 app.get('/api/wallets', async (req, res) => {
     try {
         const wallets = await db.getActiveWallets();
-
         const walletsWithStats = await Promise.all(
             wallets.map(async (wallet) => {
                 const stats = await db.getWalletStats(wallet.id);
@@ -48,10 +74,9 @@ app.get('/api/wallets', async (req, res) => {
                 };
             })
         );
-
         res.json(walletsWithStats);
     } catch (error) {
-        console.error('Error fetching wallets:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error.message);
         res.status(500).json({ error: 'Failed to fetch wallets' });
     }
 });
@@ -59,15 +84,12 @@ app.get('/api/wallets', async (req, res) => {
 app.post('/api/wallets', async (req, res) => {
     try {
         const { address, name } = req.body;
-
         if (!address) {
             return res.status(400).json({ error: 'Wallet address is required' });
         }
-
         if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
-
         const wallet = await monitoringService.addWallet(address, name);
         res.json({
             success: true,
@@ -75,7 +97,7 @@ app.post('/api/wallets', async (req, res) => {
             message: 'Wallet added for monitoring'
         });
     } catch (error) {
-        console.error('Error adding wallet:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error adding wallet:`, error.message);
         if (error.message.includes('already exists')) {
             res.status(409).json({ error: 'Wallet is already being monitored' });
         } else {
@@ -87,19 +109,16 @@ app.post('/api/wallets', async (req, res) => {
 app.delete('/api/wallets/:address', async (req, res) => {
     try {
         const address = req.params.address.trim();
-
         if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
-
         await monitoringService.removeWallet(address);
-
         res.json({
             success: true,
             message: 'Wallet and all associated data removed successfully'
         });
     } catch (error) {
-        console.error('Error removing wallet:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error removing wallet:`, error.message);
         if (error.message.includes('Wallet not found')) {
             res.status(404).json({ error: 'Wallet not found in monitoring list' });
         } else {
@@ -112,10 +131,8 @@ app.get('/api/transactions', async (req, res) => {
     try {
         const hours = parseInt(req.query.hours) || 24;
         const limit = parseInt(req.query.limit) || 50;
-        const type = req.query.type; 
-
+        const type = req.query.type;
         const transactions = await db.getRecentTransactions(hours, limit, type);
-
         const groupedTransactions = {};
 
         transactions.forEach(row => {
@@ -136,7 +153,6 @@ app.get('/api/transactions', async (req, res) => {
                     tokensSold: []
                 };
             }
-
             if (row.mint) {
                 const tokenData = {
                     mint: row.mint,
@@ -146,7 +162,6 @@ app.get('/api/transactions', async (req, res) => {
                     amount: Number(row.token_amount),
                     decimals: row.decimals
                 };
-
                 if (row.operation_type === 'buy') {
                     groupedTransactions[row.signature].tokensBought.push(tokenData);
                 } else if (row.operation_type === 'sell') {
@@ -154,24 +169,20 @@ app.get('/api/transactions', async (req, res) => {
                 }
             }
         });
-
-        const result = Object.values(groupedTransactions);
-        res.json(result);
+        res.json(Object.values(groupedTransactions));
     } catch (error) {
-        console.error('Error fetching transactions:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error fetching transactions:`, error.message);
         res.status(500).json({ error: 'Failed to fetch transactions' });
     }
 });
 
 app.get('/api/monitoring/status', (req, res) => {
-    const status = monitoringService.getStatus();
-    res.json(status);
+    res.json(monitoringService.getStatus());
 });
 
 app.post('/api/monitoring/toggle', (req, res) => {
     try {
         const { action } = req.body;
-
         if (action === 'start') {
             monitoringService.startMonitoring();
             res.json({ success: true, message: 'Monitoring started' });
@@ -182,7 +193,7 @@ app.post('/api/monitoring/toggle', (req, res) => {
             res.status(400).json({ error: 'Invalid action. Use "start" or "stop"' });
         }
     } catch (error) {
-        console.error('Error toggling monitoring:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error toggling monitoring:`, error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -190,25 +201,21 @@ app.post('/api/monitoring/toggle', (req, res) => {
 app.get('/api/wallet/:address', async (req, res) => {
     try {
         const address = req.params.address.trim();
-
         if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
             return res.status(400).json({ error: 'Invalid Solana public key format' });
         }
-
         const wallet = await db.getWalletByAddress(address);
         if (!wallet) {
             return res.status(404).json({ error: 'Wallet not found in monitoring list' });
         }
-
-        const connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
+        const connection = new Connection('http://45.134.108.167:5005', 'confirmed');
         const publicKey = new PublicKey(address);
         const balanceLamports = await connection.getBalance(publicKey);
         const balanceSol = balanceLamports / 1e9;
-
         const transactions = await db.getRecentTransactions(24 * 7, 100);
         const walletTransactions = transactions.filter(tx => tx.wallet_address === address);
-
         const groupedTransactions = {};
+
         walletTransactions.forEach(row => {
             if (!groupedTransactions[row.signature]) {
                 groupedTransactions[row.signature] = {
@@ -223,7 +230,6 @@ app.get('/api/wallet/:address', async (req, res) => {
                     tokensSold: []
                 };
             }
-
             if (row.mint) {
                 const tokenData = {
                     mint: row.mint,
@@ -233,7 +239,6 @@ app.get('/api/wallet/:address', async (req, res) => {
                     amount: Number(row.token_amount),
                     decimals: row.decimals || 6
                 };
-
                 if (row.operation_type === 'buy') {
                     groupedTransactions[row.signature].tokensBought.push(tokenData);
                 } else if (row.operation_type === 'sell') {
@@ -241,19 +246,14 @@ app.get('/api/wallet/:address', async (req, res) => {
                 }
             }
         });
-
-        const operations = Object.values(groupedTransactions);
-
         res.json({
             address,
             balance: Number(balanceSol).toLocaleString(undefined, { maximumFractionDigits: 6 }),
-            operations
+            operations: Object.values(groupedTransactions)
         });
     } catch (error) {
-        console.error('Error in /api/wallet:', error);
-        res.status(500).json({
-            error: error.message || 'Failed to fetch wallet data',
-        });
+        console.error(`[${new Date().toISOString()}] ❌ Error in /api/wallet:`, error.message);
+        res.status(500).json({ error: error.message || 'Failed to fetch wallet data' });
     }
 });
 
@@ -261,7 +261,6 @@ app.get('/api/stats/transactions', async (req, res) => {
     try {
         const hours = parseInt(req.query.hours) || 24;
         const stats = await db.getMonitoringStats();
-        
         res.json({
             buyTransactions: stats.buy_transactions_today || 0,
             sellTransactions: stats.sell_transactions_today || 0,
@@ -274,7 +273,7 @@ app.get('/api/stats/transactions', async (req, res) => {
             netUSD: (Number(stats.usd_received_today || 0) - Number(stats.usd_spent_today || 0)).toFixed(2)
         });
     } catch (error) {
-        console.error('Error fetching transaction stats:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error fetching transaction stats:`, error.message);
         res.status(500).json({ error: 'Failed to fetch transaction stats' });
     }
 });
@@ -282,19 +281,15 @@ app.get('/api/stats/transactions', async (req, res) => {
 app.post('/api/wallets/bulk', async (req, res) => {
     try {
         const { wallets } = req.body;
-
         if (!wallets || !Array.isArray(wallets)) {
             return res.status(400).json({ error: 'Wallets array is required' });
         }
-
         if (wallets.length === 0) {
             return res.status(400).json({ error: 'At least one wallet is required' });
         }
-
         if (wallets.length > 100) {
             return res.status(400).json({ error: 'Maximum 100 wallets allowed per bulk import' });
         }
-
         const results = {
             total: wallets.length,
             successful: 0,
@@ -302,7 +297,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
             errors: [],
             successfulWallets: []
         };
-
         for (const wallet of wallets) {
             if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
                 results.failed++;
@@ -314,11 +308,9 @@ app.post('/api/wallets/bulk', async (req, res) => {
                 continue;
             }
         }
-
         for (const wallet of wallets) {
             const hasError = results.errors.some(error => error.address === wallet.address);
             if (hasError) continue;
-
             try {
                 const addedWallet = await monitoringService.addWallet(wallet.address, wallet.name || null);
                 results.successful++;
@@ -335,18 +327,15 @@ app.post('/api/wallets/bulk', async (req, res) => {
                     error: error.message
                 });
             }
-
             await new Promise(resolve => setTimeout(resolve, 50));
         }
-
         res.json({
             success: true,
             message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
             results
         });
-
     } catch (error) {
-        console.error('Error in bulk wallet import:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error in bulk wallet import:`, error.message);
         res.status(500).json({ error: 'Failed to import wallets' });
     }
 });
@@ -356,13 +345,11 @@ app.get('/api/wallets/bulk-template', (req, res) => {
 # Format: address,name (name is optional)
 # One wallet per line
 # Lines starting with # are ignored
-
 # Example wallets (replace with real addresses):
 9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
 53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader
 Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
 7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet`;
-
     res.setHeader('Content-Type', 'text/plain');
     res.setHeader('Content-Disposition', 'attachment; filename="wallet-import-template.txt"');
     res.send(template);
@@ -371,18 +358,15 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
 app.post('/api/wallets/validate', (req, res) => {
     try {
         const { wallets } = req.body;
-
         if (!wallets || !Array.isArray(wallets)) {
             return res.status(400).json({ error: 'Wallets array is required' });
         }
-
         const validation = {
             total: wallets.length,
             valid: 0,
             invalid: 0,
             errors: []
         };
-
         for (const wallet of wallets) {
             if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
                 validation.invalid++;
@@ -395,14 +379,9 @@ app.post('/api/wallets/validate', (req, res) => {
                 validation.valid++;
             }
         }
-
-        res.json({
-            success: true,
-            validation
-        });
-
+        res.json({ success: true, validation });
     } catch (error) {
-        console.error('Error validating wallets:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error validating wallets:`, error.message);
         res.status(500).json({ error: 'Failed to validate wallets' });
     }
 });
@@ -411,32 +390,33 @@ app.get('/api/stats/tokens', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 10;
         const type = req.query.type;
-        
         const topTokens = await db.getTopTokens(limit, type);
         res.json(topTokens);
     } catch (error) {
-        console.error('Error fetching top tokens:', error);
+        console.error(`[${new Date().toISOString()}] ❌ Error fetching top tokens:`, error.message);
         res.status(500).json({ error: 'Failed to fetch top tokens' });
     }
 });
 
 process.on('SIGINT', async () => {
-    console.log('\n🛑 Shutting down server...');
+    console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
     await monitoringService.close();
-    await webhookService.stop(); 
+    await webhookService.stop();
     await redis.quit();
+    server.close();
     process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-    console.log('\n🛑 Shutting down server...');
+    console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
     await monitoringService.close();
-    await webhookService.stop(); 
+    await webhookService.stop();
     await redis.quit();
+    server.close();
     process.exit(0);
 });
 
-app.listen(port,'158.220.125.26', () => {
-    console.log(`🚀 Server running on http://158.220.125.26:${port}`);
-    console.log(`📊 Monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
+server.listen(port, '158.220.125.26', () => {
+    console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
+    console.log(`[${new Date().toISOString()}] 📊 Monitoring service status: ${monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'}`);
 });

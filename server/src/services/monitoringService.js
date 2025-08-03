@@ -2,12 +2,12 @@ const { Connection, PublicKey } = require('@solana/web3.js');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
 const Redis = require('ioredis');
+
 class WalletMonitoringService {
-constructor() {
+    constructor() {
         this.db = new Database();
-        this.connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
-        this.isMonitoring = true; // Set to true since WebSocket drives monitoring
-        this.monitoringInterval = null;
+        this.connection = new Connection('http://45.134.108.167:5005', 'confirmed');
+        this.isMonitoring = true;
         this.processedSignatures = new Set();
         this.stats = {
             totalScans: 0,
@@ -17,23 +17,27 @@ constructor() {
             errors: 0,
             lastScanDuration: 0
         };
-this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
+        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
     }
-stopMonitoring() {
+
+    async startMonitoring() {
+        this.isMonitoring = true;
+        console.log('▶️ Monitoring started');
+    }
+
+    async stopMonitoring() {
         this.isMonitoring = false;
         console.log('⏹️ Monitoring stopped');
     }
 
-async processQueue() {
+    async processQueue() {
         if (this.isProcessingQueue) return;
         this.isProcessingQueue = true;
-
-        while (true) {
+        while (this.isMonitoring) {
             const requestData = await this.redis.rpop(this.queueKey);
             if (!requestData) break;
-
             let request;
             try {
                 request = JSON.parse(requestData);
@@ -41,52 +45,50 @@ async processQueue() {
                 console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, error.message);
                 continue;
             }
-
             const { requestId, signature, walletAddress } = request;
             console.log(`[${new Date().toISOString()}] 🔄 Processing queued signature ${signature} (requestId: ${requestId})`);
-
             try {
                 const wallet = await this.db.getWalletByAddress(walletAddress);
                 if (!wallet) {
                     console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
                     continue;
                 }
-
                 const sigStatus = await this.connection.getSignatureStatus(signature, { searchTransactionHistory: true });
                 if (!sigStatus.value || sigStatus.value.err) {
                     console.warn(`[${new Date().toISOString()}] ⚠️ Invalid or failed transaction ${signature}`);
                     continue;
                 }
-
                 const blockTime = sigStatus.value.blockTime;
                 if (!blockTime) {
                     console.warn(`[${new Date().toISOString()}] ⚠️ No blockTime for signature ${signature}`);
                     continue;
                 }
-
                 const sigObject = { signature, blockTime };
-                const txData = await this.monitoringService.processTransaction(sigObject, wallet);
+                const txData = await this.processTransaction(sigObject, wallet);
                 if (txData) {
                     console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature} for wallet ${walletAddress}`);
+                    // Emit transaction to frontend via WebSocket
+                    await this.redis.publish('transactions', JSON.stringify({
+                        ...txData,
+                        wallet: { address: wallet.address, name: wallet.name }
+                    }));
                 }
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Error processing signature ${signature}:`, error.message);
+                this.stats.errors++;
             }
-
-            await new Promise(resolve => setTimeout(resolve, 300));
+            await new Promise(resolve => setTimeout(resolve, 50)); // Reduced delay for faster processing
         }
-
         this.isProcessingQueue = false;
-
         const queueLength = await this.redis.llen(this.queueKey);
         if (queueLength > 0) {
             setImmediate(() => this.processQueue());
         }
     }
 
-async processWebhookMessage(message) {
+    async processWebhookMessage(message) {
+        if (!this.isMonitoring) return;
         const { signature, walletAddress } = message;
-
         const requestId = require('uuid').v4();
         await this.redis.lpush(this.queueKey, JSON.stringify({
             requestId,
@@ -95,154 +97,43 @@ async processWebhookMessage(message) {
             timestamp: Date.now()
         }));
         console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature} with requestId ${requestId}`);
-
         if (!this.isProcessingQueue) {
-            this.processQueue();
-        }
-    }
-
-    async performMonitoringCycle() {
-        const scanStartTime = Date.now();
-        let processedSignatures = 0;
-        let errors = 0;
-
-        try {
-            const wallets = await this.db.getActiveWallets();
-            console.log(`🔍 Scanning ${wallets.length} wallets...`);
-
-            for (const wallet of wallets) {
-                try {
-                    const result = await this.checkWalletTransactions(wallet);
-                    processedSignatures += result.newTransactions;
-                } catch (error) {
-                    console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
-                    errors++;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            const scanDuration = Date.now() - scanStartTime;
-
-            this.stats.totalScans++;
-            this.stats.totalWallets = wallets.length;
-            this.stats.errors += errors;
-            this.stats.lastScanDuration = scanDuration;
-
-            await this.db.addMonitoringStats(
-                processedSignatures,
-                wallets.length,
-                scanDuration,
-                errors
-            );
-
-            if (processedSignatures > 0) {
-                console.log(`✅ Scan completed: ${processedSignatures} new transactions in ${scanDuration}ms`);
-            }
-
-        } catch (error) {
-            console.error('❌ Error in monitoring cycle:', error.message);
-            this.stats.errors++;
-        }
-    }
-
-    stopMonitoring() {
-        if (this.monitoringInterval) {
-            clearInterval(this.monitoringInterval);
-            this.monitoringInterval = null;
-        }
-        this.isMonitoring = false;
-        console.log('⏹️ Monitoring stopped');
-    }
-
-    async checkWalletTransactions(wallet) {
-        try {
-            const pubkey = new PublicKey(wallet.address);
-
-            const signatures = await this.connection.getSignaturesForAddress(pubkey, {
-                limit: 10
-            });
-
-            let newTransactionsCount = 0;
-
-            for (const sig of signatures) {
-                if (this.processedSignatures.has(sig.signature)) {
-                    continue;
-                }
-
-                const txData = await this.processTransaction(sig, wallet);
-                if (txData) {
-                    newTransactionsCount++;
-                    this.processedSignatures.add(sig.signature);
-                    
-                    if (txData.type === 'buy') {
-                        this.stats.totalBuyTransactions++;
-                    } else if (txData.type === 'sell') {
-                        this.stats.totalSellTransactions++;
-                    }
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 300));
-            }
-
-            if (newTransactionsCount > 0) {
-                console.log(`✅ ${wallet.name || wallet.address.slice(0, 8)}...: ${newTransactionsCount} new transactions`);
-                await this.db.updateWalletStats(wallet.id);
-            }
-
-            return { newTransactions: newTransactionsCount };
-
-        } catch (error) {
-            console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
-            throw error;
+            setImmediate(() => this.processQueue());
         }
     }
 
     async processTransaction(sig, wallet) {
         try {
-            if (!sig.signature || !sig.blockTime) {
-                return null;
-            }
-
+            if (!sig.signature || !sig.blockTime) return null;
             const tx = await this.connection.getParsedTransaction(sig.signature, {
                 maxSupportedTransactionVersion: 0
             });
-
-            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
-                return null;
-            }
-
+            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) return null;
             const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
-            
             let transactionType, solAmount;
             if (solChange < 0) {
                 transactionType = 'buy';
                 solAmount = Math.abs(solChange);
-            } else if (solChange > 0.001) { 
+            } else if (solChange > 0.001) {
                 transactionType = 'sell';
                 solAmount = solChange;
             } else {
-                return null; 
-            }
-
-            const tokenChanges = this.analyzeTokenChanges(tx.meta, transactionType);
-            if (tokenChanges.length === 0) {
                 return null;
             }
-
+            const tokenChanges = this.analyzeTokenChanges(tx.meta, transactionType);
+            if (tokenChanges.length === 0) return null;
             return await this.db.withTransaction(async (client) => {
                 const solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
                 const usdAmount = solPrice * solAmount;
-
                 const query = `
                     INSERT INTO transactions (
                         wallet_id, signature, block_time, transaction_type,
                         ${transactionType === 'buy' ? 'sol_spent, usd_spent' : 'sol_received, usd_received'}
                     ) 
                     VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (signature) DO NOTHING
                     RETURNING id, signature, transaction_type
                 `;
-
                 let result;
                 try {
                     result = await client.query(query, [
@@ -254,18 +145,14 @@ async processWebhookMessage(message) {
                         usdAmount
                     ]);
                 } catch (error) {
-                    if (error.code === '23505') {
-                        return null; 
-                    }
+                    if (error.code === '23505') return null;
                     throw error;
                 }
-
                 const transaction = result.rows[0];
-
+                if (!transaction) return null;
                 for (const tokenChange of tokenChanges) {
                     await this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType);
                 }
-
                 return {
                     signature: sig.signature,
                     type: transactionType,
@@ -274,7 +161,6 @@ async processWebhookMessage(message) {
                     tokensChanged: tokenChanges.length
                 };
             });
-
         } catch (error) {
             console.error(`❌ Error processing transaction ${sig.signature}:`, error.message);
             return null;
@@ -284,37 +170,26 @@ async processWebhookMessage(message) {
     analyzeTokenChanges(meta, transactionType) {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const tokenChanges = [];
-
         (meta.postTokenBalances || []).forEach((post) => {
-            const pre = meta.preTokenBalances?.find(p =>
-                p.mint === post.mint && p.accountIndex === post.accountIndex
-            );
-
+            const pre = meta.preTokenBalances?.find(p => p.mint === post.mint && p.accountIndex === post.accountIndex);
             if (!pre) return;
             if (post.mint === WRAPPED_SOL_MINT) return;
-
             const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
-            
             if (transactionType === 'buy' && rawChange <= 0) return;
             if (transactionType === 'sell' && rawChange >= 0) return;
-
             tokenChanges.push({
                 mint: post.mint,
                 rawChange: Math.abs(rawChange),
-                decimals: post.uiTokenAmount.decimals,
+                decimals: post.uiTokenAmount.decimals
             });
         });
-
         return tokenChanges;
     }
 
     async saveTokenOperationInTransaction(client, transactionId, tokenChange, transactionType) {
         try {
             const tokenInfo = await fetchTokenMetadata(tokenChange.mint, this.connection);
-            if (!tokenInfo) {
-                return;
-            }
-
+            if (!tokenInfo) return;
             const tokenUpsertQuery = `
                 INSERT INTO tokens (mint, symbol, name, logo_uri, decimals) 
                 VALUES ($1, $2, $3, $4, $5)
@@ -326,7 +201,6 @@ async processWebhookMessage(message) {
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING id
             `;
-
             const tokenResult = await client.query(tokenUpsertQuery, [
                 tokenChange.mint,
                 tokenInfo.symbol,
@@ -334,31 +208,29 @@ async processWebhookMessage(message) {
                 tokenInfo.logoURI,
                 tokenInfo.decimals
             ]);
-
             const tokenId = tokenResult.rows[0].id;
             const amount = tokenChange.rawChange / Math.pow(10, tokenChange.decimals);
-
             const operationQuery = `
                 INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
                 VALUES ($1, $2, $3, $4)
             `;
-
             await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
-
         } catch (error) {
             console.error(`❌ Error saving token operation for ${tokenChange.mint}:`, error.message);
             throw error;
         }
     }
 
-async addWallet(address, name = null) {
-    try {
-        new PublicKey(address);
-        const wallet = await this.db.addWallet(address, name);
-        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
-        return wallet;
-    } catch (error) {
-        throw new Error(`Failed to add wallet: ${error.message}`);
+    async addWallet(address, name = null) {
+        try {
+            new PublicKey(address);
+            const wallet = await this.db.addWallet(address, name);
+            console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+            // Subscribe to wallet transactions via WebSocket
+            await this.redis.publish('wallet:subscribe', JSON.stringify({ address }));
+            return wallet;
+        } catch (error) {
+            throw new Error(`Failed to add wallet: ${error.message}`);
         }
     }
 
@@ -373,6 +245,8 @@ async addWallet(address, name = null) {
                 walletSignatures.forEach(sig => this.processedSignatures.delete(sig));
                 await this.db.removeWallet(address);
                 console.log(`🗑️ Removed wallet and associated data: ${address.slice(0, 8)}...`);
+                // Unsubscribe from wallet transactions
+                await this.redis.publish('wallet:unsubscribe', JSON.stringify({ address }));
             } else {
                 throw new Error('Wallet not found');
             }
@@ -392,26 +266,8 @@ async addWallet(address, name = null) {
         };
     }
 
-    async getDetailedStats() {
-        try {
-            const dbStats = await this.db.getMonitoringStats();
-            const topTokens = await this.db.getTopTokens(5);
-            return {
-                ...this.getStatus(),
-                database: dbStats,
-                topTokens
-            };
-        } catch (error) {
-            console.error('❌ Error getting detailed stats:', error.message);
-            return this.getStatus();
-        }
-    }
-
     async close() {
         this.stopMonitoring();
-        if (this.ws) {
-            this.ws.close();
-        }
         await this.redis.quit();
         await this.db.close();
     }
