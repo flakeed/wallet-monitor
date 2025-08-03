@@ -1,13 +1,15 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
+const WebSocket = require('ws');
 const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
 const Database = require('../database/connection');
 
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
-        this.connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
+        this.connection = new Connection(process.env.HELIUS_RPC_URL || 'https://mainnet.helius-rpc.com/?api-key=758fd668-8d79-4538-9ae4-3741a4c877e8', 'confirmed');
+        this.ws = null;
         this.isMonitoring = false;
-        this.monitoringInterval = null;
+        this.subscriptions = new Map(); // Map<subscriptionId, address>
         this.processedSignatures = new Set();
         this.stats = {
             totalScans: 0,
@@ -21,114 +23,164 @@ class WalletMonitoringService {
 
     async startMonitoring() {
         if (this.isMonitoring) {
-            console.log('⚠️ Monitoring is already running');
+            console.log(`[${new Date().toISOString()}] ⚠️ Monitoring is already running`);
             return;
         }
 
-        console.log('🚀 Starting wallet monitoring...');
+        console.log(`[${new Date().toISOString()}] 🚀 Starting wallet monitoring...`);
         this.isMonitoring = true;
 
-        this.monitoringInterval = setInterval(async () => {
-            await this.performMonitoringCycle();
-        }, 30000);
-
-        await this.performMonitoringCycle();
+        await this.initializeWebSocket();
+        await this.subscribeToWallets();
     }
 
-    async performMonitoringCycle() {
-        const scanStartTime = Date.now();
-        let processedSignatures = 0;
-        let errors = 0;
+    async initializeWebSocket() {
+        const WEBHOOK_URL = process.env.WEBHOOK_URL || 'ws://45.134.108.167:5006/ws';
 
+        this.ws = new WebSocket(WEBHOOK_URL);
+
+        this.ws.on('open', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Connected to Solana WebSocket at ${WEBHOOK_URL}`);
+        });
+
+        this.ws.on('message', async (data) => {
+            try {
+                const message = JSON.parse(data.toString());
+                console.log(`[${new Date().toISOString()}] 📥 WebSocket message received:`, JSON.stringify(message, null, 2));
+
+                if (message.method === 'accountNotification' && message.params) {
+                    const { subscription, result } = message.params;
+                    const address = this.subscriptions.get(subscription);
+                    if (!address) {
+                        console.warn(`[${new Date().toISOString()}] No address found for subscription ${subscription}`);
+                        return;
+                    }
+                    const wallet = await this.db.getWalletByAddress(address);
+                    if (!wallet) {
+                        console.warn(`[${new Date().toISOString()}] Wallet ${address} not found in database`);
+                        return;
+                    }
+                    await this.processAccountUpdate(wallet);
+                } else if (message.result && message.id && this.subscriptions.has(message.id)) {
+                    // Store the subscription ID returned by the server
+                    const address = this.subscriptions.get(message.id);
+                    this.subscriptions.set(message.result, address);
+                    this.subscriptions.delete(message.id);
+                    console.log(`[${new Date().toISOString()}] ✅ Subscription confirmed for wallet ${address.slice(0, 8)}... with ID ${message.result}`);
+                }
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error parsing WebSocket message:`, error.message);
+                this.stats.errors++;
+            }
+        });
+
+        this.ws.on('error', (error) => {
+            console.error(`[${new Date().toISOString()}] ❌ WebSocket error:`, error.message);
+            this.stats.errors++;
+        });
+
+        this.ws.on('close', (code, reason) => {
+            console.log(`[${new Date().toISOString()}] WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
+            this.isMonitoring = false;
+            setTimeout(() => {
+                console.log(`[${new Date().toISOString()}] Attempting to reconnect to WebSocket...`);
+                this.initializeWebSocket().then(() => this.subscribeToWallets());
+            }, 5000);
+        });
+    }
+
+    async subscribeToWallets() {
         try {
             const wallets = await this.db.getActiveWallets();
-            console.log(`🔍 Scanning ${wallets.length} wallets...`);
+            console.log(`[${new Date().toISOString()}] 🔍 Subscribing to ${wallets.length} wallets...`);
+            this.stats.totalWallets = wallets.length;
 
             for (const wallet of wallets) {
-                try {
-                    const result = await this.checkWalletTransactions(wallet);
-                    processedSignatures += result.newTransactions;
-                } catch (error) {
-                    console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
-                    errors++;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await this.subscribeToWallet(wallet.address);
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
-
-            const scanDuration = Date.now() - scanStartTime;
-
-            this.stats.totalScans++;
-            this.stats.totalWallets = wallets.length;
-            this.stats.errors += errors;
-            this.stats.lastScanDuration = scanDuration;
-
-            await this.db.addMonitoringStats(
-                processedSignatures,
-                wallets.length,
-                scanDuration,
-                errors
-            );
-
-            if (processedSignatures > 0) {
-                console.log(`✅ Scan completed: ${processedSignatures} new transactions in ${scanDuration}ms`);
-            }
-
         } catch (error) {
-            console.error('❌ Error in monitoring cycle:', error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error subscribing to wallets:`, error.message);
             this.stats.errors++;
         }
     }
 
-    stopMonitoring() {
-        if (this.monitoringInterval) {
-            clearInterval(this.monitoringInterval);
-            this.monitoringInterval = null;
+    async subscribeToWallet(address) {
+        if ([...this.subscriptions.values()].includes(address)) {
+            console.log(`[${new Date().toISOString()}] Wallet ${address.slice(0, 8)}... already subscribed`);
+            return;
         }
-        this.isMonitoring = false;
-        console.log('⏹️ Monitoring stopped');
+
+        try {
+            new PublicKey(address); // Validate address
+            const subscriptionId = Date.now();
+            const subscriptionMessage = {
+                jsonrpc: '2.0',
+                id: subscriptionId,
+                method: 'accountSubscribe',
+                params: [address, { commitment: 'confirmed', encoding: 'jsonParsed' }]
+            };
+
+            this.ws.send(JSON.stringify(subscriptionMessage));
+            console.log(`[${new Date().toISOString()}] 📡 Sent subscription request for wallet: ${address.slice(0, 8)}... with ID ${subscriptionId}`);
+            this.subscriptions.set(subscriptionId, address);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error subscribing to wallet ${address}:`, error.message);
+            this.stats.errors++;
+        }
     }
 
-    async checkWalletTransactions(wallet) {
+    async unsubscribeFromWallet(address) {
+        const subscriptionId = [...this.subscriptions.entries()].find(([id, addr]) => addr === address)?.[0];
+        if (!subscriptionId) {
+            console.log(`[${new Date().toISOString()}] Wallet ${address.slice(0, 8)}... not subscribed`);
+            return;
+        }
+
+        try {
+            const unsubscribeMessage = {
+                jsonrpc: '2.0',
+                id: Date.now(),
+                method: 'accountUnsubscribe',
+                params: [subscriptionId]
+            };
+            this.ws.send(JSON.stringify(unsubscribeMessage));
+            console.log(`[${new Date().toISOString()}] 📴 Unsubscribed from wallet: ${address.slice(0, 8)}...`);
+            this.subscriptions.delete(subscriptionId);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error unsubscribing from wallet ${address}:`, error.message);
+            this.stats.errors++;
+        }
+    }
+
+    async processAccountUpdate(wallet) {
         try {
             const pubkey = new PublicKey(wallet.address);
-
-            const signatures = await this.connection.getSignaturesForAddress(pubkey, {
-                limit: 10
-            });
-
-            let newTransactionsCount = 0;
-
-            for (const sig of signatures) {
-                if (this.processedSignatures.has(sig.signature)) {
-                    continue;
-                }
-
-                const txData = await this.processTransaction(sig, wallet);
-                if (txData) {
-                    newTransactionsCount++;
-                    this.processedSignatures.add(sig.signature);
-                    
-                    if (txData.type === 'buy') {
-                        this.stats.totalBuyTransactions++;
-                    } else if (txData.type === 'sell') {
-                        this.stats.totalSellTransactions++;
-                    }
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 300));
+            const signatures = await this.connection.getSignaturesForAddress(pubkey, { limit: 1 });
+            if (signatures.length === 0) {
+                console.log(`[${new Date().toISOString()}] No new transactions for wallet ${wallet.address.slice(0, 8)}...`);
+                return;
             }
 
-            if (newTransactionsCount > 0) {
-                console.log(`✅ ${wallet.name || wallet.address.slice(0, 8)}...: ${newTransactionsCount} new transactions`);
+            const sig = signatures[0];
+            if (this.processedSignatures.has(sig.signature)) {
+                return;
+            }
+
+            const txData = await this.processTransaction(sig, wallet);
+            if (txData) {
+                this.processedSignatures.add(sig.signature);
+                if (txData.type === 'buy') {
+                    this.stats.totalBuyTransactions++;
+                } else if (txData.type === 'sell') {
+                    this.stats.totalSellTransactions++;
+                }
                 await this.db.updateWalletStats(wallet.id);
+                console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${sig.signature} for wallet ${wallet.address.slice(0, 8)}...`);
             }
-
-            return { newTransactions: newTransactionsCount };
-
         } catch (error) {
-            console.error(`❌ Error checking wallet ${wallet.address}:`, error.message);
-            throw error;
+            console.error(`[${new Date().toISOString()}] ❌ Error processing account update for wallet ${wallet.address}:`, error.message);
+            this.stats.errors++;
         }
     }
 
@@ -152,11 +204,11 @@ class WalletMonitoringService {
             if (solChange < 0) {
                 transactionType = 'buy';
                 solAmount = Math.abs(solChange);
-            } else if (solChange > 0.001) { 
+            } else if (solChange > 0.001) {
                 transactionType = 'sell';
                 solAmount = solChange;
             } else {
-                return null; 
+                return null;
             }
 
             const tokenChanges = this.analyzeTokenChanges(tx.meta, transactionType);
@@ -174,6 +226,7 @@ class WalletMonitoringService {
                         ${transactionType === 'buy' ? 'sol_spent, usd_spent' : 'sol_received, usd_received'}
                     ) 
                     VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (signature) DO NOTHING
                     RETURNING id, signature, transaction_type
                 `;
 
@@ -189,9 +242,13 @@ class WalletMonitoringService {
                     ]);
                 } catch (error) {
                     if (error.code === '23505') {
-                        return null; 
+                        return null;
                     }
                     throw error;
+                }
+
+                if (!result.rows[0]) {
+                    return null;
                 }
 
                 const transaction = result.rows[0];
@@ -208,9 +265,8 @@ class WalletMonitoringService {
                     tokensChanged: tokenChanges.length
                 };
             });
-
         } catch (error) {
-            console.error(`❌ Error processing transaction ${sig.signature}:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature}:`, error.message);
             return null;
         }
     }
@@ -278,21 +334,23 @@ class WalletMonitoringService {
             `;
 
             await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
-
         } catch (error) {
-            console.error(`❌ Error saving token operation for ${tokenChange.mint}:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error saving token operation for ${tokenChange.mint}:`, error.message);
             throw error;
         }
     }
 
-async addWallet(address, name = null) {
-    try {
-        new PublicKey(address);
-        const wallet = await this.db.addWallet(address, name);
-        console.log(`✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
-        return wallet;
-    } catch (error) {
-        throw new Error(`Failed to add wallet: ${error.message}`);
+    async addWallet(address, name = null) {
+        try {
+            new PublicKey(address);
+            const wallet = await this.db.addWallet(address, name);
+            console.log(`[${new Date().toISOString()}] ✅ Added wallet for monitoring: ${name || address.slice(0, 8)}...`);
+            if (this.isMonitoring) {
+                await this.subscribeToWallet(address);
+            }
+            return wallet;
+        } catch (error) {
+            throw new Error(`Failed to add wallet: ${error.message}`);
         }
     }
 
@@ -300,13 +358,14 @@ async addWallet(address, name = null) {
         try {
             const wallet = await this.db.getWalletByAddress(address);
             if (wallet) {
+                await this.unsubscribeFromWallet(address);
                 const transactions = await this.db.getRecentTransactions(24 * 7);
                 const walletSignatures = transactions
                     .filter(tx => tx.wallet_address === address)
                     .map(tx => tx.signature);
                 walletSignatures.forEach(sig => this.processedSignatures.delete(sig));
                 await this.db.removeWallet(address);
-                console.log(`🗑️ Removed wallet and associated data: ${address.slice(0, 8)}...`);
+                console.log(`[${new Date().toISOString()}] 🗑️ Removed wallet and associated data: ${address.slice(0, 8)}...`);
             } else {
                 throw new Error('Wallet not found');
             }
@@ -319,6 +378,7 @@ async addWallet(address, name = null) {
         return {
             isMonitoring: this.isMonitoring,
             processedSignatures: this.processedSignatures.size,
+            subscribedWallets: this.subscriptions.size,
             stats: {
                 ...this.stats,
                 uptime: this.isMonitoring ? Date.now() - (this.stats.startTime || Date.now()) : 0
@@ -336,7 +396,7 @@ async addWallet(address, name = null) {
                 topTokens
             };
         } catch (error) {
-            console.error('❌ Error getting detailed stats:', error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error getting detailed stats:`, error.message);
             return this.getStatus();
         }
     }
@@ -345,6 +405,18 @@ async addWallet(address, name = null) {
         this.stopMonitoring();
         await this.db.close();
         await redis.quit();
+    }
+
+    stopMonitoring() {
+        if (this.ws) {
+            for (const address of this.subscriptions.values()) {
+                this.unsubscribeFromWallet(address);
+            }
+            this.ws.close();
+            this.ws = null;
+        }
+        this.isMonitoring = false;
+        console.log(`[${new Date().toISOString()}] ⏹️ Monitoring stopped`);
     }
 }
 
