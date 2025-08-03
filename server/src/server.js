@@ -3,13 +3,33 @@ const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const Redis = require('ioredis');
 require('dotenv').config();
-const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
-const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
+const Database = require('./database/connection');
+const prom = require('prom-client');
 
 const app = express();
 const port = process.env.PORT || 5001;
+
+// Настройка метрик Prometheus
+const Registry = prom.Registry;
+const register = new Registry();
+const txProcessTime = new prom.Histogram({
+  name: 'transaction_process_duration_seconds',
+  help: 'Duration of transaction processing in seconds',
+  buckets: [0.1, 0.5, 1, 2, 5],
+  registers: [register]
+});
+const queueLength = new prom.Gauge({
+  name: 'transaction_queue_length',
+  help: 'Number of transactions in the queue',
+  registers: [register]
+});
+
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
 
 app.use(
   cors({
@@ -19,15 +39,12 @@ app.use(
 );
 app.use(express.json());
 
-// Initialize services
+// Инициализация сервисов
 const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
 
-// Keep track of SSE clients
-const sseClients = new Set();
-
-// Start WebSocket service with retry logic
+// Запуск WebSocket сервиса с логикой повторных попыток
 const startWebSocketService = async () => {
   let retries = 0;
   const maxRetries = 5;
@@ -53,10 +70,10 @@ const startWebSocketService = async () => {
   console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
 };
 
-// Initialize WebSocket service
+// Инициализация WebSocket сервиса
 setTimeout(startWebSocketService, 2000);
 
-// SSE endpoint for real-time transaction updates
+// SSE endpoint для обновлений транзакций в реальном времени
 app.get('/api/transactions/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -85,7 +102,6 @@ app.get('/api/transactions/stream', (req, res) => {
     console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected`);
     subscriber.unsubscribe();
     subscriber.quit();
-    sseClients.delete(res);
     res.end();
   });
 
@@ -98,7 +114,7 @@ app.get('/api/transactions/stream', (req, res) => {
   }, 30000);
 });
 
-// Fetch wallets
+// Получение списка кошельков
 app.get('/api/wallets', async (req, res) => {
   try {
     const wallets = await db.getActiveWallets();
@@ -129,7 +145,7 @@ app.get('/api/wallets', async (req, res) => {
   }
 });
 
-// Add wallet
+// Добавление кошелька
 app.post('/api/wallets', async (req, res) => {
   try {
     const { address, name } = req.body;
@@ -158,7 +174,7 @@ app.post('/api/wallets', async (req, res) => {
   }
 });
 
-// Remove wallet
+// Удаление кошелька
 app.delete('/api/wallets/:address', async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -182,7 +198,7 @@ app.delete('/api/wallets/:address', async (req, res) => {
   }
 });
 
-// Fetch transactions
+// Получение транзакций
 app.get('/api/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
@@ -237,7 +253,7 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
-// Monitoring status
+// Статус мониторинга
 app.get('/api/monitoring/status', (req, res) => {
   try {
     const monitoringStatus = monitoringService.getStatus();
@@ -252,7 +268,7 @@ app.get('/api/monitoring/status', (req, res) => {
   }
 });
 
-// Toggle monitoring
+// Переключение мониторинга
 app.post('/api/monitoring/toggle', async (req, res) => {
   try {
     const { action } = req.body;
@@ -272,7 +288,7 @@ app.post('/api/monitoring/toggle', async (req, res) => {
   }
 });
 
-// Fetch wallet details
+// Получение деталей кошелька
 app.get('/api/wallet/:address', async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -343,7 +359,7 @@ app.get('/api/wallet/:address', async (req, res) => {
   }
 });
 
-// Transaction stats
+// Статистика транзакций
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
@@ -366,7 +382,7 @@ app.get('/api/stats/transactions', async (req, res) => {
   }
 });
 
-// Bulk wallet import
+// Массовый импорт кошельков
 app.post('/api/wallets/bulk', async (req, res) => {
   try {
     const { wallets } = req.body;
@@ -438,7 +454,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
-// Bulk import template
+// Шаблон массового импорта
 app.get('/api/wallets/bulk-template', (req, res) => {
   const template = `# Bulk Wallet Import Template
 # Format: address,name (name is optional)
@@ -456,7 +472,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
   res.send(template);
 });
 
-// Validate wallets
+// Валидация кошельков
 app.post('/api/wallets/validate', (req, res) => {
   try {
     const { wallets } = req.body;
@@ -495,7 +511,7 @@ app.post('/api/wallets/validate', (req, res) => {
   }
 });
 
-// Top tokens
+// Топ токенов
 app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -509,7 +525,7 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// WebSocket status
+// Статус WebSocket
 app.get('/api/websocket/status', (req, res) => {
   try {
     const status = solanaWebSocketService.getStatus();
@@ -520,7 +536,7 @@ app.get('/api/websocket/status', (req, res) => {
   }
 });
 
-// Reconnect WebSocket
+// Переподключение WebSocket
 app.post('/api/websocket/reconnect', async (req, res) => {
   try {
     await solanaWebSocketService.stop();
@@ -536,13 +552,11 @@ app.post('/api/websocket/reconnect', async (req, res) => {
   }
 });
 
-// Graceful shutdown
+// Грациозное завершение
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
   await solanaWebSocketService.stop();
-  await redis.quit();
-  sseClients.forEach((client) => client.end());
   process.exit(0);
 });
 
@@ -550,12 +564,10 @@ process.on('SIGTERM', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
   await solanaWebSocketService.stop();
-  await redis.quit();
-  sseClients.forEach((client) => client.end());
   process.exit(0);
 });
 
-// Start server
+// Запуск сервера
 app.listen(port, '158.220.125.26', () => {
   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
