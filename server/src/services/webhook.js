@@ -5,7 +5,7 @@ const bs58 = require('bs58');
 const WEBHOOK_URL = 'ws://45.134.108.167:5006/ws';
 const RPC_URL = 'https://mainnet.helius-rpc.com/?api-key=758fd668-8d79-4538-9ae4-3741a4c877e8'; 
 const WALLET_ADDRESS = 'ep3XjfiJrRpmiSqh6fTd14YwNBSHuSj6UA732c3Dw1k';
-const RECIPIENT_ADDRESS = 'FxuvBFb4prD1bHF7Efp5nQCaEoUnL2UaoaZxFGGHy4d5'; 
+const RECIPIENT_ADDRESS = 'ep3XjfiJrRpmiSqh6fTd14YwNBSHuSj6UA732c3Dw1k'; 
 
 const PRIVATE_KEY = '5pLo8f4T1HE2oMPC9RNCCrRpMyR97CCttvCgFy72G9BKetpnwU25pQt8WmzmQZ2Ycbx8yvnvYEPr6C9p1T1kysz2'; 
 
@@ -59,25 +59,20 @@ class WalletSubscription {
 
     async sendTestTransaction() {
         try {
-            console.log(`[${new Date().toISOString()}]  Creating transaction from ${WALLET_ADDRESS} to ${RECIPIENT_ADDRESS}`);
+            console.log(`[${new Date().toISOString()}] 🚀 Creating transaction from ${WALLET_ADDRESS} to ${RECIPIENT_ADDRESS}`);
             
             const balance = await this.connection.getBalance(this.wallet.publicKey);
-            console.log(`[${new Date().toISOString()}]  Wallet balance: ${balance / LAMPORTS_PER_SOL} SOL`);
-            if (balance < 0.1 * LAMPORTS_PER_SOL) {
-                console.log(`[${new Date().toISOString()}] Requesting airdrop for ${WALLET_ADDRESS}`);
-                const airdropSignature = await this.connection.requestAirdrop(this.wallet.publicKey, LAMPORTS_PER_SOL);
-                await this.connection.confirmTransaction({
-                    signature: airdropSignature,
-                    ...(await this.connection.getLatestBlockhash('confirmed'))
-                }, 'confirmed');
-                console.log(`[${new Date().toISOString()}]  Airdrop confirmed`);
+            console.log(`[${new Date().toISOString()}] 💰 Wallet balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+            const transferAmount = 0.0001 * LAMPORTS_PER_SOL; 
+            if (balance < transferAmount + 5000) { 
+                throw new Error(`Insufficient balance: ${balance / LAMPORTS_PER_SOL} SOL, need at least ${(transferAmount + 5000) / LAMPORTS_PER_SOL} SOL`);
             }
 
             const transaction = new Transaction().add(
                 SystemProgram.transfer({
                     fromPubkey: this.wallet.publicKey,
                     toPubkey: new PublicKey(RECIPIENT_ADDRESS),
-                    lamports: 0.1 * LAMPORTS_PER_SOL
+                    lamports: transferAmount 
                 })
             );
 
@@ -87,12 +82,12 @@ class WalletSubscription {
 
             transaction.sign(this.wallet);
             const signature = await this.connection.sendRawTransaction(transaction.serialize());
-            console.log(`[${new Date().toISOString()}]  Transaction sent. Signature: ${signature}`);
+            console.log(`[${new Date().toISOString()}] 📤 Transaction sent. Signature: ${signature}`);
 
             await this.connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
-            console.log(`[${new Date().toISOString()}]  Transaction confirmed: ${signature}`);
+            console.log(`[${new Date().toISOString()}] ✅ Transaction confirmed: ${signature}`);
         } catch (error) {
-            console.error(`[${new Date().toISOString()}]  Error sending transaction:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error sending transaction:`, error.message);
         }
     }
 
