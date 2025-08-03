@@ -1,16 +1,20 @@
 const WebSocket = require('ws');
-const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
+const { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL, Keypair } = require('@solana/web3.js');
+const bs58 = require('bs58');
 
 const WEBHOOK_URL = 'ws://45.134.108.167:5006/ws';
 const RPC_URL = 'https://api.devnet.solana.com'; 
 const WALLET_ADDRESS = 'GXnhhZsFxhA8uoEc8n2kARyDCnMrRRQ8gpQMQfv1v53L';
 const RECIPIENT_ADDRESS = '7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv'; 
 
+const PRIVATE_KEY = '5GmcUocegHWxVJcWERbwi7S7zdLEoK4625sRKLzVQCtNdzWTuBGMrBuMbW4tSw5ZhfKMjkFjCCoh6FEDYJsiBWQN'; 
+
 class WalletSubscription {
     constructor() {
         this.connection = new Connection(RPC_URL, 'confirmed');
         this.ws = null;
         this.messageCount = 0;
+        this.wallet = Keypair.fromSecretKey(bs58.decode(PRIVATE_KEY));
     }
 
     connectToWebhook() {
@@ -55,32 +59,36 @@ class WalletSubscription {
 
     async sendTestTransaction() {
         try {
-            const provider = window.phantom?.solana;
-            if (!provider?.isPhantom) {
-                throw new Error('Phantom Wallet is not installed');
+            console.log(`[${new Date().toISOString()}] 🚀 Creating transaction from ${WALLET_ADDRESS} to ${RECIPIENT_ADDRESS}`);
+            
+            const balance = await this.connection.getBalance(this.wallet.publicKey);
+            console.log(`[${new Date().toISOString()}] 💰 Wallet balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+            if (balance < 0.1 * LAMPORTS_PER_SOL) {
+                console.log(`[${new Date().toISOString()}] 📤 Requesting airdrop for ${WALLET_ADDRESS}`);
+                const airdropSignature = await this.connection.requestAirdrop(this.wallet.publicKey, LAMPORTS_PER_SOL);
+                await this.connection.confirmTransaction({
+                    signature: airdropSignature,
+                    ...(await this.connection.getLatestBlockhash('confirmed'))
+                }, 'confirmed');
+                console.log(`[${new Date().toISOString()}] ✅ Airdrop confirmed`);
             }
-
-            const resp = await provider.connect();
-            const publicKey = resp.publicKey;
-            console.log(`[${new Date().toISOString()}] 🔗 Connected to Phantom wallet: ${publicKey.toString()}`);
 
             const transaction = new Transaction().add(
                 SystemProgram.transfer({
-                    fromPubkey: publicKey,
+                    fromPubkey: this.wallet.publicKey,
                     toPubkey: new PublicKey(RECIPIENT_ADDRESS),
-                    lamports: 0.1 * LAMPORTS_PER_SOL // 0.1 SOL
+                    lamports: 0.1 * LAMPORTS_PER_SOL
                 })
             );
 
-            const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
             transaction.recentBlockhash = blockhash;
-            transaction.feePayer = publicKey;
+            transaction.feePayer = this.wallet.publicKey;
 
-            const signedTransaction = await provider.signTransaction(transaction);
-            const signature = await this.connection.sendRawTransaction(signedTransaction.serialize());
+            transaction.sign(this.wallet);
+            const signature = await this.connection.sendRawTransaction(transaction.serialize());
             console.log(`[${new Date().toISOString()}] 📤 Transaction sent. Signature: ${signature}`);
 
-            const { lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
             await this.connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
             console.log(`[${new Date().toISOString()}] ✅ Transaction confirmed: ${signature}`);
         } catch (error) {
