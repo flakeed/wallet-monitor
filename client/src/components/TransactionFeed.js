@@ -12,16 +12,20 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
       return date.toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
-        hour12: true
+        hour12: true,
       });
     } else {
       if (diffInMinutes < 1) return 'Just now';
       if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
       if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
-      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit'
-      });
+      return (
+        date.toLocaleDateString() +
+        ' ' +
+        date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      );
     }
   };
 
@@ -58,14 +62,18 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
     if (tx.transactionType === 'buy') {
       return {
         sol: `-${tx.solSpent} SOL`,
-        usd: tx.usdSpent ? `$${Number(tx.usdSpent).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
-        color: 'text-red-600'
+        usd: tx.usdSpent
+          ? `$${Number(tx.usdSpent).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : null,
+        color: 'text-red-600',
       };
     } else if (tx.transactionType === 'sell') {
       return {
         sol: `+${tx.solReceived} SOL`,
-        usd: tx.usdReceived ? `$${Number(tx.usdReceived).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : null,
-        color: 'text-green-600'
+        usd: tx.usdReceived
+          ? `$${Number(tx.usdReceived).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : null,
+        color: 'text-green-600',
       };
     }
     return { sol: '0 SOL', usd: null, color: 'text-gray-600' };
@@ -87,7 +95,6 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
             <option value="168">Last 7 days</option>
           </select>
         </div>
-
         <div className="text-center py-12">
           <div className="text-gray-400 mb-4">
             <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -123,13 +130,15 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
           </select>
         </div>
       </div>
-
       <div className="space-y-4 max-h-96 overflow-y-auto">
         {transactions.map((tx, index) => {
           const amountDisplay = getAmountDisplay(tx);
-          
+
           return (
-            <div key={tx.signature} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+            <div
+              key={tx.signature}
+              className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
+            >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center space-x-3">
                   <div className="flex items-center space-x-2">
@@ -142,11 +151,11 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                         <p className="font-semibold text-gray-900">
                           {tx.wallet.name || `${tx.wallet.address.slice(0, 6)}...${tx.wallet.address.slice(-4)}`}
                         </p>
-                        <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                          tx.transactionType === 'buy' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-red-100 text-red-800'
-                        }`}>
+                        <span
+                          className={`text-xs px-2 py-1 rounded-full font-medium ${
+                            tx.transactionType === 'buy' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                          }`}
+                        >
                           {getTransactionLabel(tx.transactionType)}
                         </span>
                       </div>
@@ -155,30 +164,26 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className={`font-bold ${amountDisplay.color}`}>
-                    {amountDisplay.sol}
-                  </p>
-                  {amountDisplay.usd && (
-                    <p className="text-sm text-gray-600">
-                      {amountDisplay.usd}
-                    </p>
-                  )}
+                  <p className={`font-bold ${amountDisplay.color}`}>{amountDisplay.sol}</p>
+                  {amountDisplay.usd && <p className="text-sm text-gray-600">{amountDisplay.usd}</p>}
                 </div>
               </div>
-
               <div className="mb-3">
                 <div className="flex items-center space-x-2">
                   <span className="text-xs text-gray-500">TX:</span>
-                  <span className="font-mono text-xs text-gray-700 truncate flex-1">
-                    {tx.signature}
-                  </span>
+                  <span className="font-mono text-xs text-gray-700 truncate flex-1">{tx.signature}</span>
                   <button
                     onClick={() => copyToClipboard(tx.signature)}
                     className="text-gray-400 hover:text-gray-600 p-1"
                     title="Copy transaction signature"
                   >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                      />
                     </svg>
                   </button>
                   <a
@@ -189,13 +194,16 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                     title="View on Solscan"
                   >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                      />
                     </svg>
                   </a>
                 </div>
               </div>
-
-              {/* Токены купленные */}
               {tx.tokensBought && tx.tokensBought.length > 0 && (
                 <div className="mb-3">
                   <div className="flex items-center space-x-2 mb-2">
@@ -215,8 +223,6 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                   </div>
                 </div>
               )}
-
-              {/* Токены проданные */}
               {tx.tokensSold && tx.tokensSold.length > 0 && (
                 <div className="mb-3">
                   <div className="flex items-center space-x-2 mb-2">
@@ -236,10 +242,7 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                   </div>
                 </div>
               )}
-
-              {/* Если нет токенов */}
-              {(!tx.tokensBought || tx.tokensBought.length === 0) && 
-               (!tx.tokensSold || tx.tokensSold.length === 0) && (
+              {(!tx.tokensBought || tx.tokensBought.length === 0) && (!tx.tokensSold || tx.tokensSold.length === 0) && (
                 <div className="text-center py-2">
                   <span className="text-sm text-gray-500">No token operations detected</span>
                 </div>
@@ -248,14 +251,6 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
           );
         })}
       </div>
-
-      {/* {transactions.length >= 50 && (
-        <div className="text-center mt-4">
-          <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">
-            Load more transactions...
-          </button>
-        </div>
-      )} */}
     </div>
   );
 }
