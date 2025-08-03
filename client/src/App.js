@@ -52,7 +52,6 @@ function App() {
     }
   };
 
-  // Real-time transaction updates via SSE
   useEffect(() => {
     const eventSource = new EventSource(`${API_BASE}/transactions/stream`);
 
@@ -61,7 +60,6 @@ function App() {
         const newTransaction = JSON.parse(event.data);
         console.log('New transaction received via SSE:', newTransaction);
 
-        // Check if transaction matches current filters
         const now = new Date();
         const txTime = new Date(newTransaction.timestamp);
         const hoursDiff = (now - txTime) / (1000 * 60 * 60);
@@ -70,11 +68,9 @@ function App() {
 
         if (matchesTimeframe && matchesType) {
           setTransactions((prev) => {
-            // Prevent duplicates by checking signature
             if (prev.some((tx) => tx.signature === newTransaction.signature)) {
               return prev;
             }
-            // Format the transaction to match the structure from /api/transactions
             const formattedTransaction = {
               signature: newTransaction.signature,
               time: newTransaction.timestamp,
@@ -90,7 +86,54 @@ function App() {
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
             };
-            return [formattedTransaction, ...prev].slice(0, 50); // Limit to 50 transactions
+            setWallets((prevWallets) =>
+              prevWallets.map((wallet) =>
+                wallet.address === newTransaction.walletAddress
+                  ? {
+                      ...wallet,
+                      stats: {
+                        ...wallet.stats,
+                        totalBuyTransactions:
+                          newTransaction.transactionType === 'buy'
+                            ? (wallet.stats.totalBuyTransactions || 0) + 1
+                            : wallet.stats.totalBuyTransactions,
+                        totalSellTransactions:
+                          newTransaction.transactionType === 'sell'
+                            ? (wallet.stats.totalSellTransactions || 0) + 1
+                            : wallet.stats.totalSellTransactions,
+                        totalSpentSOL:
+                          newTransaction.transactionType === 'buy'
+                            ? (Number(wallet.stats.totalSpentSOL) || 0) + newTransaction.solAmount
+                            : wallet.stats.totalSpentSOL,
+                        totalReceivedSOL:
+                          newTransaction.transactionType === 'sell'
+                            ? (Number(wallet.stats.totalReceivedSOL) || 0) + newTransaction.solAmount
+                            : wallet.stats.totalReceivedSOL,
+                        totalSpentUSD:
+                          newTransaction.transactionType === 'buy'
+                            ? (Number(wallet.stats.totalSpentUSD) || 0) + newTransaction.usdAmount
+                            : wallet.stats.totalSpentUSD,
+                        totalReceivedUSD:
+                          newTransaction.transactionType === 'sell'
+                            ? (Number(wallet.stats.totalReceivedUSD) || 0) + newTransaction.usdAmount
+                            : wallet.stats.totalReceivedUSD,
+                        netSOL:
+                          ((Number(wallet.stats.totalReceivedSOL) || 0) +
+                            (newTransaction.transactionType === 'sell' ? newTransaction.solAmount : 0)) -
+                          ((Number(wallet.stats.totalSpentSOL) || 0) +
+                            (newTransaction.transactionType === 'buy' ? newTransaction.solAmount : 0)),
+                        netUSD:
+                          ((Number(wallet.stats.totalReceivedUSD) || 0) +
+                            (newTransaction.transactionType === 'sell' ? newTransaction.usdAmount : 0)) -
+                          ((Number(wallet.stats.totalSpentUSD) || 0) +
+                            (newTransaction.transactionType === 'buy' ? newTransaction.usdAmount : 0)),
+                        lastTransactionAt: newTransaction.timestamp,
+                      },
+                    }
+                  : wallet
+              )
+            );
+            return [formattedTransaction, ...prev].slice(0, 50);
           });
         }
       } catch (err) {
@@ -103,7 +146,6 @@ function App() {
       eventSource.close();
       setTimeout(() => {
         console.log('Attempting to reconnect to SSE...');
-        // Reconnection is handled automatically by creating a new EventSource on the next useEffect trigger
       }, 5000);
     };
 
@@ -111,7 +153,7 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets]); // Re-run when filters or wallets change
+  }, [timeframe, transactionType, wallets]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
@@ -177,6 +219,25 @@ function App() {
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to remove wallet');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const removeAllWallets = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/wallets`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to remove all wallets');
       }
 
       setRefreshKey((prev) => prev + 1);
@@ -286,7 +347,7 @@ function App() {
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-            <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
+            <WalletList wallets={wallets} onRemoveWallet={removeWallet} onRemoveAllWallets={removeAllWallets} />
           </div>
           <div className="lg:col-span-2">
             <TransactionFeed

@@ -1,23 +1,45 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
 
 function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
-  const formatTime = (timeString) => {
-    const date = new Date(timeString);
-    const now = new Date();
-    const diffInMinutes = Math.floor((now - date) / (1000 * 60));
-    const isShortTimeframe = parseInt(timeframe) < 24;
+  const [currentTime, setCurrentTime] = useState(new Date()); // Текущее время для обновления
 
-    if (isShortTimeframe) {
-      return date.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      });
+  // Обновляем текущее время каждые 10 секунд
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 10000); // Обновление каждые 10 секунд
+
+    return () => clearInterval(interval);
+  }, []);
+
+const formatTime = (timeString) => {
+  const date = new Date(timeString);
+  const diffInSeconds = Math.floor((currentTime - date) / 1000); // Разница в секундах
+  const isShortTimeframe = parseInt(timeframe) < 24;
+
+  if (isShortTimeframe) {
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } else {
+    if (diffInSeconds < 60) {
+      return `${diffInSeconds} seconds ago`;
+    } else if (diffInSeconds < 3600) {
+      const minutes = Math.floor(diffInSeconds / 60);
+      const seconds = diffInSeconds % 60;
+      return seconds === 0
+        ? `${minutes} minute${minutes !== 1 ? 's' : ''} ago`
+        : `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''} ago`;
+    } else if (diffInSeconds < 86400) {
+      const hours = Math.floor(diffInSeconds / 3600);
+      const minutes = Math.floor((diffInSeconds % 3600) / 60);
+      return minutes === 0
+        ? `${hours} hour${hours !== 1 ? 's' : ''} ago`
+        : `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
     } else {
-      if (diffInMinutes < 1) return 'Just now';
-      if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
-      if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
       return (
         date.toLocaleDateString() +
         ' ' +
@@ -27,7 +49,8 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
         })
       );
     }
-  };
+  }
+};
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
