@@ -63,10 +63,8 @@ app.get('/api/transactions/stream', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  // Create a new Redis subscriber for this client
   const subscriber = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
 
-  // Subscribe to the transactions channel
   subscriber.subscribe('transactions', (err) => {
     if (err) {
       console.error(`[${new Date().toISOString()}] ❌ Redis subscription error:`, err.message);
@@ -76,17 +74,13 @@ app.get('/api/transactions/stream', (req, res) => {
     console.log(`[${new Date().toISOString()}] ✅ New SSE client connected`);
   });
 
-  // Send transaction updates to the client
   subscriber.on('message', (channel, message) => {
     if (channel === 'transactions' && res.writable) {
+      console.log(`[${new Date().toISOString()}] 📡 Sending SSE message:`, message);
       res.write(`data: ${message}\n\n`);
     }
   });
 
-  // Add client to the set
-  sseClients.add(res);
-
-  // Handle client disconnection
   req.on('close', () => {
     console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected`);
     subscriber.unsubscribe();
@@ -95,7 +89,6 @@ app.get('/api/transactions/stream', (req, res) => {
     res.end();
   });
 
-  // Keep-alive ping every 30 seconds
   const keepAlive = setInterval(() => {
     if (res.writable) {
       res.write(': keep-alive\n\n');
