@@ -53,6 +53,7 @@ class SolanaWebSocketService {
             this.messageCount++;
             try {
                 const message = JSON.parse(data.toString());
+                console.log(`[${new Date().toISOString()}] 📬 WebSocket message #${this.messageCount} received:`, JSON.stringify(message, null, 2));
                 await this.handleMessage(message);
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Error parsing WebSocket message:`, error.message);
