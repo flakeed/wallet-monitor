@@ -24,8 +24,8 @@ class SolanaWebSocketService {
     this.pendingRequests = new Map();
     this.messageCount = 0;
     this.isStarted = false;
-    this.batchSize = 50; // Process subscriptions in batches
-    this.maxSubscriptions = 500; // Support up to 500 wallets
+    this.batchSize = 50;
+    this.maxSubscriptions = 500;
   }
 
   async start() {
@@ -119,7 +119,6 @@ class SolanaWebSocketService {
         console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
         return;
       }
-      // Enqueue for batch processing
       await this.monitoringService.processWebhookMessage({
         signature: result.value.signature,
         walletAddress,
@@ -209,6 +208,21 @@ class SolanaWebSocketService {
       await this.monitoringService.removeWallet(walletAddress);
     } catch (error) {
       console.error(`[${new Date().toISOString()}] ❌ Error removing wallet ${walletAddress}:`, error.message);
+      throw error;
+    }
+  }
+
+  async removeAllWallets() {
+    try {
+      console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallet subscriptions from WebSocket service`);
+      for (const walletAddress of this.subscriptions.keys()) {
+        await this.unsubscribeFromWallet(walletAddress);
+      }
+      this.subscriptions.clear();
+      await this.monitoringService.removeAllWallets();
+      console.log(`[${new Date().toISOString()}] ✅ All wallet subscriptions removed from WebSocket service`);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from WebSocket service:`, error.message);
       throw error;
     }
   }

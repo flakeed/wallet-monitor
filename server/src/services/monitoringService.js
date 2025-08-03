@@ -24,7 +24,7 @@ class WalletMonitoringService {
     this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
     this.isProcessingQueue = false;
     this.queueKey = 'webhook:queue';
-    this.batchSize = 50; // Process transactions in batches
+    this.batchSize = 50;
     console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized`);
   }
 
@@ -233,7 +233,6 @@ class WalletMonitoringService {
       mints.add(post.mint);
     }
 
-    // Batch fetch token metadata
     const tokenInfos = await this.batchFetchTokenMetadata([...mints]);
     for (const post of meta.postTokenBalances || []) {
       const pre = meta.preTokenBalances?.find((p) => p.mint === post.mint && p.accountIndex === post.accountIndex);
@@ -375,6 +374,21 @@ class WalletMonitoringService {
     }
   }
 
+  async removeAllWallets() {
+    try {
+      console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallets from monitoring service`);
+      const transactions = await this.db.getRecentTransactions(24 * 7);
+      const allSignatures = transactions.map((tx) => tx.signature);
+      allSignatures.forEach((sig) => this.processedSignatures.delete(sig));
+      this.processedSignatures.clear();
+      await this.db.removeAllWallets();
+      console.log(`[${new Date().toISOString()}] ✅ All wallets removed from monitoring service`);
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from monitoring service:`, error.message);
+      throw error;
+    }
+  }
+
   getStatus() {
     return {
       isMonitoring: this.isMonitoring,
@@ -406,6 +420,7 @@ class WalletMonitoringService {
     this.stopMonitoring();
     await this.redis.quit();
     await this.db.close();
+    console.log(`[${new Date().toISOString()}] ✅ Monitoring service closed`);
   }
 }
 

@@ -183,6 +183,21 @@ app.delete('/api/wallets/:address', async (req, res) => {
   }
 });
 
+app.delete('/api/wallets', async (req, res) => {
+  try {
+    await solanaWebSocketService.removeAllWallets();
+    const result = await db.removeAllWallets();
+    res.json({
+      success: true,
+      message: `Successfully removed ${result.deletedCount} wallets and associated data`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
+    res.status(500).json({ error: 'Failed to remove all wallets' });
+  }
+});
+
 // Fetch transactions
 app.get('/api/transactions', async (req, res) => {
   try {

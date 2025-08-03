@@ -104,6 +104,18 @@ class Database {
         return result.rows;
     }
 
+async removeAllWallets() {
+    const query = `DELETE FROM wallets`;
+    try {
+        const result = await this.pool.query(query);
+        console.log(`[${new Date().toISOString()}] 🗑️ Removed ${result.rowCount} wallets and associated data`);
+        return { deletedCount: result.rowCount };
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
+        throw new Error(`Failed to remove all wallets: ${error.message}`);
+    }
+}
+
     async upsertToken(tokenData) {
         const { mint, symbol, name, logoURI, decimals, marketCap, priceUsd } = tokenData;
         const query = `
