@@ -2,55 +2,68 @@ import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
 
 function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
-  const [currentTime, setCurrentTime] = useState(new Date()); // Текущее время для обновления
+  const [currentTime, setCurrentTime] = useState(new Date());
 
-  // Обновляем текущее время каждые 10 секунд
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
-    }, 10000); // Обновление каждые 10 секунд
-
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
-const formatTime = (timeString) => {
-  const date = new Date(timeString);
-  const diffInSeconds = Math.floor((currentTime - date) / 1000); // Разница в секундах
-  const isShortTimeframe = parseInt(timeframe) < 24;
-
-  if (isShortTimeframe) {
-    return date.toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } else {
-    if (diffInSeconds < 60) {
-      return `${diffInSeconds} seconds ago`;
-    } else if (diffInSeconds < 3600) {
-      const minutes = Math.floor(diffInSeconds / 60);
-      const seconds = diffInSeconds % 60;
-      return seconds === 0
-        ? `${minutes} minute${minutes !== 1 ? 's' : ''} ago`
-        : `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''} ago`;
-    } else if (diffInSeconds < 86400) {
-      const hours = Math.floor(diffInSeconds / 3600);
-      const minutes = Math.floor((diffInSeconds % 3600) / 60);
-      return minutes === 0
-        ? `${hours} hour${hours !== 1 ? 's' : ''} ago`
-        : `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
-    } else {
-      return (
-        date.toLocaleDateString() +
-        ' ' +
-        date.toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-      );
+  const formatTime = (timeString) => {
+    if (!timeString) {
+      console.warn('Transaction time is missing or null:', timeString);
+      return 'Unknown time';
     }
-  }
-};
+
+    const date = new Date(timeString);
+    if (isNaN(date.getTime())) {
+      console.error(`Invalid date format for timeString: ${timeString}`);
+      return 'Invalid date';
+    }
+
+    const diffInSeconds = Math.floor((currentTime - date) / 1000);
+    if (diffInSeconds < 0) {
+      console.warn(`Future transaction time detected: ${timeString}, diff: ${diffInSeconds}s`);
+      return 'Just now';
+    }
+
+    const isShortTimeframe = parseInt(timeframe) < 24;
+
+    if (isShortTimeframe) {
+      return date.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    } else {
+      if (diffInSeconds < 60) {
+        return `${diffInSeconds} second${diffInSeconds !== 1 ? 's' : ''} ago`;
+      } else if (diffInSeconds < 3600) {
+        const minutes = Math.floor(diffInSeconds / 60);
+        const seconds = diffInSeconds % 60;
+        return seconds === 0
+          ? `${minutes} minute${minutes !== 1 ? 's' : ''} ago`
+          : `${minutes} minute${minutes !== 1 ? 's' : ''} ${seconds} second${seconds !== 1 ? 's' : ''} ago`;
+      } else if (diffInSeconds < 86400) {
+        const hours = Math.floor(diffInSeconds / 3600);
+        const minutes = Math.floor((diffInSeconds % 3600) / 60);
+        return minutes === 0
+          ? `${hours} hour${hours !== 1 ? 's' : ''} ago`
+          : `${hours} hour${hours !== 1 ? 's' : ''} ${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+      } else {
+        return (
+          date.toLocaleDateString() +
+          ' ' +
+          date.toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        );
+      }
+    }
+  };
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);

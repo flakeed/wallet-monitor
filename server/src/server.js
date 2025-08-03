@@ -189,7 +189,7 @@ app.delete('/api/wallets', async (req, res) => {
     const result = await db.removeAllWallets();
     res.json({
       success: true,
-      message: `Successfully removed ${result.deletedCount} wallets and associated data`,
+      message: `Successfully removed wallets and associated data`,
       deletedCount: result.deletedCount,
     });
   } catch (error) {
