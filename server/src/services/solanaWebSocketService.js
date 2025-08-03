@@ -5,7 +5,7 @@ const Database = require('../database/connection');
 
 class SolanaWebSocketService {
     constructor() {
-        this.rpcUrl = process.env.HELIUS_RPC_URL || 'https://api.mainnet-beta.solana.com';
+        this.rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
         this.wsUrl = this.rpcUrl.replace('https://', 'wss://').replace('http://', 'ws://');
         this.connection = new Connection(this.rpcUrl, 'confirmed');
         this.monitoringService = new WalletMonitoringService();
