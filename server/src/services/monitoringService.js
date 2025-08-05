@@ -77,11 +77,13 @@ class WalletMonitoringService {
                                 walletAddress,
                                 transactionType: txData.type,
                                 solAmount: txData.solAmount,
+                                usdAmount: txData.usdAmount,
                                 tokens: txData.tokensChanged.map((tc) => ({
                                     mint: tc.mint,
                                     amount: tc.rawChange / Math.pow(10, tc.decimals),
                                     symbol: tc.symbol,
                                     name: tc.name,
+                                    logoURI: tc.logoURI,
                                 })),
                                 timestamp: new Date(blockTime * 1000).toISOString(),
                             };
@@ -242,6 +244,7 @@ class WalletMonitoringService {
             const tokenInfo = tokenInfos.get(post.mint) || {
                 symbol: 'Unknown',
                 name: 'Unknown Token',
+                logoURI: null,
                 decimals: post.uiTokenAmount.decimals,
             };
 
@@ -251,6 +254,7 @@ class WalletMonitoringService {
                 decimals: post.uiTokenAmount.decimals,
                 symbol: tokenInfo.symbol,
                 name: tokenInfo.name,
+                logoURI: tokenInfo.logoURI,
             });
         }
 
@@ -308,11 +312,12 @@ class WalletMonitoringService {
             }
 
             const tokenUpsertQuery = `
-        INSERT INTO tokens (mint, symbol, name, decimals) 
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO tokens (mint, symbol, name, logo_uri, decimals) 
+        VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (mint) DO UPDATE SET
           symbol = EXCLUDED.symbol,
           name = EXCLUDED.name,
+          logo_uri = EXCLUDED.logo_uri,
           decimals = EXCLUDED.decimals,
           updated_at = CURRENT_TIMESTAMP
         RETURNING id
@@ -321,6 +326,7 @@ class WalletMonitoringService {
                 tokenChange.mint,
                 tokenInfo.symbol,
                 tokenInfo.name,
+                tokenInfo.logoURI,
                 tokenInfo.decimals,
             ]);
 

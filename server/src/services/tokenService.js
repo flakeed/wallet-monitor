@@ -115,7 +115,7 @@ async function processHeliusRequest(mint, connection) {
     if (!HELIUS_API_KEY) {
         console.warn(`[${new Date().toISOString()}] HELIUS_API_KEY not set — trying on-chain metadata`);
         const onChainData = await fetchOnChainMetadata(mint, connection);
-        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
+        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', logoURI: null, decimals: 0 };
         await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
         return data;
     }
@@ -145,7 +145,7 @@ async function processHeliusRequest(mint, connection) {
                     });
 
                     if (uriResponse.data && uriResponse.data.image) {
-                        logoURI = uriResponse.data.image;
+                        logoURI = normalizeImageUrl(uriResponse.data.image);
                         console.log(`[${new Date().toISOString()}] ✅ Found logo for mint ${mint}: ${logoURI}`);
                     }
                 } catch (uriError) {
@@ -171,7 +171,7 @@ async function processHeliusRequest(mint, connection) {
     }
 
     const onChainData = await fetchOnChainMetadata(mint, connection);
-    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
+    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', logoURI: null, decimals: 0 };
     await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
     return data;
 }
@@ -216,6 +216,57 @@ async function fetchTokenMetadata(mint, connection) {
     });
 }
 
+async function fetchHistoricalSolPrice(timestamp) {
+    const cacheKey = `solprice:${timestamp.toISOString().slice(0, 16)}`;
+    const cachedPrice = await redis.get(cacheKey);
+    if (cachedPrice) {
+        console.log(`[${new Date().toISOString()}] ⚡ Fast SOL price cache hit for ${cacheKey}: $${cachedPrice}`);
+        return parseFloat(cachedPrice);
+    }
+
+    const time_now = Date.now();
+    if (time_now - lastPriceRequest < PRICE_REQUEST_DELAY) {
+        await new Promise((resolve) => setTimeout(resolve, PRICE_REQUEST_DELAY));
+    }
+    lastPriceRequest = Date.now();
+
+    try {
+        const time = timestamp.getTime();
+        console.log(`[${new Date().toISOString()}] Fetching historical SOL price for ${cacheKey}`);
+        const response = await axios.get(
+            `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=${time}&endTime=${time + 60000}`,
+            { timeout: 3000 }
+        );
+
+        let price = null;
+        if (response.data && response.data.length > 0) {
+            price = parseFloat(response.data[0][4]);
+            console.log(`[${new Date().toISOString()}] ✅ Got historical SOL price: $${price}`);
+        } else {
+            const currentResponse = await axios.get(
+                `https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT`,
+                { timeout: 3000 }
+            );
+            price = parseFloat(currentResponse.data.price);
+            console.log(`[${new Date().toISOString()}] ✅ Using current SOL price: $${price}`);
+        }
+
+        if (price) {
+            await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
+            return price;
+        }
+
+        console.warn(`[${new Date().toISOString()}] No price data available for ${cacheKey}`);
+    } catch (e) {
+        console.error(`[${new Date().toISOString()}] Error fetching SOL price for ${cacheKey}:`, e.message);
+    }
+
+    console.warn(`[${new Date().toISOString()}] Using fallback price for ${cacheKey}`);
+    const fallbackPrice = 180;
+    await redis.set(cacheKey, fallbackPrice, 'EX', PRICE_CACHE_TTL);
+    return fallbackPrice;
+}
+
 async function fetchOnChainMetadata(mint, connection) {
     try {
         const metaplex = new Metaplex(connection);
@@ -226,6 +277,7 @@ async function fetchOnChainMetadata(mint, connection) {
                 address: mint,
                 symbol: metadataAccount.data.symbol || 'Unknown',
                 name: metadataAccount.data.name || 'Unknown Token',
+                logoURI: metadataAccount.data.uri || null,
                 decimals: metadataAccount.mint.decimals || 0,
             };
         }
@@ -234,6 +286,14 @@ async function fetchOnChainMetadata(mint, connection) {
         console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
     }
     return null;
+}
+
+function normalizeImageUrl(imageUrl) {
+    if (!imageUrl) return null;
+    if (imageUrl.startsWith('ipfs://')) {
+        return imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+    }
+    return imageUrl;
 }
 
 async function getPurchasesTransactions(walletAddress, connection) {
@@ -283,12 +343,14 @@ async function getPurchasesTransactions(walletAddress, connection) {
                     mint: t.mint,
                     symbol: 'Unknown',
                     name: 'Unknown Token',
+                    logoURI: null,
                     decimals: t.decimals,
                 };
                 tokensBought.push({
                     mint: t.mint,
                     symbol: tokenInfo.symbol,
                     name: tokenInfo.name,
+                    logoURI: tokenInfo.logoURI,
                     amount: t.uiChange,
                     decimals: tokenInfo.decimals,
                 });
@@ -299,12 +361,22 @@ async function getPurchasesTransactions(walletAddress, connection) {
                 continue;
             }
 
+            let solPrice;
+            try {
+                solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
+            } catch (error) {
+                console.warn(`[${new Date().toISOString()}] Using fallback SOL price for transaction ${sig.signature}`);
+                solPrice = 180;
+            }
+
             const spentSOL = +(-solChange).toFixed(6);
+            const spentUSD = +(solPrice * spentSOL).toFixed(2);
 
             purchasesTxs.push({
                 signature: sig.signature,
                 time: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : null,
                 spentSOL,
+                spentUSD,
                 tokensBought,
             });
         } catch (e) {
@@ -316,8 +388,10 @@ async function getPurchasesTransactions(walletAddress, connection) {
 }
 
 module.exports = {
-    fetchTokenMetadata,
+    fetchHistoricalSolPrice,
     fetchOnChainMetadata,
+    normalizeImageUrl,
+    fetchTokenMetadata,
     getPurchasesTransactions,
     redis,
 };
