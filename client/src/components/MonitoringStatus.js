@@ -8,14 +8,13 @@ function MonitoringStatus({ status, onToggle }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
           <div className="flex items-center space-x-2">
-            <div className={`w-3 h-3 rounded-full ${
-              isMonitoring ? 'bg-green-500 animate-pulse' : 'bg-red-500'
-            }`}></div>
+            <div className={`w-3 h-3 rounded-full ${isMonitoring ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+              }`}></div>
             <span className="text-lg font-semibold text-gray-900">
               Monitoring Status: {isMonitoring ? 'Active' : 'Inactive'}
             </span>
           </div>
-          
+
           {processedSignatures > 0 && (
             <div className="text-sm text-gray-500">
               Processed: {processedSignatures.toLocaleString()} signatures

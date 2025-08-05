@@ -52,7 +52,6 @@ function App() {
     }
   };
 
-  // Real-time transaction updates via SSE
   useEffect(() => {
     const eventSource = new EventSource(`${API_BASE}/transactions/stream`);
 
@@ -61,7 +60,6 @@ function App() {
         const newTransaction = JSON.parse(event.data);
         console.log('New transaction received via SSE:', newTransaction);
 
-        // Check if transaction matches current filters
         const now = new Date();
         const txTime = new Date(newTransaction.timestamp);
         const hoursDiff = (now - txTime) / (1000 * 60 * 60);
@@ -70,11 +68,9 @@ function App() {
 
         if (matchesTimeframe && matchesType) {
           setTransactions((prev) => {
-            // Prevent duplicates by checking signature
             if (prev.some((tx) => tx.signature === newTransaction.signature)) {
               return prev;
             }
-            // Format the transaction to match the structure from /api/transactions
             const formattedTransaction = {
               signature: newTransaction.signature,
               time: newTransaction.timestamp,
@@ -90,7 +86,7 @@ function App() {
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
             };
-            return [formattedTransaction, ...prev].slice(0, 50); // Limit to 50 transactions
+            return [formattedTransaction, ...prev].slice(0, 50);
           });
         }
       } catch (err) {
@@ -103,7 +99,6 @@ function App() {
       eventSource.close();
       setTimeout(() => {
         console.log('Attempting to reconnect to SSE...');
-        // Reconnection is handled automatically by creating a new EventSource on the next useEffect trigger
       }, 5000);
     };
 
@@ -111,7 +106,7 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets]); // Re-run when filters or wallets change
+  }, [timeframe, transactionType, wallets]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);

@@ -19,15 +19,12 @@ app.use(
 );
 app.use(express.json());
 
-// Initialize services
 const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
 
-// Keep track of SSE clients
 const sseClients = new Set();
 
-// Start WebSocket service with retry logic
 const startWebSocketService = async () => {
   let retries = 0;
   const maxRetries = 5;
@@ -53,10 +50,8 @@ const startWebSocketService = async () => {
   console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
 };
 
-// Initialize WebSocket service
 setTimeout(startWebSocketService, 2000);
 
-// SSE endpoint for real-time transaction updates
 app.get('/api/transactions/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -99,7 +94,6 @@ app.get('/api/transactions/stream', (req, res) => {
   }, 30000);
 });
 
-// Fetch wallets
 app.get('/api/wallets', async (req, res) => {
   try {
     const wallets = await db.getActiveWallets();
@@ -130,7 +124,6 @@ app.get('/api/wallets', async (req, res) => {
   }
 });
 
-// Add wallet
 app.post('/api/wallets', async (req, res) => {
   try {
     const { address, name } = req.body;
@@ -159,7 +152,6 @@ app.post('/api/wallets', async (req, res) => {
   }
 });
 
-// Remove wallet
 app.delete('/api/wallets/:address', async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -198,7 +190,6 @@ app.delete('/api/wallets', async (req, res) => {
   }
 });
 
-// Fetch transactions
 app.get('/api/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
@@ -253,7 +244,6 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
-// Monitoring status
 app.get('/api/monitoring/status', (req, res) => {
   try {
     const monitoringStatus = monitoringService.getStatus();
@@ -268,7 +258,6 @@ app.get('/api/monitoring/status', (req, res) => {
   }
 });
 
-// Toggle monitoring
 app.post('/api/monitoring/toggle', async (req, res) => {
   try {
     const { action } = req.body;
@@ -288,7 +277,6 @@ app.post('/api/monitoring/toggle', async (req, res) => {
   }
 });
 
-// Fetch wallet details
 app.get('/api/wallet/:address', async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -359,7 +347,6 @@ app.get('/api/wallet/:address', async (req, res) => {
   }
 });
 
-// Transaction stats
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
@@ -382,7 +369,6 @@ app.get('/api/stats/transactions', async (req, res) => {
   }
 });
 
-// Bulk wallet import
 app.post('/api/wallets/bulk', async (req, res) => {
   try {
     const { wallets } = req.body;
@@ -459,7 +445,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
-// Bulk import template
 app.get('/api/wallets/bulk-template', (req, res) => {
   const template = `# Bulk Wallet Import Template
 # Format: address,name (name is optional)
@@ -478,7 +463,6 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
   res.send(template);
 });
 
-// Validate wallets
 app.post('/api/wallets/validate', (req, res) => {
   try {
     const { wallets } = req.body;
@@ -517,7 +501,6 @@ app.post('/api/wallets/validate', (req, res) => {
   }
 });
 
-// Top tokens
 app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -531,7 +514,6 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// WebSocket status
 app.get('/api/websocket/status', (req, res) => {
   try {
     const status = solanaWebSocketService.getStatus();
@@ -542,7 +524,6 @@ app.get('/api/websocket/status', (req, res) => {
   }
 });
 
-// Reconnect WebSocket
 app.post('/api/websocket/reconnect', async (req, res) => {
   try {
     await solanaWebSocketService.stop();
@@ -558,7 +539,6 @@ app.post('/api/websocket/reconnect', async (req, res) => {
   }
 });
 
-// Graceful shutdown
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
@@ -577,7 +557,6 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Start server
 app.listen(port, '158.220.125.26', () => {
   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);

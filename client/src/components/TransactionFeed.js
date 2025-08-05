@@ -188,9 +188,8 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                           {tx.wallet.name || `${tx.wallet.address.slice(0, 6)}...${tx.wallet.address.slice(-4)}`}
                         </p>
                         <span
-                          className={`text-xs px-2 py-1 rounded-full font-medium ${
-                            tx.transactionType === 'buy' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                          }`}
+                          className={`text-xs px-2 py-1 rounded-full font-medium ${tx.transactionType === 'buy' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }`}
                         >
                           {getTransactionLabel(tx.transactionType)}
                         </span>
