@@ -192,7 +192,9 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                     </div>
                   </div>
                 </div>
-
+                <div className="text-right">
+                  <p className={`font-bold ${amountDisplay.color}`}>{amountDisplay.sol}</p>
+                </div>
               </div>
               <div className="mb-3">
                 <div className="flex items-center space-x-2">
