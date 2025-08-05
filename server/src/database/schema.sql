@@ -16,8 +16,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     block_time TIMESTAMP WITH TIME ZONE NOT NULL,
     sol_spent DECIMAL(20, 9) DEFAULT 0, 
     sol_received DECIMAL(20, 9) DEFAULT 0,
-    usd_spent DECIMAL(15, 2) DEFAULT 0,
-    usd_received DECIMAL(15, 2) DEFAULT 0,
     transaction_type VARCHAR(20) DEFAULT 'buy',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
@@ -130,8 +128,6 @@ SELECT
     t.transaction_type,
     t.sol_spent,
     t.sol_received,
-    t.usd_spent,
-    t.usd_received,
     w.address as wallet_address,
     w.name as wallet_name,
     tk.mint,
@@ -167,10 +163,6 @@ DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'sol_received') THEN
         ALTER TABLE transactions ADD COLUMN sol_received DECIMAL(20, 9);
-    END IF;
-    
-    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'usd_received') THEN
-        ALTER TABLE transactions ADD COLUMN usd_received DECIMAL(15, 2);
     END IF;
     
     UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;

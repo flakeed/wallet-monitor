@@ -86,7 +86,6 @@ async function showStats(db) {
         console.log(`👛 Active Wallets: ${stats.active_wallets}`);
         console.log(`📊 Transactions Today: ${stats.transactions_today}`);
         console.log(`💰 SOL Spent Today: ${Number(stats.sol_spent_today).toFixed(6)}`);
-        console.log(`💵 USD Spent Today: $${Number(stats.usd_spent_today).toFixed(2)}`);
         console.log(`🪙 Unique Tokens Today: ${stats.unique_tokens_today}`);
         
         if (wallets.length > 0) {

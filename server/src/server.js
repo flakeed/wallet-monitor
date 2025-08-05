@@ -207,8 +207,6 @@ app.get('/api/transactions', async (req, res) => {
           transactionType: row.transaction_type,
           solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
           solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
-          usdSpent: row.usd_spent ? Number(row.usd_spent).toFixed(2) : null,
-          usdReceived: row.usd_received ? Number(row.usd_received).toFixed(2) : null,
           wallet: {
             address: row.wallet_address,
             name: row.wallet_name,
@@ -307,8 +305,6 @@ app.get('/api/wallet/:address', async (req, res) => {
           transactionType: row.transaction_type,
           solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
           solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
-          usdSpent: row.usd_spent ? Number(row.usd_spent).toFixed(2) : null,
-          usdReceived: row.usd_received ? Number(row.usd_received).toFixed(2) : null,
           tokensBought: [],
           tokensSold: [],
         };

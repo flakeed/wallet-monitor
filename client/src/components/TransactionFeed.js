@@ -98,21 +98,15 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
     if (tx.transactionType === 'buy') {
       return {
         sol: `-${tx.solSpent} SOL`,
-        usd: tx.usdSpent
-          ? `$${Number(tx.usdSpent).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          : null,
         color: 'text-red-600',
       };
     } else if (tx.transactionType === 'sell') {
       return {
         sol: `+${tx.solReceived} SOL`,
-        usd: tx.usdReceived
-          ? `$${Number(tx.usdReceived).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          : null,
         color: 'text-green-600',
       };
     }
-    return { sol: '0 SOL', usd: null, color: 'text-gray-600' };
+    return { sol: '0 SOL', color: 'text-gray-600' };
   };
 
   if (!transactions || transactions.length === 0) {
@@ -198,10 +192,7 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
                     </div>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className={`font-bold ${amountDisplay.color}`}>{amountDisplay.sol}</p>
-                  {amountDisplay.usd && <p className="text-sm text-gray-600">{amountDisplay.usd}</p>}
-                </div>
+
               </div>
               <div className="mb-3">
                 <div className="flex items-center space-x-2">

@@ -14,11 +14,6 @@ function PurchaseCard({ tx, index }) {
           <p className="font-semibold text-gray-900">
             -{(typeof tx.spentSOL === 'number' ? tx.spentSOL : 0).toFixed(6)} SOL
           </p>
-          {tx.spentUSD && (
-            <p className="text-sm text-gray-600">
-              ${Number(tx.spentUSD).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
-            </p>
-          )}
         </div>
       </div>
 

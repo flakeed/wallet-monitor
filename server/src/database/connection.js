@@ -147,7 +147,7 @@ async removeAllWallets() {
         const query = `
             INSERT INTO transactions (
                 wallet_id, signature, block_time, transaction_type,
-                sol_spent, usd_spent, sol_received, usd_received
+                sol_spent, sol_received
             ) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id, signature, transaction_type
@@ -205,8 +205,6 @@ async getRecentTransactions(hours = 24, limit = 400, transactionType = null) {
                 t.transaction_type,
                 t.sol_spent,
                 t.sol_received,
-                t.usd_spent,
-                t.usd_received,
                 w.address as wallet_address,
                 w.name as wallet_name
             FROM transactions t
@@ -233,8 +231,6 @@ async getRecentTransactions(hours = 24, limit = 400, transactionType = null) {
                 t.transaction_type,
                 t.sol_spent,
                 t.sol_received,
-                t.usd_spent,
-                t.usd_received,
                 w.address as wallet_address,
                 w.name as wallet_name,
                 tk.mint,
@@ -271,8 +267,6 @@ async getWalletStats(walletId) {
                 COUNT(CASE WHEN transaction_type = 'sell' THEN 1 END) as total_sell_transactions,
                 COALESCE(SUM(sol_spent), 0) as total_sol_spent,
                 COALESCE(SUM(sol_received), 0) as total_sol_received,
-                COALESCE(SUM(usd_spent), 0) as total_usd_spent,
-                COALESCE(SUM(usd_received), 0) as total_usd_received,
                 MAX(block_time) as last_transaction_at,
                 COUNT(DISTINCT CASE WHEN to_.operation_type = 'buy' THEN to_.token_id END) as unique_tokens_bought,
                 COUNT(DISTINCT CASE WHEN to_.operation_type = 'sell' THEN to_.token_id END) as unique_tokens_sold
@@ -367,8 +361,6 @@ async getWalletStats(walletId) {
                 COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as sell_transactions_today,
                 COALESCE(SUM(t.sol_spent), 0) as sol_spent_today,
                 COALESCE(SUM(t.sol_received), 0) as sol_received_today,
-                COALESCE(SUM(t.usd_spent), 0) as usd_spent_today,
-                COALESCE(SUM(t.usd_received), 0) as usd_received_today,
                 COUNT(DISTINCT to_.token_id) as unique_tokens_today
             FROM wallets w
             LEFT JOIN transactions t ON w.id = t.wallet_id 

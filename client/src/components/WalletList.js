@@ -217,20 +217,6 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-                  <div>
-                    <span className="text-gray-500">USD Spent:</span>
-                    <div className="font-semibold text-red-600">
-                      ${formatNumber(wallet.stats.totalSpentUSD, 2)}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">USD Received:</span>
-                    <div className="font-semibold text-green-600">
-                      ${formatNumber(wallet.stats.totalReceivedUSD, 2)}
-                    </div>
-                  </div>
-                </div>
                 <div className="border-t pt-2 mt-2">
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div>
@@ -238,13 +224,6 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                       <div className={`font-semibold ${Number(wallet.stats.netSOL) >= 0 ? 'text-green-600' : 'text-red-600'
                         }`}>
                         {Number(wallet.stats.netSOL) >= 0 ? '+' : ''}{formatNumber(wallet.stats.netSOL, 6)}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Net USD:</span>
-                      <div className={`font-semibold ${Number(wallet.stats.netUSD) >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                        {Number(wallet.stats.netUSD) >= 0 ? '+$' : '-$'}{formatNumber(Math.abs(wallet.stats.netUSD), 2)}
                       </div>
                     </div>
                   </div>

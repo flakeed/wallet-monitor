@@ -6,7 +6,6 @@ const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
 
 let tokenMap = new Map();
-let solPriceCache = new Map();
 const requestQueue = [];
 let isProcessingQueue = false;
 
@@ -216,56 +215,56 @@ async function fetchTokenMetadata(mint, connection) {
     });
 }
 
-async function fetchHistoricalSolPrice(timestamp) {
-    const cacheKey = `solprice:${timestamp.toISOString().slice(0, 16)}`;
-    const cachedPrice = await redis.get(cacheKey);
-    if (cachedPrice) {
-        console.log(`[${new Date().toISOString()}] ⚡ Fast SOL price cache hit for ${cacheKey}: $${cachedPrice}`);
-        return parseFloat(cachedPrice);
-    }
+// async function fetchHistoricalSolPrice(timestamp) {
+//     const cacheKey = `solprice:${timestamp.toISOString().slice(0, 16)}`;
+//     const cachedPrice = await redis.get(cacheKey);
+//     if (cachedPrice) {
+//         console.log(`[${new Date().toISOString()}] ⚡ Fast SOL price cache hit for ${cacheKey}: $${cachedPrice}`);
+//         return parseFloat(cachedPrice);
+//     }
 
-    const time_now = Date.now();
-    if (time_now - lastPriceRequest < PRICE_REQUEST_DELAY) {
-        await new Promise((resolve) => setTimeout(resolve, PRICE_REQUEST_DELAY));
-    }
-    lastPriceRequest = Date.now();
+//     const time_now = Date.now();
+//     if (time_now - lastPriceRequest < PRICE_REQUEST_DELAY) {
+//         await new Promise((resolve) => setTimeout(resolve, PRICE_REQUEST_DELAY));
+//     }
+//     lastPriceRequest = Date.now();
 
-    try {
-        const time = timestamp.getTime();
-        console.log(`[${new Date().toISOString()}] Fetching historical SOL price for ${cacheKey}`);
-        const response = await axios.get(
-            `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=${time}&endTime=${time + 60000}`,
-            { timeout: 3000 }
-        );
+//     try {
+//         const time = timestamp.getTime();
+//         console.log(`[${new Date().toISOString()}] Fetching historical SOL price for ${cacheKey}`);
+//         const response = await axios.get(
+//             `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=${time}&endTime=${time + 60000}`,
+//             { timeout: 3000 }
+//         );
 
-        let price = null;
-        if (response.data && response.data.length > 0) {
-            price = parseFloat(response.data[0][4]);
-            console.log(`[${new Date().toISOString()}] ✅ Got historical SOL price: $${price}`);
-        } else {
-            const currentResponse = await axios.get(
-                `https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT`,
-                { timeout: 3000 }
-            );
-            price = parseFloat(currentResponse.data.price);
-            console.log(`[${new Date().toISOString()}] ✅ Using current SOL price: $${price}`);
-        }
+//         let price = null;
+//         if (response.data && response.data.length > 0) {
+//             price = parseFloat(response.data[0][4]);
+//             console.log(`[${new Date().toISOString()}] ✅ Got historical SOL price: $${price}`);
+//         } else {
+//             const currentResponse = await axios.get(
+//                 `https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT`,
+//                 { timeout: 3000 }
+//             );
+//             price = parseFloat(currentResponse.data.price);
+//             console.log(`[${new Date().toISOString()}] ✅ Using current SOL price: $${price}`);
+//         }
 
-        if (price) {
-            await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
-            return price;
-        }
+//         if (price) {
+//             await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
+//             return price;
+//         }
 
-        console.warn(`[${new Date().toISOString()}] No price data available for ${cacheKey}`);
-    } catch (e) {
-        console.error(`[${new Date().toISOString()}] Error fetching SOL price for ${cacheKey}:`, e.message);
-    }
+//         console.warn(`[${new Date().toISOString()}] No price data available for ${cacheKey}`);
+//     } catch (e) {
+//         console.error(`[${new Date().toISOString()}] Error fetching SOL price for ${cacheKey}:`, e.message);
+//     }
 
-    console.warn(`[${new Date().toISOString()}] Using fallback price for ${cacheKey}`);
-    const fallbackPrice = 180;
-    await redis.set(cacheKey, fallbackPrice, 'EX', PRICE_CACHE_TTL);
-    return fallbackPrice;
-}
+//     console.warn(`[${new Date().toISOString()}] Using fallback price for ${cacheKey}`);
+//     const fallbackPrice = 180;
+//     await redis.set(cacheKey, fallbackPrice, 'EX', PRICE_CACHE_TTL);
+//     return fallbackPrice;
+// }
 
 async function fetchOnChainMetadata(mint, connection) {
     try {
@@ -361,22 +360,12 @@ async function getPurchasesTransactions(walletAddress, connection) {
                 continue;
             }
 
-            let solPrice;
-            try {
-                solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
-            } catch (error) {
-                console.warn(`[${new Date().toISOString()}] Using fallback SOL price for transaction ${sig.signature}`);
-                solPrice = 180;
-            }
-
             const spentSOL = +(-solChange).toFixed(6);
-            const spentUSD = +(solPrice * spentSOL).toFixed(2);
 
             purchasesTxs.push({
                 signature: sig.signature,
                 time: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : null,
                 spentSOL,
-                spentUSD,
                 tokensBought,
             });
         } catch (e) {
@@ -388,7 +377,6 @@ async function getPurchasesTransactions(walletAddress, connection) {
 }
 
 module.exports = {
-    fetchHistoricalSolPrice,
     fetchOnChainMetadata,
     normalizeImageUrl,
     fetchTokenMetadata,

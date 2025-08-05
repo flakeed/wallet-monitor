@@ -182,7 +182,7 @@ class WalletMonitoringService {
                 const query = `
           INSERT INTO transactions (
             wallet_id, signature, block_time, transaction_type,
-            sol_spent, usd_spent, sol_received, usd_received
+            sol_spent, sol_received
           ) 
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           RETURNING id, signature, transaction_type
