@@ -24,7 +24,7 @@ class WalletMonitoringService {
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
-        this.batchSize = 50;
+        this.batchSize = 400;
         console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized`);
     }
 

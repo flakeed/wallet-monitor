@@ -405,7 +405,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
       }
     }
 
-    const batchSize = 50;
+    const batchSize = 400;
     for (let i = 0; i < wallets.length; i += batchSize) {
       const batch = wallets.slice(i, i + batchSize);
       await Promise.all(

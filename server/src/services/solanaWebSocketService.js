@@ -24,7 +24,7 @@ class SolanaWebSocketService {
         this.pendingRequests = new Map();
         this.messageCount = 0;
         this.isStarted = false;
-        this.batchSize = 50;
+        this.batchSize = 400;
         this.maxSubscriptions = 500;
     }
 

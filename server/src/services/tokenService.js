@@ -57,7 +57,7 @@ async function processQueue() {
     isProcessingQueue = true;
 
     while (true) {
-        const requestData = await redis.lpop('helius:queue', 50); 
+        const requestData = await redis.lpop('helius:queue', 400); 
         if (!requestData || requestData.length === 0) break;
 
         const requests = requestData.map((data) => {
