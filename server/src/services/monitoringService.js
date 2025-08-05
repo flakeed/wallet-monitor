@@ -2,10 +2,13 @@ const { Connection, PublicKey } = require('@solana/web3.js');
 const { fetchTokenMetadata, redis, getParsedTransactionCached } = require('./tokenService');
 const Database = require('../database/connection');
 const Redis = require('ioredis');
-const pLimit = require('p-limit');
+const { default: pLimit } = require('p-limit');
 
 class WalletMonitoringService {
-    constructor() {
+constructor() {
+        if (WalletMonitoringService.instance) {
+            return WalletMonitoringService.instance; 
+        }
         this.db = new Database();
         this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', {
             commitment: 'confirmed',
@@ -26,8 +29,9 @@ class WalletMonitoringService {
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
         this.batchSize = 200;
-        this.limit = pLimit(10); 
+        this.limit = pLimit(10);
         console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized`);
+        WalletMonitoringService.instance = this; 
     }
 
     startMonitoring() {

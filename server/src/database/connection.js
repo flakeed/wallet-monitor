@@ -3,28 +3,32 @@ const fs = require('fs');
 const path = require('path');
 const Redis = require('ioredis');
 const { Histogram, Gauge } = require('prom-client');
+const queryDuration = new Histogram({
+    name: 'database_query_duration_seconds',
+    help: 'Duration of database queries in seconds',
+    buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
+});
+const poolConnections = new Gauge({
+    name: 'database_pool_connections',
+    help: 'Current database pool connections',
+    labelNames: ['status'],
+});
 
 class Database {
     constructor() {
+        if (Database.instance) {
+            return Database.instance; 
+        }
         this.pool = new Pool({
             connectionString: process.env.DATABASE_URL,
-            max: 30, 
-            idleTimeoutMillis: 10000, 
-            connectionTimeoutMillis: 5000, 
+            max: 30,
+            idleTimeoutMillis: 10000,
+            connectionTimeoutMillis: 5000,
             ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
         });
-
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
-        this.queryDuration = new Histogram({
-            name: 'database_query_duration_seconds',
-            help: 'Duration of database queries in seconds',
-            buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
-        });
-        this.poolConnections = new Gauge({
-            name: 'database_pool_connections',
-            help: 'Current database pool connections',
-            labelNames: ['status'],
-        });
+        this.queryDuration = queryDuration;
+        this.poolConnections = poolConnections;
 
         this.pool.on('error', (err) => {
             console.error(`[${new Date().toISOString()}] ❌ Unexpected error on idle PostgreSQL client`, err.message);
@@ -37,6 +41,7 @@ class Database {
         });
 
         this.initDatabase();
+        Database.instance = this;
     }
 
     async initDatabase() {

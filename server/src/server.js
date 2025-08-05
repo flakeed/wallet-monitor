@@ -544,13 +544,12 @@ process.on('SIGTERM', async () => {
   sseClients.forEach((client) => client.end());
   process.exit(0);
 });
-
-app.listen(port, '158.220.125.26', () => {
-  console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
-  console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
-  console.log(
-    `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
-      monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
-    }`
-  );
+app.listen(port, '0.0.0.0', () => {
+    console.log(`[${new Date().toISOString()}] 🚀 Server running on http://0.0.0.0:${port}`);
+    console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
+    console.log(
+        `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
+            monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
+        }`
+    );
 });

@@ -4,7 +4,8 @@ const axios = require('axios');
 const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
-const pLimit = require('p-limit');
+const { default: pLimit } = require('p-limit');
+
 
 let isProcessingQueue = false;
 
@@ -381,6 +382,26 @@ async function getPurchasesTransactions(walletAddress, connection) {
     }
 
     return purchasesTxs;
+}
+
+async function fetchOnChainMetadata(mint, connection) {
+    try {
+        const metaplex = new Metaplex(connection);
+        const mintPubkey = new PublicKey(mint);
+        const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
+        if (metadataAccount && metadataAccount.data) {
+            return {
+                address: mint,
+                symbol: metadataAccount.data.symbol || 'Unknown',
+                name: metadataAccount.data.name || 'Unknown Token',
+                decimals: metadataAccount.mint.decimals || 0,
+            };
+        }
+        console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
+    } catch (e) {
+        console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
+    }
+    return null;
 }
 
 module.exports = {
