@@ -1,5 +1,7 @@
+-- Enable uuid-ossp extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Create tables
 CREATE TABLE IF NOT EXISTS wallets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     address VARCHAR(44) UNIQUE NOT NULL,
@@ -14,7 +16,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     wallet_id UUID NOT NULL,
     signature VARCHAR(88) UNIQUE NOT NULL,
     block_time TIMESTAMP WITH TIME ZONE NOT NULL,
-    sol_spent DECIMAL(20, 9) DEFAULT 0, 
+    sol_spent DECIMAL(20, 9) DEFAULT 0,
     sol_received DECIMAL(20, 9) DEFAULT 0,
     transaction_type VARCHAR(20) NOT NULL CHECK (transaction_type IN ('buy', 'sell')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -35,7 +37,7 @@ CREATE TABLE IF NOT EXISTS token_operations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     transaction_id UUID NOT NULL,
     token_id UUID NOT NULL,
-    amount DECIMAL(30, 18) NOT NULL, 
+    amount DECIMAL(30, 18) NOT NULL,
     operation_type VARCHAR(10) NOT NULL CHECK (operation_type IN ('buy', 'sell')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE,
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS monitoring_stats (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Create indexes
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
 CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON wallets(is_active);
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
@@ -82,18 +85,59 @@ CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON transactions(wallet_i
 CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON token_operations(token_id, amount DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON transactions(transaction_type, block_time DESC);
 
+-- Create trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
-CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON wallets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON tokens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_wallet_stats_updated_at BEFORE UPDATE ON wallet_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Create triggers
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger 
+        WHERE tgname = 'update_wallets_updated_at' 
+        AND tgrelid = 'wallets'::regclass
+    ) THEN
+        CREATE TRIGGER update_wallets_updated_at 
+        BEFORE UPDATE ON wallets 
+        FOR EACH ROW 
+        EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger 
+        WHERE tgname = 'update_tokens_updated_at' 
+        AND tgrelid = 'tokens'::regclass
+    ) THEN
+        CREATE TRIGGER update_tokens_updated_at 
+        BEFORE UPDATE ON tokens 
+        FOR EACH ROW 
+        EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger 
+        WHERE tgname = 'update_wallet_stats_updated_at' 
+        AND tgrelid = 'wallet_stats'::regclass
+    ) THEN
+        CREATE TRIGGER update_wallet_stats_updated_at 
+        BEFORE UPDATE ON wallet_stats 
+        FOR EACH ROW 
+        EXECUTE FUNCTION update_updated_at_column();
+    END IF;
+END $$;
+
+-- Create views
 CREATE OR REPLACE VIEW wallet_overview AS
 SELECT 
     w.id,
@@ -101,12 +145,12 @@ SELECT
     w.name,
     w.is_active,
     w.created_at,
-    COALESCE(ws.total_spent_sol, 0) as total_spent_sol,
-    COALESCE(ws.total_received_sol, 0) as total_received_sol,
-    COALESCE(ws.total_buy_transactions, 0) as total_buy_transactions,
-    COALESCE(ws.total_sell_transactions, 0) as total_sell_transactions,
-    COALESCE(ws.unique_tokens_bought, 0) as unique_tokens_bought,
-    COALESCE(ws.unique_tokens_sold, 0) as unique_tokens_sold,
+    COALESCE(ws.total_spent_sol, 0) AS total_spent_sol,
+    COALESCE(ws.total_received_sol, 0) AS total_received_sol,
+    COALESCE(ws.total_buy_transactions, 0) AS total_buy_transactions,
+    COALESCE(ws.total_sell_transactions, 0) AS total_sell_transactions,
+    COALESCE(ws.unique_tokens_bought, 0) AS unique_tokens_bought,
+    COALESCE(ws.unique_tokens_sold, 0) AS unique_tokens_sold,
     ws.last_transaction_at
 FROM wallets w
 LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
@@ -120,12 +164,12 @@ SELECT
     t.transaction_type,
     t.sol_spent,
     t.sol_received,
-    w.address as wallet_address,
-    w.name as wallet_name,
+    w.address AS wallet_address,
+    w.name AS wallet_name,
     tk.mint,
     tk.symbol,
-    tk.name as token_name,
-    to_.amount as token_amount,
+    tk.name AS token_name,
+    to_.amount AS token_amount,
     to_.operation_type,
     tk.decimals
 FROM transactions t
@@ -135,26 +179,45 @@ LEFT JOIN tokens tk ON to_.token_id = tk.id
 WHERE t.block_time >= NOW() - INTERVAL '24 hours'
 ORDER BY t.block_time DESC;
 
+-- Migration for legacy token_purchases table
 DO $$
 BEGIN
     IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'token_purchases') THEN
-        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'token_purchases' AND column_name = 'operation_type') THEN
-            ALTER TABLE token_purchases ADD COLUMN operation_type VARCHAR(10) DEFAULT 'buy';
+        -- Add operation_type column if it doesn't exist
+        IF NOT EXISTS (
+            SELECT FROM information_schema.columns 
+            WHERE table_name = 'token_purchases' AND column_name = 'operation_type'
+        ) THEN
+            ALTER TABLE token_purchases 
+            ADD COLUMN operation_type VARCHAR(10) DEFAULT 'buy';
+            UPDATE token_purchases SET operation_type = 'buy' WHERE operation_type IS NULL;
         END IF;
-        
-        ALTER TABLE token_purchases RENAME TO token_operations;
-        
-        UPDATE token_operations SET operation_type = 'buy' WHERE operation_type IS NULL;
-        
-        RAISE NOTICE 'Migrated token_purchases to token_operations';
+
+        -- Copy data to token_operations
+        INSERT INTO token_operations (id, transaction_id, token_id, amount, operation_type, created_at)
+        SELECT id, transaction_id, token_id, amount, operation_type, created_at
+        FROM token_purchases
+        ON CONFLICT DO NOTHING;
+
+        -- Drop token_purchases table
+        DROP TABLE token_purchases;
+        RAISE NOTICE 'Migrated token_purchases to token_operations and dropped token_purchases';
     END IF;
 END $$;
 
+-- Migration for transactions.sol_received
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'sol_received') THEN
-        ALTER TABLE transactions ADD COLUMN sol_received DECIMAL(20, 9);
+    IF NOT EXISTS (
+        SELECT FROM information_schema.columns 
+        WHERE table_name = 'transactions' AND column_name = 'sol_received'
+    ) THEN
+        ALTER TABLE transactions 
+        ADD COLUMN sol_received DECIMAL(20, 9) DEFAULT 0;
     END IF;
-    
-    UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
+
+    -- Ensure transaction_type is not null
+    UPDATE transactions 
+    SET transaction_type = 'buy' 
+    WHERE transaction_type IS NULL;
 END $$;

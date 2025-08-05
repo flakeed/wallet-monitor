@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const Redis = require('ioredis');
 const { Histogram, Gauge } = require('prom-client');
+
 const queryDuration = new Histogram({
     name: 'database_query_duration_seconds',
     help: 'Duration of database queries in seconds',
@@ -17,7 +18,7 @@ const poolConnections = new Gauge({
 class Database {
     constructor() {
         if (Database.instance) {
-            return Database.instance; 
+            return Database.instance;
         }
         this.pool = new Pool({
             connectionString: process.env.DATABASE_URL,
@@ -60,17 +61,13 @@ class Database {
         try {
             const schemaPath = path.join(__dirname, 'schema.sql');
             const schema = fs.readFileSync(schemaPath, 'utf8');
-            const statements = schema.split(';').map(stmt => stmt.trim()).filter(stmt => stmt.length > 0);
             const client = await this.pool.connect();
             try {
-                for (const statement of statements) {
-                    try {
-                        await client.query(statement);
-                    } catch (err) {
-                        console.warn(`[${new Date().toISOString()}] ⚠️ Error executing schema statement:`, err.message);
-                    }
-                }
+                await client.query(schema); // Execute the entire file as a single query
                 console.log(`[${new Date().toISOString()}] ✅ Database schema initialized`);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error executing schema:`, error.message);
+                throw error;
             } finally {
                 client.release();
             }
