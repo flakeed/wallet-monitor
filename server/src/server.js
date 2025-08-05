@@ -193,7 +193,7 @@ app.delete('/api/wallets', async (req, res) => {
 app.get('/api/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
 
     const transactions = await db.getRecentTransactions(hours, limit, type);

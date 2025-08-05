@@ -23,7 +23,7 @@ function App() {
     try {
       setError(null);
 
-      const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=50${type !== 'all' ? `&type=${type}` : ''}`;
+      const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}`;
 
       const [walletsRes, transactionsRes, statusRes] = await Promise.all([
         fetch(`${API_BASE}/wallets`),
@@ -86,7 +86,7 @@ function App() {
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
             };
-            return [formattedTransaction, ...prev].slice(0, 50);
+            return [formattedTransaction, ...prev].slice(0, 400);
           });
         }
       } catch (err) {

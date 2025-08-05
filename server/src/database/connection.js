@@ -188,7 +188,7 @@ async removeAllWallets() {
         return result.rows[0];
     }
 
-async getRecentTransactions(hours = 24, limit = 50, transactionType = null) {
+async getRecentTransactions(hours = 24, limit = 400, transactionType = null) {
     try {
         let typeFilter = '';
         let queryParams = [limit];
