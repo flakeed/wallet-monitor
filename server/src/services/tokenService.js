@@ -407,6 +407,7 @@ async function fetchOnChainMetadata(mint, connection) {
 module.exports = {
     fetchOnChainMetadata,
     fetchTokenMetadata,
+    getParsedTransactionCached,
     getPurchasesTransactions,
     redis,
     batchFetchTokenMetadata,
