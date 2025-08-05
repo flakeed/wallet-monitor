@@ -221,7 +221,6 @@ app.get('/api/transactions', async (req, res) => {
           mint: row.mint,
           symbol: row.symbol,
           name: row.token_name,
-          logoURI: row.logo_uri,
           amount: Number(row.token_amount),
           decimals: row.decimals || 6,
         };
@@ -315,7 +314,6 @@ app.get('/api/wallet/:address', async (req, res) => {
           mint: row.mint,
           symbol: row.token_name,
           name: row.token_name,
-          logoURI: row.logo_uri,
           amount: Number(row.token_amount),
           decimals: row.decimals || 6,
         };

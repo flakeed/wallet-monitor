@@ -7,7 +7,6 @@ function TokenCard({ token }) {
 
   const symbol = token.symbol || 'Unknown';
   const name = token.name || 'Unknown Token';
-  const logoURI = token.logoURI || null;
   const mint = token.mint || '';
   const decimals = token.decimals || 4;
 
@@ -19,22 +18,7 @@ function TokenCard({ token }) {
   return (
     <div className="bg-gray-50 rounded-lg p-3">
       <div className="flex items-center space-x-3">
-        {logoURI ? (
-          <img
-            src={logoURI}
-            alt={symbol}
-            className="w-8 h-8 rounded-full"
-            onError={(e) => {
-              e.target.style.display = 'none';
-              e.target.nextSibling.style.display = 'flex';
-            }}
-          />
-        ) : null}
-        <div
-          className={`w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center text-xs font-bold text-gray-600 ${logoURI ? 'hidden' : 'flex'}`}
-        >
-          ?
-        </div>
+
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center space-x-2">

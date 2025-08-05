@@ -26,10 +26,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     mint VARCHAR(44) UNIQUE NOT NULL,
     symbol VARCHAR(20),
     name VARCHAR(255),
-    logo_uri TEXT,
     decimals INTEGER DEFAULT 0,
-    market_cap DECIMAL(20, 2),
-    price_usd DECIMAL(20, 8),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -133,7 +130,6 @@ SELECT
     tk.mint,
     tk.symbol,
     tk.name as token_name,
-    tk.logo_uri,
     to_.amount as token_amount,
     to_.operation_type,
     tk.decimals

@@ -114,7 +114,7 @@ async function processHeliusRequest(mint, connection) {
     if (!HELIUS_API_KEY) {
         console.warn(`[${new Date().toISOString()}] HELIUS_API_KEY not set — trying on-chain metadata`);
         const onChainData = await fetchOnChainMetadata(mint, connection);
-        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', logoURI: null, decimals: 0 };
+        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token',  decimals: 0 };
         await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
         return data;
     }
@@ -129,35 +129,12 @@ async function processHeliusRequest(mint, connection) {
 
         if (response.data && response.data.length > 0) {
             const meta = response.data[0];
-            let logoURI = null;
-            const metadataUri = meta?.onChainMetadata?.metadata?.data?.uri;
-
-            if (metadataUri) {
-                try {
-                    const uriResponse = await axios.get(metadataUri, {
-                        timeout: 2000,
-                        responseType: 'json',
-                        headers: {
-                            'Accept': 'application/json',
-                            'User-Agent': 'Mozilla/5.0 (compatible; TokenMetadata/1.0)',
-                        },
-                    });
-
-                    if (uriResponse.data && uriResponse.data.image) {
-                        logoURI = normalizeImageUrl(uriResponse.data.image);
-                        console.log(`[${new Date().toISOString()}] ✅ Found logo for mint ${mint}: ${logoURI}`);
-                    }
-                } catch (uriError) {
-                    console.warn(`[${new Date().toISOString()}] Failed to fetch logo from URI for mint ${mint}:`, uriError.message);
-                }
-            }
 
             const tokenData = {
                 address: mint,
                 symbol: meta.onChainMetadata?.metadata?.data?.symbol || 'Unknown',
                 name: meta.onChainMetadata?.metadata?.data?.name || 'Unknown Token',
                 decimals: meta.onChainAccountInfo?.accountInfo?.data?.parsed?.info?.decimals || 0,
-                logoURI: logoURI || null,
             };
 
             await redis.set(`token:${mint}`, JSON.stringify(tokenData), 'EX', TOKEN_CACHE_TTL);
@@ -170,7 +147,7 @@ async function processHeliusRequest(mint, connection) {
     }
 
     const onChainData = await fetchOnChainMetadata(mint, connection);
-    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', logoURI: null, decimals: 0 };
+    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token',decimals: 0 };
     await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
     return data;
 }
@@ -276,7 +253,6 @@ async function fetchOnChainMetadata(mint, connection) {
                 address: mint,
                 symbol: metadataAccount.data.symbol || 'Unknown',
                 name: metadataAccount.data.name || 'Unknown Token',
-                logoURI: metadataAccount.data.uri || null,
                 decimals: metadataAccount.mint.decimals || 0,
             };
         }
@@ -342,14 +318,12 @@ async function getPurchasesTransactions(walletAddress, connection) {
                     mint: t.mint,
                     symbol: 'Unknown',
                     name: 'Unknown Token',
-                    logoURI: null,
                     decimals: t.decimals,
                 };
                 tokensBought.push({
                     mint: t.mint,
                     symbol: tokenInfo.symbol,
                     name: tokenInfo.name,
-                    logoURI: tokenInfo.logoURI,
                     amount: t.uiChange,
                     decimals: tokenInfo.decimals,
                 });

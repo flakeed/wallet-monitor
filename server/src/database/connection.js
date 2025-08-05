@@ -117,28 +117,25 @@ async removeAllWallets() {
 }
 
     async upsertToken(tokenData) {
-        const { mint, symbol, name, logoURI, decimals, marketCap, priceUsd } = tokenData;
+        const { mint, symbol, name, decimals } = tokenData;
         const query = `
-            INSERT INTO tokens (mint, symbol, name, logo_uri, decimals, market_cap, price_usd) 
+            INSERT INTO tokens (mint, symbol, name, decimals) 
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (mint) DO UPDATE SET
                 symbol = EXCLUDED.symbol,
                 name = EXCLUDED.name,
-                logo_uri = EXCLUDED.logo_uri,
                 decimals = EXCLUDED.decimals,
-                market_cap = EXCLUDED.market_cap,
-                price_usd = EXCLUDED.price_usd,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id, mint
         `;
         const result = await this.pool.query(query, [
-            mint, symbol, name, logoURI, decimals, marketCap, priceUsd
+            mint, symbol, name, decimals
         ]);
         return result.rows[0];
     }
 
     async getTokenByMint(mint) {
-        const query = `SELECT id, mint, symbol, name, logo_uri, decimals FROM tokens WHERE mint = $1`;
+        const query = `SELECT id, mint, symbol, name, decimals FROM tokens WHERE mint = $1`;
         const result = await this.pool.query(query, [mint]);
         return result.rows[0];
     }
@@ -236,7 +233,6 @@ async getRecentTransactions(hours = 24, limit = 400, transactionType = null) {
                 tk.mint,
                 tk.symbol,
                 tk.name as token_name,
-                tk.logo_uri,
                 to_.amount as token_amount,
                 to_.operation_type,
                 tk.decimals
@@ -333,7 +329,6 @@ async getWalletStats(walletId) {
                 tk.mint,
                 tk.symbol,
                 tk.name,
-                tk.logo_uri,
                 COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as buy_count,
                 COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as sell_count,
                 COUNT(DISTINCT t.wallet_id) as unique_wallets,
@@ -345,7 +340,7 @@ async getWalletStats(walletId) {
             JOIN transactions t ON to_.transaction_id = t.id
             WHERE t.block_time >= NOW() - INTERVAL '24 hours'
             ${typeFilter}
-            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.logo_uri
+            GROUP BY tk.id, tk.mint, tk.symbol, tk.name
             ORDER BY (buy_count + sell_count) DESC
             LIMIT $1
         `;
