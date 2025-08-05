@@ -140,7 +140,7 @@ async removeAllWallets() {
         return result.rows[0];
     }
 
-    async addTransaction(walletId, signature, blockTime, transactionType, solAmount, usdAmount) {
+    async addTransaction(walletId, signature, blockTime, transactionType, solAmount) {
         const query = `
             INSERT INTO transactions (
                 wallet_id, signature, block_time, transaction_type,
@@ -156,9 +156,7 @@ async removeAllWallets() {
                 blockTime, 
                 transactionType,
                 transactionType === 'buy' ? solAmount : 0,
-                transactionType === 'buy' ? usdAmount : 0,
                 transactionType === 'sell' ? solAmount : 0,
-                transactionType === 'sell' ? usdAmount : 0
             ]);
             return result.rows[0];
         } catch (error) {

@@ -77,8 +77,6 @@ function App() {
               transactionType: newTransaction.transactionType,
               solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
               solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
-              usdSpent: newTransaction.transactionType === 'buy' ? newTransaction.usdAmount.toFixed(2) : null,
-              usdReceived: newTransaction.transactionType === 'sell' ? newTransaction.usdAmount.toFixed(2) : null,
               wallet: {
                 address: newTransaction.walletAddress,
                 name: wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,

@@ -1,5 +1,5 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
-const { fetchTokenMetadata, fetchHistoricalSolPrice, redis } = require('./tokenService');
+const { fetchTokenMetadata, redis } = require('./tokenService');
 const Database = require('../database/connection');
 const Redis = require('ioredis');
 
@@ -77,7 +77,6 @@ class WalletMonitoringService {
                                 walletAddress,
                                 transactionType: txData.type,
                                 solAmount: txData.solAmount,
-                                usdAmount: txData.usdAmount,
                                 tokens: txData.tokensChanged.map((tc) => ({
                                     mint: tc.mint,
                                     amount: tc.rawChange / Math.pow(10, tc.decimals),
@@ -175,8 +174,6 @@ class WalletMonitoringService {
             }
 
             return await this.db.withTransaction(async (client) => {
-                const solPrice = await fetchHistoricalSolPrice(new Date(sig.blockTime * 1000));
-                const usdAmount = solPrice * solAmount;
 
                 const query = `
           INSERT INTO transactions (
@@ -192,9 +189,7 @@ class WalletMonitoringService {
                     new Date(sig.blockTime * 1000).toISOString(),
                     transactionType,
                     transactionType === 'buy' ? solAmount : 0,
-                    transactionType === 'buy' ? usdAmount : 0,
                     transactionType === 'sell' ? solAmount : 0,
-                    transactionType === 'sell' ? usdAmount : 0,
                 ]);
 
                 const transaction = result.rows[0];
@@ -207,7 +202,6 @@ class WalletMonitoringService {
                     signature: sig.signature,
                     type: transactionType,
                     solAmount,
-                    usdAmount,
                     tokensChanged: tokenChanges,
                 };
             });
