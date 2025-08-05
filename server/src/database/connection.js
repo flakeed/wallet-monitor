@@ -120,7 +120,7 @@ async removeAllWallets() {
         const { mint, symbol, name, decimals } = tokenData;
         const query = `
             INSERT INTO tokens (mint, symbol, name, decimals) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (mint) DO UPDATE SET
                 symbol = EXCLUDED.symbol,
                 name = EXCLUDED.name,
@@ -146,7 +146,7 @@ async removeAllWallets() {
                 wallet_id, signature, block_time, transaction_type,
                 sol_spent, sol_received
             ) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, signature, transaction_type
         `;
         try {
@@ -279,17 +279,14 @@ async getWalletStats(walletId) {
         const stats = await this.getWalletStats(walletId);
         const query = `
             INSERT INTO wallet_stats (
-                wallet_id, total_spent_sol, total_received_sol, 
-                total_spent_usd, total_received_usd,
+                wallet_id, total_spent_sol, total_received_sol,
                 total_buy_transactions, total_sell_transactions,
                 unique_tokens_bought, unique_tokens_sold, last_transaction_at
             ) 
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (wallet_id) DO UPDATE SET
                 total_spent_sol = EXCLUDED.total_spent_sol,
                 total_received_sol = EXCLUDED.total_received_sol,
-                total_spent_usd = EXCLUDED.total_spent_usd,
-                total_received_usd = EXCLUDED.total_received_usd,
                 total_buy_transactions = EXCLUDED.total_buy_transactions,
                 total_sell_transactions = EXCLUDED.total_sell_transactions,
                 unique_tokens_bought = EXCLUDED.unique_tokens_bought,
@@ -302,8 +299,6 @@ async getWalletStats(walletId) {
             walletId,
             stats.total_sol_spent || 0,
             stats.total_sol_received || 0,
-            stats.total_usd_spent || 0,
-            stats.total_usd_received || 0,
             stats.total_buy_transactions || 0,
             stats.total_sell_transactions || 0,
             stats.unique_tokens_bought || 0,

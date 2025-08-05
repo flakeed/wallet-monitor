@@ -180,7 +180,7 @@ class WalletMonitoringService {
             wallet_id, signature, block_time, transaction_type,
             sol_spent, sol_received
           ) 
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES ($1, $2, $3, $4, $5, $6)
           RETURNING id, signature, transaction_type
         `;
                 const result = await client.query(query, [
@@ -304,7 +304,7 @@ class WalletMonitoringService {
 
             const tokenUpsertQuery = `
         INSERT INTO tokens (mint, symbol, name, decimals) 
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES ($1, $2, $3, $4)
         ON CONFLICT (mint) DO UPDATE SET
           symbol = EXCLUDED.symbol,
           name = EXCLUDED.name,

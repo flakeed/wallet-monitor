@@ -108,10 +108,7 @@ app.get('/api/wallets', async (req, res) => {
             totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
             totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
             totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
-            totalSpentUSD: Number(stats.total_usd_spent || 0).toFixed(2),
-            totalReceivedUSD: Number(stats.total_usd_received || 0).toFixed(2),
             netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
-            netUSD: (Number(stats.total_usd_received || 0) - Number(stats.total_usd_spent || 0)).toFixed(2),
             lastTransactionAt: stats.last_transaction_at,
           },
         };
@@ -352,10 +349,7 @@ app.get('/api/stats/transactions', async (req, res) => {
       totalTransactions: (stats.buy_transactions_today || 0) + (stats.sell_transactions_today || 0),
       solSpent: Number(stats.sol_spent_today || 0).toFixed(6),
       solReceived: Number(stats.sol_received_today || 0).toFixed(6),
-      usdSpent: Number(stats.usd_spent_today || 0).toFixed(2),
-      usdReceived: Number(stats.usd_received_today || 0).toFixed(2),
       netSOL: (Number(stats.sol_received_today || 0) - Number(stats.sol_spent_today || 0)).toFixed(6),
-      netUSD: (Number(stats.usd_received_today || 0) - Number(stats.usd_spent_today || 0)).toFixed(2),
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching transaction stats:`, error);
