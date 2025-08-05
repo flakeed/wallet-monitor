@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const WalletMonitoringService = require('./monitoringService');
 const Database = require('../database/connection');
+const asyncQueue = require('async').queue;
 
 class SolanaWebSocketService {
     constructor() {
@@ -16,7 +17,6 @@ class SolanaWebSocketService {
         this.db = new Database();
         this.ws = null;
         this.subscriptions = new Map();
-        this.reconnectInterval = 3000;
         this.maxReconnectAttempts = 20;
         this.reconnectAttempts = 0;
         this.isConnecting = false;
@@ -24,8 +24,13 @@ class SolanaWebSocketService {
         this.pendingRequests = new Map();
         this.messageCount = 0;
         this.isStarted = false;
-        this.batchSize = 400;
+        this.batchSize = 50; 
         this.maxSubscriptions = 500;
+        this.messageQueue = asyncQueue(async (message, callback) => {
+            await this.handleMessage(message);
+            callback();
+        }, 10);
+        console.log(`[${new Date().toISOString()}] 🔧 SolanaWebSocketService initialized`);
     }
 
     async start() {
@@ -55,12 +60,12 @@ class SolanaWebSocketService {
             this.isConnecting = false;
         });
 
-        this.ws.on('message', async (data) => {
+        this.ws.on('message', (data) => {
             this.messageCount++;
             try {
                 const message = JSON.parse(data.toString());
                 console.log(`[${new Date().toISOString()}] 📬 WebSocket message #${this.messageCount} received`);
-                await this.handleMessage(message);
+                this.messageQueue.push(message);
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Error parsing WebSocket message:`, error.message);
             }
@@ -151,7 +156,7 @@ class SolanaWebSocketService {
                     await this.subscribeToWallet(wallet.address);
                 })
             );
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            await new Promise((resolve) => setTimeout(resolve, 500)); 
         }
         console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets`);
     }
@@ -255,7 +260,8 @@ class SolanaWebSocketService {
         }
 
         this.reconnectAttempts++;
-        console.log(`[${new Date().toISOString()}] 🔄 Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+        console.log(`[${new Date().toISOString()}] 🔄 Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${delay}ms`);
 
         setTimeout(async () => {
             try {
@@ -264,7 +270,7 @@ class SolanaWebSocketService {
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Reconnect failed:`, error.message);
             }
-        }, this.reconnectInterval);
+        }, delay);
     }
 
     getStatus() {

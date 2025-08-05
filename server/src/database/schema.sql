@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     block_time TIMESTAMP WITH TIME ZONE NOT NULL,
     sol_spent DECIMAL(20, 9) DEFAULT 0, 
     sol_received DECIMAL(20, 9) DEFAULT 0,
-    transaction_type VARCHAR(20) DEFAULT 'buy',
+    transaction_type VARCHAR(20) NOT NULL CHECK (transaction_type IN ('buy', 'sell')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
 );
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS token_operations (
     transaction_id UUID NOT NULL,
     token_id UUID NOT NULL,
     amount DECIMAL(30, 18) NOT NULL, 
-    operation_type VARCHAR(10) NOT NULL,
+    operation_type VARCHAR(10) NOT NULL CHECK (operation_type IN ('buy', 'sell')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE,
     FOREIGN KEY (token_id) REFERENCES tokens (id) ON DELETE CASCADE
@@ -78,7 +78,6 @@ CREATE INDEX IF NOT EXISTS idx_token_operations_type ON token_operations(operati
 CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint);
 CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON tokens(symbol);
 CREATE INDEX IF NOT EXISTS idx_wallet_stats_wallet_id ON wallet_stats(wallet_id);
-
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON transactions(wallet_id, block_time DESC);
 CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON token_operations(token_id, amount DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON transactions(transaction_type, block_time DESC);

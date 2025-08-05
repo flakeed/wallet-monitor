@@ -4,9 +4,8 @@ const axios = require('axios');
 const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
+const pLimit = require('p-limit');
 
-let tokenMap = new Map();
-const requestQueue = [];
 let isProcessingQueue = false;
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
@@ -19,12 +18,12 @@ redis.on('error', (err) => {
 });
 
 const promiseStore = new Map();
-const REQUEST_DELAY = 50; 
-const TOKEN_CACHE_TTL = 24 * 60 * 60;
-const PRICE_CACHE_TTL = 60 * 60;
+const REQUEST_DELAY = 100; 
+const TOKEN_CACHE_TTL = 7 * 24 * 60 * 60; 
 const PROMISE_TTL = 60;
-let lastPriceRequest = 0;
-const PRICE_REQUEST_DELAY = 100; 
+const RPS_LIMIT = 10; 
+const limit = pLimit(RPS_LIMIT); 
+const BATCH_SIZE = 500; 
 
 (async () => {
     try {
@@ -56,43 +55,52 @@ async function processQueue() {
     isProcessingQueue = true;
 
     while (true) {
-        const requestData = await redis.lpop('helius:queue', 400); 
+        const requestData = await redis.lpop('helius:queue', BATCH_SIZE);
         if (!requestData || requestData.length === 0) break;
 
-        const requests = requestData.map((data) => {
-            try {
-                return JSON.parse(data);
-            } catch (e) {
-                console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, e.message);
-                return null;
-            }
-        }).filter((req) => req !== null);
-
-        await Promise.all(
-            requests.map(async (request) => {
-                const { requestId, mint, connection: rpcEndpoint } = request;
-                const connection = new Connection(rpcEndpoint, 'confirmed');
-                console.log(`[${new Date().toISOString()}] Processing Helius request ${requestId} for mint ${mint}`);
-
+        const requests = requestData
+            .map((data) => {
                 try {
-                    const result = await processHeliusRequest(mint, connection);
-                    const promise = promiseStore.get(requestId);
-                    if (promise) {
-                        promise.resolve(result);
-                    } else {
-                        console.warn(`[${new Date().toISOString()}] No promise found for request ${requestId}`);
-                    }
-                } catch (error) {
-                    console.error(`[${new Date().toISOString()}] Error processing Helius request ${requestId} for mint ${mint}:`, error.message);
-                    const promise = promiseStore.get(requestId);
-                    if (promise) {
-                        promise.reject(error);
-                    }
+                    return JSON.parse(data);
+                } catch (e) {
+                    console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, e.message);
+                    return null;
                 }
-
-                promiseStore.delete(requestId);
             })
-        );
+            .filter((req) => req !== null);
+
+        const subBatchSize = Math.floor(1000 / RPS_LIMIT);
+        for (let i = 0; i < requests.length; i += subBatchSize) {
+            const subBatch = requests.slice(i, i + subBatchSize);
+            await Promise.allSettled(
+                subBatch.map((request) =>
+                    limit(async () => {
+                        const { requestId, mint, connection: rpcEndpoint } = request;
+                        const connection = new Connection(rpcEndpoint, 'confirmed');
+                        console.log(`[${new Date().toISOString()}] Processing Helius request ${requestId} for mint ${mint}`);
+
+                        try {
+                            const result = await processHeliusRequest(mint, connection);
+                            const promise = promiseStore.get(requestId);
+                            if (promise) {
+                                promise.resolve(result);
+                            } else {
+                                console.warn(`[${new Date().toISOString()}] No promise found for request ${requestId}`);
+                            }
+                        } catch (error) {
+                            console.error(`[${new Date().toISOString()}] Error processing Helius request ${requestId} for mint ${mint}:`, error.message);
+                            const promise = promiseStore.get(requestId);
+                            if (promise) {
+                                promise.reject(error);
+                            }
+                        }
+
+                        promiseStore.delete(requestId);
+                    })
+                )
+            );
+            await new Promise((resolve) => setTimeout(resolve, 1000 / RPS_LIMIT));
+        }
         await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY));
     }
 
@@ -114,7 +122,7 @@ async function processHeliusRequest(mint, connection) {
     if (!HELIUS_API_KEY) {
         console.warn(`[${new Date().toISOString()}] HELIUS_API_KEY not set — trying on-chain metadata`);
         const onChainData = await fetchOnChainMetadata(mint, connection);
-        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token',  decimals: 0 };
+        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
         await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
         return data;
     }
@@ -124,12 +132,11 @@ async function processHeliusRequest(mint, connection) {
         const response = await axios.post(
             `https://api.helius.xyz/v0/token-metadata?api-key=${HELIUS_API_KEY}`,
             { mintAccounts: [mint] },
-            { timeout: 3000 }
+            { timeout: 5000 }
         );
 
         if (response.data && response.data.length > 0) {
             const meta = response.data[0];
-
             const tokenData = {
                 address: mint,
                 symbol: meta.onChainMetadata?.metadata?.data?.symbol || 'Unknown',
@@ -147,7 +154,7 @@ async function processHeliusRequest(mint, connection) {
     }
 
     const onChainData = await fetchOnChainMetadata(mint, connection);
-    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token',decimals: 0 };
+    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
     await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
     return data;
 }
@@ -161,132 +168,159 @@ async function fetchTokenMetadata(mint, connection) {
 
     return new Promise((resolve, reject) => {
         const requestId = uuidv4();
-        console.log(`[${new Date().toISOString()}] Enqueued Helius request ${requestId} for mint ${mint}`);
-
-        promiseStore.set(requestId, { resolve, reject });
-
-        redis.lpush('helius:queue', JSON.stringify({
-            requestId,
-            mint,
-            connection: connection.rpcEndpoint,
-        }), (err) => {
-            if (err) {
-                console.error(`[${new Date().toISOString()}] Error enqueuing request ${requestId}:`, err.message);
-                promiseStore.delete(requestId);
-                reject(err);
+        const requestKey = `request:${requestId}`;
+        redis.get(requestKey).then(async (exists) => {
+            if (exists) {
+                console.log(`[${new Date().toISOString()}] Skipping duplicate request ${requestId} for mint ${mint}`);
+                reject(new Error('Duplicate request'));
                 return;
             }
 
-            if (!isProcessingQueue) {
-                setImmediate(processQueue);
-            }
-        });
+            await redis.set(requestKey, '1', 'EX', 60);
+            console.log(`[${new Date().toISOString()}] Enqueued Helius request ${requestId} for mint ${mint}`);
 
-        setTimeout(() => {
-            if (promiseStore.has(requestId)) {
-                console.warn(`[${new Date().toISOString()}] Cleaning up stale promise for request ${requestId}`);
-                promiseStore.delete(requestId);
-                reject(new Error(`Request ${requestId} timed out`));
-            }
-        }, PROMISE_TTL * 1000);
+            promiseStore.set(requestId, { resolve, reject });
+
+            redis.lpush('helius:queue', JSON.stringify({
+                requestId,
+                mint,
+                connection: connection.rpcEndpoint,
+            }), (err) => {
+                if (err) {
+                    console.error(`[${new Date().toISOString()}] Error enqueuing request ${requestId}:`, err.message);
+                    promiseStore.delete(requestId);
+                    reject(err);
+                    return;
+                }
+
+                if (!isProcessingQueue) {
+                    setImmediate(processQueue);
+                }
+            });
+
+            setTimeout(() => {
+                if (promiseStore.has(requestId)) {
+                    console.warn(`[${new Date().toISOString()}] Cleaning up stale promise for request ${requestId}`);
+                    promiseStore.delete(requestId);
+                    reject(new Error(`Request ${requestId} timed out`));
+                }
+            }, PROMISE_TTL * 1000);
+        });
     });
 }
 
-// async function fetchHistoricalSolPrice(timestamp) {
-//     const cacheKey = `solprice:${timestamp.toISOString().slice(0, 16)}`;
-//     const cachedPrice = await redis.get(cacheKey);
-//     if (cachedPrice) {
-//         console.log(`[${new Date().toISOString()}] ⚡ Fast SOL price cache hit for ${cacheKey}: $${cachedPrice}`);
-//         return parseFloat(cachedPrice);
-//     }
-
-//     const time_now = Date.now();
-//     if (time_now - lastPriceRequest < PRICE_REQUEST_DELAY) {
-//         await new Promise((resolve) => setTimeout(resolve, PRICE_REQUEST_DELAY));
-//     }
-//     lastPriceRequest = Date.now();
-
-//     try {
-//         const time = timestamp.getTime();
-//         console.log(`[${new Date().toISOString()}] Fetching historical SOL price for ${cacheKey}`);
-//         const response = await axios.get(
-//             `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=${time}&endTime=${time + 60000}`,
-//             { timeout: 3000 }
-//         );
-
-//         let price = null;
-//         if (response.data && response.data.length > 0) {
-//             price = parseFloat(response.data[0][4]);
-//             console.log(`[${new Date().toISOString()}] ✅ Got historical SOL price: $${price}`);
-//         } else {
-//             const currentResponse = await axios.get(
-//                 `https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT`,
-//                 { timeout: 3000 }
-//             );
-//             price = parseFloat(currentResponse.data.price);
-//             console.log(`[${new Date().toISOString()}] ✅ Using current SOL price: $${price}`);
-//         }
-
-//         if (price) {
-//             await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
-//             return price;
-//         }
-
-//         console.warn(`[${new Date().toISOString()}] No price data available for ${cacheKey}`);
-//     } catch (e) {
-//         console.error(`[${new Date().toISOString()}] Error fetching SOL price for ${cacheKey}:`, e.message);
-//     }
-
-//     console.warn(`[${new Date().toISOString()}] Using fallback price for ${cacheKey}`);
-//     const fallbackPrice = 180;
-//     await redis.set(cacheKey, fallbackPrice, 'EX', PRICE_CACHE_TTL);
-//     return fallbackPrice;
-// }
-
-async function fetchOnChainMetadata(mint, connection) {
-    try {
-        const metaplex = new Metaplex(connection);
-        const mintPubkey = new PublicKey(mint);
-        const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
-        if (metadataAccount && metadataAccount.data) {
-            return {
-                address: mint,
-                symbol: metadataAccount.data.symbol || 'Unknown',
-                name: metadataAccount.data.name || 'Unknown Token',
-                decimals: metadataAccount.mint.decimals || 0,
-            };
-        }
-        console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
-    } catch (e) {
-        console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
+async function getParsedTransactionCached(signature, connection) {
+    const cacheKey = `tx:${signature}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+        console.log(`[${new Date().toISOString()}] ⚡ Fast transaction cache hit for ${signature}`);
+        return JSON.parse(cached);
     }
-    return null;
+
+    const tx = await limit(() =>
+        connection.getParsedTransaction(signature, {
+            maxSupportedTransactionVersion: 0,
+            commitment: 'confirmed',
+        })
+    );
+    if (tx) {
+        await redis.set(cacheKey, JSON.stringify(tx), 'EX', 3600);
+    }
+    return tx;
 }
 
-function normalizeImageUrl(imageUrl) {
-    if (!imageUrl) return null;
-    if (imageUrl.startsWith('ipfs://')) {
-        return imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+async function batchFetchTokenMetadata(mints) {
+    const tokenInfos = new Map();
+    const uncachedMints = [];
+    const pipeline = redis.pipeline();
+
+    for (const mint of mints) {
+        pipeline.get(`token:${mint}`);
     }
-    return imageUrl;
+    const results = await pipeline.exec();
+
+    results.forEach(([err, cachedToken], index) => {
+        if (!err && cachedToken) {
+            tokenInfos.set(mints[index], JSON.parse(cachedToken));
+        } else {
+            uncachedMints.push(mints[index]);
+        }
+    });
+
+    if (uncachedMints.length > 0) {
+        const batchSize = 50; 
+        for (let i = 0; i < uncachedMints.length; i += batchSize) {
+            const batch = uncachedMints.slice(i, i + batchSize);
+            try {
+                const batchResults = await axios.post(
+                    `https://api.helius.xyz/v0/token-metadata?api-key=${process.env.HELIUS_API_KEY}`,
+                    { mintAccounts: batch },
+                    { timeout: 5000 }
+                );
+                const batchTokens = batchResults.data.map((meta) => ({
+                    address: meta.account,
+                    symbol: meta.onChainMetadata?.metadata?.data?.symbol || 'Unknown',
+                    name: meta.onChainMetadata?.metadata?.data?.name || 'Unknown Token',
+                    decimals: meta.onChainAccountInfo?.accountInfo?.data?.parsed?.info?.decimals || 0,
+                }));
+
+                const pipeline = redis.pipeline();
+                batchTokens.forEach((tokenInfo) => {
+                    tokenInfos.set(tokenInfo.address, tokenInfo);
+                    pipeline.set(`token:${tokenInfo.address}`, JSON.stringify(tokenInfo), 'EX', TOKEN_CACHE_TTL);
+                });
+                await pipeline.exec();
+            } catch (e) {
+                console.error(`[${new Date().toISOString()}] Error fetching batch metadata:`, e.message);
+                await Promise.all(
+                    batch.map(async (mint) => {
+                        const tokenInfo = await fetchTokenMetadata(mint, this.connection);
+                        if (tokenInfo) {
+                            tokenInfos.set(mint, tokenInfo);
+                        }
+                    })
+                );
+            }
+            await new Promise((resolve) => setTimeout(resolve, 1000 / RPS_LIMIT));
+        }
+    }
+
+    return tokenInfos;
 }
 
 async function getPurchasesTransactions(walletAddress, connection) {
     const pubkey = new PublicKey(walletAddress);
-    const signatures = await connection.getSignaturesForAddress(pubkey, { limit: 20 });
+    const signatures = await limit(() =>
+        connection.getSignaturesForAddress(pubkey, { limit: 20 })
+    );
     const purchasesTxs = [];
     const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-    for (const sig of signatures) {
-        try {
-            if (!sig.signature || !sig.blockTime) {
-                console.warn(`[${new Date().toISOString()}] Skipping invalid signature: ${sig.signature || 'unknown'} - missing blockTime`);
-                continue;
-            }
+    const signatureList = signatures.map((sig) => sig.signature);
+    const transactionBatches = [];
+    for (let i = 0; i < signatureList.length; i += RPS_LIMIT) {
+        transactionBatches.push(signatureList.slice(i, i + RPS_LIMIT));
+    }
 
-            const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
+    for (const batch of transactionBatches) {
+        const transactions = await limit(() =>
+            connection.getParsedTransactions(batch, {
+                maxSupportedTransactionVersion: 0,
+                commitment: 'confirmed',
+            })
+        );
+
+        const pipeline = redis.pipeline();
+        transactions.forEach((tx, index) => {
+            if (tx) {
+                pipeline.set(`tx:${batch[index]}`, JSON.stringify(tx), 'EX', 3600);
+            }
+        });
+        await pipeline.exec();
+
+        for (const [index, tx] of transactions.entries()) {
             if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
-                console.warn(`[${new Date().toISOString()}] Skipping transaction ${sig.signature} - invalid or missing metadata`);
+                console.warn(`[${new Date().toISOString()}] Skipping transaction ${batch[index]} - invalid or missing metadata`);
                 continue;
             }
 
@@ -312,7 +346,7 @@ async function getPurchasesTransactions(walletAddress, connection) {
 
             const tokensBought = [];
             const mints = tokenChangesRaw.map((t) => t.mint);
-            const tokenInfos = await this.batchFetchTokenMetadata(mints);
+            const tokenInfos = await batchFetchTokenMetadata(mints);
             for (const t of tokenChangesRaw) {
                 const tokenInfo = tokenInfos.get(t.mint) || {
                     mint: t.mint,
@@ -330,30 +364,29 @@ async function getPurchasesTransactions(walletAddress, connection) {
             }
 
             if (tokensBought.length === 0) {
-                console.warn(`[${new Date().toISOString()}] Skipping transaction ${sig.signature} - no valid tokens bought`);
+                console.warn(`[${new Date().toISOString()}] Skipping transaction ${batch[index]} - no valid tokens bought`);
                 continue;
             }
 
             const spentSOL = +(-solChange).toFixed(6);
 
             purchasesTxs.push({
-                signature: sig.signature,
-                time: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : null,
+                signature: batch[index],
+                time: signatures[index].blockTime ? new Date(signatures[index].blockTime * 1000).toISOString() : null,
                 spentSOL,
                 tokensBought,
             });
-        } catch (e) {
-            console.error(`[${new Date().toISOString()}] Error fetching tx ${sig.signature || 'unknown'}:`, e.message);
         }
-        await new Promise((res) => setTimeout(res, 100));
+        await new Promise((resolve) => setTimeout(resolve, 1000 / RPS_LIMIT));
     }
+
     return purchasesTxs;
 }
 
 module.exports = {
     fetchOnChainMetadata,
-    normalizeImageUrl,
     fetchTokenMetadata,
     getPurchasesTransactions,
     redis,
+    batchFetchTokenMetadata,
 };
