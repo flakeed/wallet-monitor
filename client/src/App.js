@@ -7,7 +7,7 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 
-const API_BASE = process.env.REACT_APP_API_BASE || 'http://158.220.125.26:5001/api';
+const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
   const [wallets, setWallets] = useState([]);
