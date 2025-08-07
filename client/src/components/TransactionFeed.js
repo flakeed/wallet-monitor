@@ -7,7 +7,7 @@ function TransactionFeed({ transactions, timeframe, onTimeframeChange }) {
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(new Date());
-    }, 10000);
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 
