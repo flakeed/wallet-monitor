@@ -3,6 +3,8 @@ const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const Redis = require('ioredis');
 require('dotenv').config();
+const https = require('https'); 
+const fs = require('fs');
 const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
@@ -20,11 +22,17 @@ app.use(
       'https://158.220.125.26',
       'http://158.220.125.26',
       'http://158.220.125.26:3000',
+       'https://158.220.125.26:3000',
     ],
     optionsSuccessStatus: 200,
   })
 );
 app.use(express.json());
+
+const options = {
+  key: fs.readFileSync('/key.pem'),
+  cert: fs.readFileSync('/cert.pem'),
+};
 
 const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
@@ -550,6 +558,16 @@ process.on('SIGTERM', async () => {
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
+});
+
+https.createServer(options, app).listen(port, '0.0.0.0', () => {
+  console.log(`[${new Date().toISOString()}] 🚀 Server running on https://158.220.125.26:${port}`);
+  console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
+  console.log(
+    `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
+      monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
+    }`
+  );
 });
 
 app.listen(port, '0.0.0.0', () => {
