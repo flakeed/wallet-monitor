@@ -545,7 +545,7 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-app.listen(port, '158.220.125.26', () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
   console.log(
