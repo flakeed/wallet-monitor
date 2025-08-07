@@ -527,7 +527,6 @@ app.post('/api/websocket/reconnect', async (req, res) => {
   }
 });
 
-const path = require('path');
 
 app.use(express.static('./client/build'));
 
