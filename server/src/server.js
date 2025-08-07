@@ -13,7 +13,13 @@ const port = process.env.PORT || 5001;
 
 app.use(
   cors({
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'https://wallet-monitor-client.vercel.app'],
+    origin: [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://wallet-monitor-client.vercel.app',
+      'http://158.220.125.26',
+      'http://158.220.125.26:3000',
+    ],
     optionsSuccessStatus: 200,
   })
 );
