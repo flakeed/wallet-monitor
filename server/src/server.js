@@ -17,6 +17,7 @@ app.use(
       'http://localhost:3000',
       'http://localhost:3001',
       'https://wallet-monitor-client.vercel.app',
+      'https://158.220.125.26',
       'http://158.220.125.26',
       'http://158.220.125.26:3000',
     ],
