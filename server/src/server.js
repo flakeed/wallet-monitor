@@ -136,6 +136,35 @@ app.get('/api/wallets', async (req, res) => {
   }
 });
 
+app.post('/api/wallets/bulk', async (req, res) => {
+  try {
+    const { wallets } = req.body;
+    if (!Array.isArray(wallets)) {
+      return res.status(400).json({ error: 'Wallets must be an array' });
+    }
+
+    const results = { total: wallets.length, successful: 0, failed: 0, errors: [] };
+    for (const wallet of wallets) {
+      try {
+        await solanaWebSocketService.addWallet(wallet.address, wallet.name, wallet.groupIds || []);
+        results.successful++;
+      } catch (error) {
+        results.failed++;
+        results.errors.push({ address: wallet.address, name: wallet.name, error: error.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Processed ${results.total} wallets: ${results.successful} successful, ${results.failed} failed`,
+      results,
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in bulk wallet import:`, error);
+    res.status(500).json({ error: 'Failed to import wallets' });
+  }
+});
+
 app.post('/api/wallets', async (req, res) => {
   try {
     const { address, name, groupIds } = req.body;
