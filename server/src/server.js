@@ -570,12 +570,12 @@ https.createServer(sslOptions, app).listen(port, '158.220.125.26', () => {
   );
 });
 
-app.listen(port, '158.220.125.26', () => {
-  console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
-  console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
-  console.log(
-    `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
-      monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
-    }`
-  );
-});
+// app.listen(port, '158.220.125.26', () => {
+//   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
+//   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
+//   console.log(
+//     `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
+//       monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
+//     }`
+//   );
+// });
