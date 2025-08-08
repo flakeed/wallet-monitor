@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import './WalletManager.css'; // Assuming you have a CSS file for styling
 
 function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
   const [address, setAddress] = useState('');
@@ -23,7 +22,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
         const data = await response.json();
         setGroups(data);
       } catch (error) {
-        setMessage({ type: 'error', text: 'Failed to fetch groups: ' + error.message });
+        setMessage({ type: 'error', text: `Failed to fetch groups: ${error.message}` });
       }
     };
     fetchGroups();
@@ -147,43 +146,51 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
   const handleSwitchGroup = async (selectedGroupId) => {
     try {
       await onSwitchGroup(selectedGroupId || null);
-      setMessage({ type: 'success', text: `Switched to group: ${selectedGroupId ? groups.find(g => g.id === selectedGroupId)?.name || 'Unknown' : 'Default'}` });
+      setMessage({
+        type: 'success',
+        text: `Switched to group: ${selectedGroupId ? groups.find(g => g.id === selectedGroupId)?.name || 'Unknown' : 'Default'}`,
+      });
     } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to switch group: ' + error.message });
+      setMessage({ type: 'error', text: `Failed to switch group: ${error.message}` });
     }
   };
 
   return (
-    <div className="wallet-manager">
-      <h2>Manage Wallets</h2>
+    <div className="max-w-xl mx-auto p-6 bg-gray-100 rounded-lg shadow-md">
+      <h2 className="text-2xl font-bold text-gray-800 mb-4">Manage Wallets</h2>
 
       {/* Group Management */}
-      <div className="group-management">
-        <h3>Create Group</h3>
-        <div className="group-form">
+      <div className="mb-6">
+        <h3 className="text-lg font-semibold text-gray-700 mb-2">Create Group</h3>
+        <div className="flex gap-4">
           <input
             type="text"
             value={newGroupName}
             onChange={(e) => setNewGroupName(e.target.value)}
             placeholder="Enter group name"
             maxLength={255}
+            className="flex-1 p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <button onClick={handleCreateGroup} disabled={!newGroupName.trim()}>
+          <button
+            onClick={handleCreateGroup}
+            disabled={!newGroupName.trim()}
+            className={`px-4 py-2 rounded-md text-white ${newGroupName.trim() ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 cursor-not-allowed'}`}
+          >
             Create Group
           </button>
         </div>
       </div>
 
       {/* Tabs for Single/Bulk Wallet Addition */}
-      <div className="tabs">
+      <div className="flex gap-2 mb-6">
         <button
-          className={activeTab === 'single' ? 'active' : ''}
+          className={`flex-1 py-2 rounded-md ${activeTab === 'single' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
           onClick={() => setActiveTab('single')}
         >
           Add Single Wallet
         </button>
         <button
-          className={activeTab === 'bulk' ? 'active' : ''}
+          className={`flex-1 py-2 rounded-md ${activeTab === 'bulk' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
           onClick={() => setActiveTab('bulk')}
         >
           Bulk Import
@@ -191,8 +198,10 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
       </div>
 
       {/* Group Selection for Monitoring */}
-      <div className="group-selector">
-        <label htmlFor="monitor-group">Monitor Group: </label>
+      <div className="flex items-center gap-4 mb-6">
+        <label htmlFor="monitor-group" className="font-semibold text-gray-700">
+          Monitor Group:
+        </label>
         <select
           id="monitor-group"
           value={groupId}
@@ -201,6 +210,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
             setGroupId(selectedGroupId);
             handleSwitchGroup(selectedGroupId);
           }}
+          className="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[150px]"
         >
           <option value="">Default (All Wallets)</option>
           {groups.map((group) => (
@@ -213,9 +223,11 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
 
       {/* Single Wallet Form */}
       {activeTab === 'single' && (
-        <form onSubmit={handleSubmit} className="wallet-form">
-          <div className="form-group">
-            <label htmlFor="address">Wallet Address</label>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <label htmlFor="address" className="font-semibold text-gray-700">
+              Wallet Address
+            </label>
             <input
               id="address"
               type="text"
@@ -223,10 +235,13 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
               onChange={(e) => setAddress(e.target.value.trim())}
               placeholder="Enter Solana wallet address"
               disabled={loading}
+              className="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <div className="form-group">
-            <label htmlFor="name">Name (Optional)</label>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="name" className="font-semibold text-gray-700">
+              Name (Optional)
+            </label>
             <input
               id="name"
               type="text"
@@ -235,15 +250,19 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
               placeholder="Enter wallet name"
               disabled={loading}
               maxLength={255}
+              className="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <div className="form-group">
-            <label htmlFor="group">Group (Optional)</label>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="group" className="font-semibold text-gray-700">
+              Group (Optional)
+            </label>
             <select
               id="group"
               value={groupId}
               onChange={(e) => setGroupId(e.target.value)}
               disabled={loading}
+              className="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">No Group</option>
               {groups.map((group) => (
@@ -253,11 +272,17 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
               ))}
             </select>
           </div>
-          <button type="submit" disabled={loading || !address.trim()}>
+          <button
+            type="submit"
+            disabled={loading || !address.trim()}
+            className={`px-4 py-2 rounded-md text-white ${loading || !address.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+          >
             {loading ? 'Adding...' : 'Add Wallet'}
           </button>
           {message && (
-            <div className={`message ${message.type}`}>
+            <div
+              className={`p-3 rounded-md ${message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}
+            >
               {message.text}
             </div>
           )}
@@ -266,25 +291,31 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
 
       {/* Bulk Import Form */}
       {activeTab === 'bulk' && (
-        <form onSubmit={handleBulkSubmit} className="bulk-form">
-          <div className="form-group">
-            <label htmlFor="bulk-text">Wallet Addresses</label>
+        <form onSubmit={handleBulkSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <label htmlFor="bulk-text" className="font-semibold text-gray-700">
+              Wallet Addresses
+            </label>
             <textarea
               id="bulk-text"
               value={bulkText}
               onChange={(e) => setBulkText(e.target.value)}
               placeholder="Enter one wallet per line or comma-separated (address,name)\n# Lines starting with # are ignored"
-              rows={10}
+              rows={6}
               disabled={bulkLoading}
+              className="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
             />
           </div>
-          <div className="form-group">
-            <label htmlFor="bulk-group">Group (Optional)</label>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="bulk-group" className="font-semibold text-gray-700">
+              Group (Optional)
+            </label>
             <select
               id="bulk-group"
               value={groupId}
               onChange={(e) => setGroupId(e.target.value)}
               disabled={bulkLoading}
+              className="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">No Group</option>
               {groups.map((group) => (
@@ -294,19 +325,25 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onSwitchGroup }) {
               ))}
             </select>
           </div>
-          <button type="submit" disabled={bulkLoading || !bulkText.trim()}>
+          <button
+            type="submit"
+            disabled={bulkLoading || !bulkText.trim()}
+            className={`px-4 py-2 rounded-md text-white ${bulkLoading || !bulkText.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+          >
             {bulkLoading ? 'Importing...' : 'Import Wallets'}
           </button>
           {bulkResults && (
-            <div className={`bulk-results ${bulkResults.type}`}>
+            <div
+              className={`p-3 rounded-md ${bulkResults.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}
+            >
               <p>{bulkResults.message}</p>
               {bulkResults.details && (
-                <div className="bulk-details">
+                <div className="mt-2">
                   <p>Total: {bulkResults.details.total}</p>
                   <p>Successful: {bulkResults.details.successful}</p>
                   <p>Failed: {bulkResults.details.failed}</p>
                   {bulkResults.details.errors.length > 0 && (
-                    <ul>
+                    <ul className="list-disc ml-5 mt-2">
                       {bulkResults.details.errors.map((error, index) => (
                         <li key={index}>
                           {error.address}: {error.error}
