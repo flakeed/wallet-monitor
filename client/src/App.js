@@ -8,7 +8,7 @@ import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
 // Fallback API base for local dev if env not provided
-const API_BASE = process.env.REACT_APP_API_BASE || 'http://127.0.0.1:5001/api';
+const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
   const [wallets, setWallets] = useState([]);
