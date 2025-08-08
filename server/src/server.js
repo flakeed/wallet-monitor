@@ -384,8 +384,8 @@ app.post('/api/wallets/bulk', async (req, res) => {
       return res.status(400).json({ error: 'At least one wallet is required' });
     }
 
-    if (wallets.length > 500) {
-      return res.status(400).json({ error: 'Maximum 500 wallets allowed per bulk import' });
+    if (wallets.length > 1000) {
+      return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
     }
 
     const results = {
@@ -453,7 +453,7 @@ app.get('/api/wallets/bulk-template', (req, res) => {
 # Format: address,name (name is optional)
 # One wallet per line
 # Lines starting with # are ignored
-# Maximum 500 wallets
+# Maximum 1000 wallets
 
 # Example wallets (replace with real addresses):
 9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1

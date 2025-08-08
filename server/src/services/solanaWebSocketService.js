@@ -25,7 +25,7 @@ class SolanaWebSocketService {
         this.messageCount = 0;
         this.isStarted = false;
         this.batchSize = 400;
-        this.maxSubscriptions = 500;
+        this.maxSubscriptions = 1000;
     }
 
     async start() {

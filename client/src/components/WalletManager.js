@@ -83,10 +83,10 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
       return;
     }
 
-    if (wallets.length > 500) {
+    if (wallets.length > 1000) {
       setBulkResults({
         type: 'error',
-        message: 'Maximum 500 wallets allowed per bulk import. Please split your list.'
+        message: 'Maximum 1000 wallets allowed per bulk import. Please split your list.'
       });
       return;
     }
