@@ -560,8 +560,8 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-https.createServer(sslOptions, app).listen(port, '158.220.125.26', () => {
-  console.log(`[${new Date().toISOString()}] 🚀 Server running on https://158.220.125.26:${port}`);
+https.createServer(sslOptions, app).listen(port, '127.0.0.1', () => {
+  console.log(`[${new Date().toISOString()}] 🚀 Server running on https://127.0.0.1:${port}`);
   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
   console.log(
     `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
