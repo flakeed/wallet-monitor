@@ -159,7 +159,9 @@ app.post('/api/wallets', async (req, res) => {
             return res.status(400).json({ error: 'Group ID is required' });
         }
 
-        if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+        try {
+            new PublicKey(address); // Проверка валидности адреса
+        } catch {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
 
@@ -183,7 +185,9 @@ app.delete('/api/wallets/:address', async (req, res) => {
     try {
         const address = req.params.address.trim();
 
-        if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+        try {
+            new PublicKey(address); // Проверка валидности адреса
+        } catch {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
 
@@ -336,7 +340,9 @@ app.get('/api/wallet/:address', async (req, res) => {
     try {
         const address = req.params.address.trim();
 
-        if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+        try {
+            new PublicKey(address); // Проверка валидности адреса
+        } catch {
             return res.status(400).json({ error: 'Invalid Solana public key format' });
         }
 
@@ -459,19 +465,24 @@ app.post('/api/wallets/bulk', async (req, res) => {
             ]);
         };
 
+        // Предварительная валидация всех адресов
         for (const wallet of wallets) {
-            if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+            try {
+                if (!wallet.address) {
+                    throw new Error('Wallet address is missing');
+                }
+                new PublicKey(wallet.address); // Проверка валидности адреса
+            } catch (error) {
                 results.failed++;
                 results.errors.push({
-                    address: wallet.address || 'invalid',
+                    address: wallet.address || 'missing',
                     name: wallet.name || null,
-                    error: 'Invalid Solana wallet address format',
+                    error: error.message || 'Invalid Solana wallet address format',
                 });
-                continue;
             }
         }
 
-        const batchSize = 50; // Уменьшено для оптимизации
+        const batchSize = 50;
         for (let i = 0; i < wallets.length; i += batchSize) {
             console.log(`[${new Date().toISOString()}] 📥 Processing batch ${i}/${wallets.length}, batch size: ${Math.min(batchSize, wallets.length - i)}`);
             const batch = wallets.slice(i, i + batchSize);
@@ -501,27 +512,33 @@ app.post('/api/wallets/bulk', async (req, res) => {
                             }
                         })
                     ),
-                    30000 // Таймаут 30 секунд на батч
+                    60000 // Увеличен таймаут до 60 секунд
                 );
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Batch ${i} timeout:`, error);
                 results.errors.push({ batch: i, error: error.message });
             }
 
-            await redis.publish('bulk-import-progress', JSON.stringify({
-                progress: Math.min(((i + batchSize) / wallets.length * 100).toFixed(2), 100),
-                groupId,
-            }));
+            // Публикуем прогресс только если не все кошельки провалились
+            if (results.successful + results.failed > 0) {
+                await redis.publish('bulk-import-progress', JSON.stringify({
+                    progress: Math.min(((i + batchSize) / wallets.length * 100).toFixed(2), 100),
+                    groupId,
+                    successful: results.successful,
+                    failed: results.failed,
+                }));
+            }
             await new Promise((resolve) => setTimeout(resolve, 50));
         }
 
-        // После завершения импорта обновляем подписки
-        if (solanaWebSocketService.isStarted && (!solanaWebSocketService.activeGroupId || solanaWebSocketService.activeGroupId === groupId)) {
+        // Проверяем, были ли успешные добавления перед подпиской
+        if (results.successful > 0 && solanaWebSocketService.isStarted && (!solanaWebSocketService.activeGroupId || solanaWebSocketService.activeGroupId === groupId)) {
+            console.log(`[${new Date().toISOString()}] 🔄 Subscribing to newly added wallets`);
             await solanaWebSocketService.subscribeToWallets();
         }
 
         res.json({
-            success: true,
+            success: results.successful > 0,
             message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
             results,
         });
@@ -566,15 +583,19 @@ app.post('/api/wallets/validate', (req, res) => {
         };
 
         for (const wallet of wallets) {
-            if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+            try {
+                if (!wallet.address) {
+                    throw new Error('Wallet address is missing');
+                }
+                new PublicKey(wallet.address); // Проверка валидности адреса
+                validation.valid++;
+            } catch (error) {
                 validation.invalid++;
                 validation.errors.push({
                     address: wallet.address || 'missing',
                     name: wallet.name || null,
-                    error: 'Invalid Solana wallet address format',
+                    error: error.message || 'Invalid Solana wallet address format',
                 });
-            } else {
-                validation.valid++;
             }
         }
 

@@ -24,7 +24,7 @@ class SolanaWebSocketService {
         this.pendingRequests = new Map();
         this.messageCount = 0;
         this.isStarted = false;
-        this.batchSize = 50; // Уменьшено для оптимизации
+        this.batchSize = 50;
         this.maxSubscriptions = 1000;
         this.activeGroupId = null;
     }
@@ -133,12 +133,25 @@ class SolanaWebSocketService {
         }
 
         if (message.method === 'accountNotification') {
-            const { walletAddress, signature, blockTime } = message.params;
-            await this.monitoringService.processWebhookMessage({
-                walletAddress,
-                signature,
-                blockTime,
-            });
+            const { walletAddress, signature, blockTime } = message.params || {};
+            // Проверка на валидность сообщения
+            if (!walletAddress || !signature || !blockTime) {
+                console.warn(`[${new Date().toISOString()}] ⚠️ Invalid WebSocket message:`, message);
+                return;
+            }
+
+            try {
+                new PublicKey(walletAddress); // Проверка валидности адреса
+                await this.monitoringService.processWebhookMessage({
+                    walletAddress,
+                    signature,
+                    blockTime,
+                });
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error processing WebSocket message for ${walletAddress}:`, error.message);
+            }
+        } else {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Unhandled WebSocket message type:`, message.method);
         }
     }
 
@@ -154,7 +167,7 @@ class SolanaWebSocketService {
         }
 
         try {
-            const publicKey = new PublicKey(walletAddress);
+            new PublicKey(walletAddress); // Проверка валидности адреса
             const messageId = ++this.messageId;
             const subscribeMessage = {
                 jsonrpc: '2.0',
@@ -280,11 +293,8 @@ class SolanaWebSocketService {
 
     async addWallet(address, name = null, groupId) {
         try {
+            new PublicKey(address); // Проверка валидности адреса
             const wallet = await this.db.addWallet(address, name, groupId);
-            // Подписка отключена во время bulk-импорта для оптимизации
-            // if (this.isStarted && (!this.activeGroupId || this.activeGroupId === groupId)) {
-            //     await this.subscribeToWallet(address);
-            // }
             return wallet;
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${address}:`, error);
