@@ -6,6 +6,7 @@ function TokenTracker() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedToken, setSelectedToken] = useState(null);
+  const [isChartOpen, setIsChartOpen] = useState(false);
 
   const load = async (h = hours) => {
     try {
@@ -14,8 +15,6 @@ function TokenTracker() {
       if (!trackerRes.ok) throw new Error('Failed to fetch data');
       const trackerData = await trackerRes.json();
       setItems(trackerData);
-      // Автоматически выбираем первый токен для отображения графика
-      if (trackerData.length > 0) setSelectedToken(trackerData[0].mint);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -26,6 +25,18 @@ function TokenTracker() {
   useEffect(() => {
     load();
   }, []);
+
+  // Открытие модального окна с графиком
+  const openChart = (mintAddress) => {
+    setSelectedToken(mintAddress);
+    setIsChartOpen(true);
+  };
+
+  // Закрытие модального окна
+  const closeChart = () => {
+    setIsChartOpen(false);
+    setSelectedToken(null);
+  };
 
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
@@ -50,47 +61,46 @@ function TokenTracker() {
         <div className="text-gray-500">No data</div>
       ) : (
         <div>
-          <div className="mb-4">
-            <label htmlFor="tokenSelect" className="block text-sm font-medium text-gray-700">Select Token:</label>
-            <select
-              id="tokenSelect"
-              value={selectedToken || ''}
-              onChange={(e) => setSelectedToken(e.target.value)}
-              className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
-            >
-              {items.map((token) => (
-                <option key={token.mint} value={token.mint}>
-                  {token.symbol || token.mint}
-                </option>
-              ))}
-            </select>
-            {selectedToken && (
-              <div className="mt-4">
-                <h4 className="text-lg font-medium">Chart for {items.find(t => t.mint === selectedToken)?.symbol || selectedToken}</h4>
-                <iframe
-                  src={`https://gmgn.ai/sol/token/${encodeURIComponent(selectedToken)}`}
-                  title="Token Chart"
-                  width="100%"
-                  height="400"
-                  frameBorder="0"
-                  style={{ border: '1px solid #ddd' }}
-                />
-              </div>
-            )}
-          </div>
           {items.map((token) => (
             <div key={token.mint} className="mb-4">
-              <TokenCard token={token} />
+              <TokenCard token={token} onOpenChart={() => openChart(token.mint)} />
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Модальное окно с графиком */}
+      {isChartOpen && selectedToken && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeChart}>
+          <div className="bg-white p-4 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h4 className="text-lg font-medium">
+                Chart for {items.find(t => t.mint === selectedToken)?.symbol || selectedToken}
+              </h4>
+              <button
+                onClick={closeChart}
+                className="text-red-600 hover:text-red-800 font-bold text-xl"
+              >
+                &times;
+              </button>
+            </div>
+            <iframe
+              src={`https://gmgn.ai/sol/token/${encodeURIComponent(selectedToken)}`}
+              title="Token Chart"
+              width="100%"
+              height="600"
+              frameBorder="0"
+              style={{ border: '1px solid #ddd' }}
+            />
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// TokenCard без кнопки, так как график встроен
-function TokenCard({ token }) {
+// Обновленный TokenCard с кнопкой для открытия графика
+function TokenCard({ token, onOpenChart }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   return (
@@ -113,6 +123,12 @@ function TokenCard({ token }) {
           <WalletPill key={w.address} wallet={w} />
         ))}
       </div>
+      <button
+        onClick={onOpenChart}
+        className="mt-2 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+      >
+        Open Chart
+      </button>
     </div>
   );
 }
