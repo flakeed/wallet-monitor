@@ -5,6 +5,8 @@ function TokenTracker() {
   const [hours, setHours] = useState('24');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedToken, setSelectedToken] = useState(null);
+  const [isChartOpen, setIsChartOpen] = useState(false);
 
   const load = async (h = hours) => {
     try {
@@ -24,14 +26,16 @@ function TokenTracker() {
     load();
   }, []);
 
-  // Функция для открытия графика на GMGN.AI с адресом токена
-  const openGmgnChart = (mintAddress) => {
-    if (!mintAddress) {
-      console.warn('No mint address available for chart');
-      return;
-    }
-    const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
-    window.open(gmgnUrl, '_blank', 'noopener,noreferrer');
+  // Открытие модального окна с графиком
+  const openChart = (mintAddress) => {
+    setSelectedToken(mintAddress);
+    setIsChartOpen(true);
+  };
+
+  // Закрытие модального окна
+  const closeChart = () => {
+    setIsChartOpen(false);
+    setSelectedToken(null);
   };
 
   return (
@@ -59,11 +63,47 @@ function TokenTracker() {
         <div>
           {items.map((token) => (
             <div key={token.mint} className="mb-4">
-              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
+              <TokenCard token={token} onOpenChart={() => openChart(token.mint)} />
             </div>
           ))}
         </div>
       )}
+
+      {/* Модальное окно с графиком */}
+      {isChartOpen && selectedToken && (
+  <div
+    className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    onClick={closeChart}
+  >
+    <div
+      className="bg-white p-4 rounded-lg w-full max-w-5xl max-h-[90vh] overflow-y-auto"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex justify-between items-center mb-4">
+        <h4 className="text-lg font-medium">
+          Chart for {items.find(t => t.mint === selectedToken)?.symbol || selectedToken}
+        </h4>
+        <button
+          onClick={closeChart}
+          className="text-red-600 hover:text-red-800 font-bold text-xl"
+        >
+          &times;
+        </button>
+      </div>
+
+      {/* Dexscreener chart */}
+      <iframe
+        src={`https://dexscreener.com/solana/${encodeURIComponent(selectedToken)}?embed=1&theme=dark`}
+        title="Dexscreener Chart"
+        width="100%"
+        height="600"
+        frameBorder="0"
+        allowFullScreen
+        style={{ border: '1px solid #ddd', borderRadius: '8px' }}
+      />
+    </div>
+  </div>
+)}
     </div>
   );
 }
