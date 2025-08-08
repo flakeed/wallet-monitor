@@ -67,6 +67,7 @@ const startWebSocketService = async () => {
 
 setTimeout(startWebSocketService, 2000);
 
+// SSE for real-time transaction updates
 app.get('/api/transactions/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -109,9 +110,87 @@ app.get('/api/transactions/stream', (req, res) => {
   }, 30000);
 });
 
+// Get all groups
+app.get('/api/groups', async (req, res) => {
+  try {
+    const groups = await db.getGroups();
+    res.json(groups);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching groups:`, error);
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+// Create a new group
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.length > 100) {
+      return res.status(400).json({ error: 'Valid group name is required (max 100 characters)' });
+    }
+    const query = 'INSERT INTO groups (name) VALUES ($1) RETURNING *';
+    const result = await db.pool.query(query, [name]);
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error creating group:`, error);
+    if (error.code === '23505') {
+      res.status(409).json({ error: 'Group name already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to create group' });
+    }
+  }
+});
+
+// Update a group
+app.put('/api/groups/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.length > 100) {
+      return res.status(400).json({ error: 'Valid group name is required (max 100 characters)' });
+    }
+    const query = 'UPDATE groups SET name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *';
+    const result = await db.pool.query(query, [name, id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error updating group:`, error);
+    if (error.code === '23505') {
+      res.status(409).json({ error: 'Group name already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to update group' });
+    }
+  }
+});
+
+// Delete a group
+app.delete('/api/groups/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Set group_id to NULL in wallets table
+    await db.pool.query('UPDATE wallets SET group_id = NULL WHERE group_id = $1', [id]);
+    const query = 'DELETE FROM groups WHERE id = $1 RETURNING *';
+    const result = await db.pool.query(query, [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    res.json({ success: true, message: 'Group deleted successfully' });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error deleting group:`, error);
+    res.status(500).json({ error: 'Failed to delete group' });
+  }
+});
+
+// Get all wallets, optionally filtered by groupId
 app.get('/api/wallets', async (req, res) => {
   try {
-    const wallets = await db.getActiveWallets();
+    const { groupId } = req.query;
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
+    }
+    const wallets = await db.getActiveWallets(groupId ? Number(groupId) : null);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
         const stats = await db.getWalletStats(wallet.id);
@@ -136,9 +215,10 @@ app.get('/api/wallets', async (req, res) => {
   }
 });
 
+// Add a wallet, optionally with groupId
 app.post('/api/wallets', async (req, res) => {
   try {
-    const { address, name } = req.body;
+    const { address, name, groupId } = req.body;
 
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
@@ -148,7 +228,11 @@ app.post('/api/wallets', async (req, res) => {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
     }
 
-    const wallet = await solanaWebSocketService.addWallet(address, name);
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
+    }
+
+    const wallet = await solanaWebSocketService.addWallet(address, name, groupId ? Number(groupId) : null);
     res.json({
       success: true,
       wallet,
@@ -158,12 +242,15 @@ app.post('/api/wallets', async (req, res) => {
     console.error(`[${new Date().toISOString()}] ❌ Error adding wallet:`, error);
     if (error.message.includes('already exists')) {
       res.status(409).json({ error: 'Wallet is already being monitored' });
+    } else if (error.message.includes('Group not found')) {
+      res.status(400).json({ error: 'Invalid groupId' });
     } else {
       res.status(500).json({ error: error.message });
     }
   }
 });
 
+// Remove a wallet
 app.delete('/api/wallets/:address', async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -187,6 +274,7 @@ app.delete('/api/wallets/:address', async (req, res) => {
   }
 });
 
+// Remove all wallets
 app.delete('/api/wallets', async (req, res) => {
   try {
     await solanaWebSocketService.removeAllWallets();
@@ -202,13 +290,21 @@ app.delete('/api/wallets', async (req, res) => {
   }
 });
 
+// Get recent transactions, optionally filtered by type and groupId
 app.get('/api/transactions', async (req, res) => {
   try {
-    const hours = parseInt(req.query.hours) || 24;
-    const limit = parseInt(req.query.limit) || 400;
-    const type = req.query.type;
+    const { hours = 24, limit = 400, type, groupId } = req.query;
+    if (isNaN(hours) || hours < 0) {
+      return res.status(400).json({ error: 'Invalid hours parameter' });
+    }
+    if (isNaN(limit) || limit < 0) {
+      return res.status(400).json({ error: 'Invalid limit parameter' });
+    }
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
+    }
 
-    const transactions = await db.getRecentTransactions(hours, limit, type);
+    const transactions = await db.getRecentTransactions(Number(hours), Number(limit), type || null, groupId ? Number(groupId) : null);
     const groupedTransactions = {};
 
     transactions.forEach((row) => {
@@ -222,6 +318,7 @@ app.get('/api/transactions', async (req, res) => {
           wallet: {
             address: row.wallet_address,
             name: row.wallet_name,
+            groupId: row.group_id,
           },
           tokensBought: [],
           tokensSold: [],
@@ -253,6 +350,7 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
+// Get monitoring status
 app.get('/api/monitoring/status', (req, res) => {
   try {
     const monitoringStatus = monitoringService.getStatus();
@@ -267,6 +365,7 @@ app.get('/api/monitoring/status', (req, res) => {
   }
 });
 
+// Toggle monitoring
 app.post('/api/monitoring/toggle', async (req, res) => {
   try {
     const { action } = req.body;
@@ -286,6 +385,7 @@ app.post('/api/monitoring/toggle', async (req, res) => {
   }
 });
 
+// Get wallet details
 app.get('/api/wallet/:address', async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -304,7 +404,7 @@ app.get('/api/wallet/:address', async (req, res) => {
     const balanceLamports = await connection.getBalance(publicKey);
     const balanceSol = balanceLamports / 1e9;
 
-    const transactions = await db.getRecentTransactions(24 * 7, 100);
+    const transactions = await db.getRecentTransactions(24 * 7, 100, null, wallet.group_id);
     const walletTransactions = transactions.filter((tx) => tx.wallet_address === address);
 
     const groupedTransactions = {};
@@ -343,6 +443,7 @@ app.get('/api/wallet/:address', async (req, res) => {
     res.json({
       address,
       balance: Number(balanceSol).toLocaleString(undefined, { maximumFractionDigits: 6 }),
+      groupId: wallet.group_id,
       operations,
     });
   } catch (error) {
@@ -353,10 +454,15 @@ app.get('/api/wallet/:address', async (req, res) => {
   }
 });
 
+// Get transaction stats
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const stats = await db.getMonitoringStats();
+    const { groupId } = req.query;
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
+    }
+    const stats = await db.getMonitoringStats(groupId ? Number(groupId) : null);
 
     res.json({
       buyTransactions: stats.buy_transactions_today || 0,
@@ -372,9 +478,10 @@ app.get('/api/stats/transactions', async (req, res) => {
   }
 });
 
+// Bulk add wallets
 app.post('/api/wallets/bulk', async (req, res) => {
   try {
-    const { wallets } = req.body;
+    const { wallets, groupId } = req.body;
 
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ error: 'Wallets array is required' });
@@ -386,6 +493,10 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     if (wallets.length > 1000) {
       return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
+    }
+
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
     }
 
     const results = {
@@ -417,12 +528,13 @@ app.post('/api/wallets/bulk', async (req, res) => {
           if (hasError) return;
 
           try {
-            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null);
+            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId ? Number(groupId) : null);
             results.successful++;
             results.successfulWallets.push({
               address: wallet.address,
               name: wallet.name || null,
               id: addedWallet.id,
+              groupId: addedWallet.group_id,
             });
           } catch (error) {
             results.failed++;
@@ -448,30 +560,36 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
+// Get bulk import template
 app.get('/api/wallets/bulk-template', (req, res) => {
   const template = `# Bulk Wallet Import Template
-# Format: address,name (name is optional)
+# Format: address,name,groupId (name and groupId are optional)
 # One wallet per line
 # Lines starting with # are ignored
 # Maximum 1000 wallets
 
 # Example wallets (replace with real addresses):
-9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
-53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader
+9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1,1
+53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader,1
 Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
-7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet`;
+7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet,2`;
 
   res.setHeader('Content-Type', 'text/plain');
   res.setHeader('Content-Disposition', 'attachment; filename="wallet-import-template.txt"');
   res.send(template);
 });
 
-app.post('/api/wallets/validate', (req, res) => {
+// Validate wallets
+app.post('/api/wallets/validate', async (req, res) => {
   try {
-    const { wallets } = req.body;
+    const { wallets, groupId } = req.body;
 
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ error: 'Wallets array is required' });
+    }
+
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
     }
 
     const validation = {
@@ -480,6 +598,13 @@ app.post('/api/wallets/validate', (req, res) => {
       invalid: 0,
       errors: [],
     };
+
+    if (groupId) {
+      const group = await db.pool.query('SELECT id FROM groups WHERE id = $1', [Number(groupId)]);
+      if (group.rows.length === 0) {
+        return res.status(400).json({ error: 'Group not found' });
+      }
+    }
 
     for (const wallet of wallets) {
       if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
@@ -504,12 +629,17 @@ app.post('/api/wallets/validate', (req, res) => {
   }
 });
 
+// Get top tokens
 app.get('/api/stats/tokens', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
-    const type = req.query.type;
-
-    const topTokens = await db.getTopTokens(limit, type);
+    const { limit = 10, type, groupId } = req.query;
+    if (isNaN(limit) || limit < 0) {
+      return res.status(400).json({ error: 'Invalid limit parameter' });
+    }
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
+    }
+    const topTokens = await db.getTopTokens(Number(limit), type || null, groupId ? Number(groupId) : null);
     res.json(topTokens);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching top tokens:`, error);
@@ -517,11 +647,18 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
+// Token-centric tracker
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
-    const hours = parseInt(req.query.hours) || 24;
-    const rows = await db.getTokenWalletAggregates(hours);
+    const { hours = 24, groupId } = req.query;
+    if (isNaN(hours) || hours < 0) {
+      return res.status(400).json({ error: 'Invalid hours parameter' });
+    }
+    if (groupId && isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid groupId parameter' });
+    }
+
+    const rows = await db.getTokenWalletAggregates(Number(hours), groupId ? Number(groupId) : null);
 
     const byToken = new Map();
     for (const row of rows) {
@@ -546,6 +683,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
+        groupId: row.group_id,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
         solSpent: Number(row.sol_spent) || 0,
@@ -577,6 +715,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
   }
 });
 
+// Get WebSocket status
 app.get('/api/websocket/status', (req, res) => {
   try {
     const status = solanaWebSocketService.getStatus();
@@ -587,6 +726,7 @@ app.get('/api/websocket/status', (req, res) => {
   }
 });
 
+// Reconnect WebSocket
 app.post('/api/websocket/reconnect', async (req, res) => {
   try {
     await solanaWebSocketService.stop();
@@ -602,6 +742,7 @@ app.post('/api/websocket/reconnect', async (req, res) => {
   }
 });
 
+// Handle server shutdown
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
@@ -629,13 +770,3 @@ https.createServer(sslOptions, app).listen(port, '127.0.0.1', () => {
     }`
   );
 });
-
-// app.listen(port, '158.220.125.26', () => {
-//   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
-//   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
-//   console.log(
-//     `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
-//       monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
-//     }`
-//   );
-// });
