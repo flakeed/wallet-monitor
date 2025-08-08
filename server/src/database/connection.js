@@ -52,74 +52,117 @@ class Database {
     }
 
     async addWallet(address, name = null, groupId = null) {
-        const query = `
-            INSERT INTO wallets (address, name, group_id) 
-            VALUES ($1, $2, $3) 
-            RETURNING id, address, name, group_id, created_at
-        `;
+        const client = await this.pool.connect();
         try {
-            const result = await this.pool.query(query, [address, name, groupId]);
-            return result.rows[0];
-        } catch (error) {
-            if (error.code === '23505') {
-                throw new Error('Wallet already exists');
+            await client.query('BEGIN');
+
+            // Проверяем, существует ли кошелек
+            let wallet = await this.getWalletByAddress(address);
+            if (!wallet) {
+                // Добавляем новый кошелек
+                const walletQuery = `
+                    INSERT INTO wallets (address, name) 
+                    VALUES ($1, $2) 
+                    RETURNING id, address, name, created_at
+                `;
+                const walletResult = await client.query(walletQuery, [address, name]);
+                wallet = walletResult.rows[0];
             }
-            throw error;
+
+            // Если указана группа, добавляем связь в wallet_groups
+            if (groupId) {
+                const groupQuery = `
+                    INSERT INTO wallet_groups (wallet_id, group_id) 
+                    VALUES ($1, $2)
+                    ON CONFLICT DO NOTHING
+                    RETURNING wallet_id, group_id
+                `;
+                await client.query(groupQuery, [wallet.id, groupId]);
+            }
+
+            await client.query('COMMIT');
+            return {
+                ...wallet,
+                group_id: groupId,
+            };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            if (error.code === '23505' && error.constraint === 'wallet_groups_pkey') {
+                throw new Error('Wallet is already in this group');
+            }
+            throw new Error(`Failed to add wallet: ${error.message}`);
+        } finally {
+            client.release();
         }
     }
 
     async removeWallet(address) {
-        const query = `
-            DELETE FROM wallets 
-            WHERE address = $1
-            RETURNING id
-        `;
+        const client = await this.pool.connect();
         try {
-            const result = await this.pool.query(query, [address]);
+            await client.query('BEGIN');
+            const query = `
+                DELETE FROM wallets 
+                WHERE address = $1
+                RETURNING id
+            `;
+            const result = await client.query(query, [address]);
             if (result.rowCount === 0) {
                 throw new Error('Wallet not found');
             }
+            await client.query('COMMIT');
             return result.rows[0];
         } catch (error) {
+            await client.query('ROLLBACK');
             throw new Error(`Failed to remove wallet: ${error.message}`);
+        } finally {
+            client.release();
         }
     }
 
     async getActiveWallets() {
         const query = `
-            SELECT w.*, g.name as group_name, 
+            SELECT w.*, 
+                   ARRAY_AGG(g.id) as group_ids,
+                   ARRAY_AGG(g.name) as group_names,
                    COUNT(t.id) as transaction_count,
-                   (SELECT COUNT(*) FROM wallets w2 WHERE w2.group_id = w.group_id) as wallet_count
+                   (SELECT COUNT(*) FROM wallet_groups wg WHERE wg.wallet_id = w.id) as group_count
             FROM wallets w
-            LEFT JOIN groups g ON w.group_id = g.id
+            LEFT JOIN wallet_groups wg ON w.id = wg.wallet_id
+            LEFT JOIN groups g ON wg.group_id = g.id
             LEFT JOIN transactions t ON w.id = t.wallet_id
             WHERE w.is_active = TRUE 
-            GROUP BY w.id, g.name
+            GROUP BY w.id
             ORDER BY w.created_at DESC
         `;
         const result = await this.pool.query(query);
         return result.rows.map(row => ({
             ...row,
-            group: row.group_id ? { id: row.group_id, name: row.group_name } : null,
+            groups: row.group_ids
+                ? row.group_ids.map((id, index) => ({
+                      id,
+                      name: row.group_names[index],
+                  }))
+                : [],
         }));
     }
 
     async getWalletsByGroup(groupId) {
         const query = `
-            SELECT w.*, g.name as group_name, 
-                   COUNT(t.id) as transaction_count,
-                   (SELECT COUNT(*) FROM wallets w2 WHERE w2.group_id = w.group_id) as wallet_count
+            SELECT w.*, 
+                   g.name as group_name,
+                   COUNT(t.id) as transaction_count
             FROM wallets w
-            LEFT JOIN groups g ON w.group_id = g.id
+            JOIN wallet_groups wg ON w.id = wg.wallet_id
+            JOIN groups g ON wg.group_id = g.id
             LEFT JOIN transactions t ON w.id = t.wallet_id
-            WHERE w.is_active = TRUE AND w.group_id = $1
+            WHERE w.is_active = TRUE AND wg.group_id = $1
             GROUP BY w.id, g.name
             ORDER BY w.created_at DESC
         `;
         const result = await this.pool.query(query, [groupId]);
         return result.rows.map(row => ({
             ...row,
-            group: row.group_id ? { id: row.group_id, name: row.group_name } : null,
+            group: { id: groupId, name: row.group_name },
         }));
     }
 
@@ -139,7 +182,7 @@ class Database {
     async getGroups() {
         const query = `
             SELECT g.*, 
-                   (SELECT COUNT(*) FROM wallets w WHERE w.group_id = g.id) as wallet_count
+                   (SELECT COUNT(*) FROM wallet_groups wg WHERE wg.group_id = g.id) as wallet_count
             FROM groups g
             ORDER BY g.created_at DESC
         `;
@@ -159,9 +202,7 @@ class Database {
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id, mint
         `;
-        const result = await this.pool.query(query, [
-            mint, symbol, name, decimals
-        ]);
+        const result = await this.pool.query(query, [mint, symbol, name, decimals]);
         return result.rows[0];
     }
 
@@ -182,9 +223,9 @@ class Database {
         `;
         try {
             const result = await this.pool.query(query, [
-                walletId, 
-                signature, 
-                blockTime, 
+                walletId,
+                signature,
+                blockTime,
                 transactionType,
                 transactionType === 'buy' ? solAmount : 0,
                 transactionType === 'sell' ? solAmount : 0,
@@ -192,7 +233,7 @@ class Database {
             return result.rows[0];
         } catch (error) {
             if (error.code === '23505') {
-                return null; 
+                return null;
             }
             throw error;
         }
@@ -210,19 +251,27 @@ class Database {
 
     async getWalletByAddress(address) {
         const query = `
-            SELECT w.*, g.name as group_name 
-            FROM wallets w 
-            LEFT JOIN groups g ON w.group_id = g.id 
+            SELECT w.*, 
+                   ARRAY_AGG(g.id) as group_ids,
+                   ARRAY_AGG(g.name) as group_names
+            FROM wallets w
+            LEFT JOIN wallet_groups wg ON w.id = wg.wallet_id
+            LEFT JOIN groups g ON wg.group_id = g.id
             WHERE w.address = $1
+            GROUP BY w.id
         `;
         const result = await this.pool.query(query, [address]);
-        return result.rows[0] ? {
-            ...result.rows[0],
-            group: result.rows[0].group_id ? { 
-                id: result.rows[0].group_id, 
-                name: result.rows[0].group_name 
-            } : null,
-        } : null;
+        return result.rows[0]
+            ? {
+                  ...result.rows[0],
+                  groups: result.rows[0].group_ids
+                      ? result.rows[0].group_ids.map((id, index) => ({
+                            id,
+                            name: result.rows[0].group_names[index],
+                        }))
+                      : [],
+              }
+            : null;
     }
 
     async getRecentTransactions(hours, limit, type = null, groupId = null) {
@@ -248,14 +297,14 @@ class Database {
             WHERE t.block_time >= CURRENT_TIMESTAMP - INTERVAL '${hours} hours'
         `;
         const params = [];
-        
+
         if (type && type !== 'all') {
             query += ` AND t.transaction_type = $${params.length + 1}`;
             params.push(type);
         }
 
         if (groupId) {
-            query += ` AND w.group_id = $${params.length + 1}`;
+            query += ` AND w.id IN (SELECT wallet_id FROM wallet_groups WHERE group_id = $${params.length + 1})`;
             params.push(groupId);
         }
 
@@ -283,7 +332,7 @@ class Database {
         const params = [];
 
         if (groupId) {
-            query += ` AND w.group_id = $${params.length + 1}`;
+            query += ` AND w.id IN (SELECT wallet_id FROM wallet_groups WHERE group_id = $${params.length + 1})`;
             params.push(groupId);
         }
 
@@ -319,7 +368,7 @@ class Database {
         }
 
         if (groupId) {
-            query += ` AND w.group_id = $${params.length + 1}`;
+            query += ` AND w.id IN (SELECT wallet_id FROM wallet_groups WHERE group_id = $${params.length + 1})`;
             params.push(groupId);
         }
 
@@ -365,7 +414,7 @@ class Database {
         const params = [];
 
         if (groupId) {
-            query += ` AND w.group_id = $${params.length + 1}`;
+            query += ` AND w.id IN (SELECT wallet_id FROM wallet_groups WHERE group_id = $${params.length + 1})`;
             params.push(groupId);
         }
 
@@ -393,9 +442,19 @@ class Database {
     }
 
     async removeAllWallets() {
-        const query = `DELETE FROM wallets RETURNING id`;
-        const result = await this.pool.query(query);
-        return { deletedCount: result.rowCount };
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+            const query = `DELETE FROM wallets RETURNING id`;
+            const result = await client.query(query);
+            await client.query('COMMIT');
+            return { deletedCount: result.rowCount };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw new Error(`Failed to remove all wallets: ${error.message}`);
+        } finally {
+            client.release();
+        }
     }
 
     async close() {

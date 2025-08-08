@@ -7,12 +7,18 @@ CREATE TABLE IF NOT EXISTS groups (
 
 CREATE TABLE IF NOT EXISTS wallets (
     id SERIAL PRIMARY KEY,
-    address VARCHAR(44) NOT NULL UNIQUE,
+    address VARCHAR(44) NOT NULL,
     name VARCHAR(100),
-    group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wallet_groups (
+    wallet_id INTEGER NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (wallet_id, group_id)
 );
 
 CREATE TABLE IF NOT EXISTS tokens (
@@ -46,7 +52,8 @@ CREATE TABLE IF NOT EXISTS token_operations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
-CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_groups_wallet_id ON wallet_groups(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_groups_group_id ON wallet_groups(group_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
 CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time);
