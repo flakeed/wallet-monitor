@@ -28,7 +28,7 @@ class SolanaWebSocketService {
         this.maxSubscriptions = 1000;
     }
 
-    async start() {
+    async start(groupId = null) {
         if (this.isStarted) {
             console.log(`[${new Date().toISOString()}] 🔄 WebSocket service already started`);
             return;
@@ -36,7 +36,7 @@ class SolanaWebSocketService {
         console.log(`[${new Date().toISOString()}] 🚀 Starting Solana WebSocket client for ${this.wsUrl}`);
         this.isStarted = true;
         await this.connect();
-        await this.subscribeToWallets();
+        await this.subscribeToWallets(groupId);
     }
 
     async connect() {
@@ -136,8 +136,8 @@ class SolanaWebSocketService {
         return null;
     }
 
-    async subscribeToWallets() {
-        const wallets = await this.db.getActiveWallets();
+    async subscribeToWallets(groupId = null) {
+        const wallets = await this.db.getActiveWallets(groupId);
         if (wallets.length > this.maxSubscriptions) {
             console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
             wallets.splice(this.maxSubscriptions);
@@ -184,12 +184,12 @@ class SolanaWebSocketService {
         this.subscriptions.delete(walletAddress);
     }
 
-    async addWallet(walletAddress, name = null) {
+    async addWallet(walletAddress, name = null, groupIds = []) {
         try {
             if (this.subscriptions.size >= this.maxSubscriptions) {
                 throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
             }
-            const wallet = await this.monitoringService.addWallet(walletAddress, name);
+            const wallet = await this.monitoringService.addWallet(walletAddress, name, groupIds);
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 await this.subscribeToWallet(walletAddress);
             }

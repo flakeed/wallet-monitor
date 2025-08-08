@@ -1,14 +1,33 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+
+const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function WalletManager({ onAddWallet, onAddWalletsBulk }) {
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
+  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [activeTab, setActiveTab] = useState('single');
   const [bulkText, setBulkText] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
+
+  // Fetch groups on mount
+  useEffect(() => {
+    const fetchGroups = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/groups`);
+        if (!response.ok) throw new Error('Failed to fetch groups');
+        const data = await response.json();
+        setGroups(data);
+      } catch (error) {
+        console.error('Error fetching groups:', error);
+      }
+    };
+    fetchGroups();
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,11 +46,12 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
     setMessage(null);
 
     try {
-      const result = await onAddWallet(address, name);
+      const result = await onAddWallet(address, name, selectedGroups);
       if (result.success) {
         setMessage({ type: 'success', text: result.message });
         setAddress('');
         setName('');
+        setSelectedGroups([]);
       }
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -46,19 +66,22 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
 
     for (const line of lines) {
       const trimmedLine = line.trim();
+      const parts = trimmedLine.split(/[,\t]/).map(p => p.trim());
+      const address = parts[0];
+      const name = parts[1] || null;
+      const groupNames = parts[2] ? parts[2].split(';').map(g => g.trim()) : [];
 
-      if (trimmedLine.includes(',') || trimmedLine.includes('\t')) {
-        const parts = trimmedLine.split(/[,\t]/).map(p => p.trim());
-        const address = parts[0];
-        const name = parts[1] || null;
+      // Validate address
+      if (address && address.length === 44) {
+        // Map group names to group IDs
+        const groupIds = groupNames
+          .map(name => {
+            const group = groups.find(g => g.name.toLowerCase() === name.toLowerCase());
+            return group ? group.id : null;
+          })
+          .filter(id => id);
 
-        if (address && address.length === 44) {
-          wallets.push({ address, name });
-        }
-      } else {
-        if (trimmedLine.length === 44) {
-          wallets.push({ address: trimmedLine, name: null });
-        }
+        wallets.push({ address, name, groupIds });
       }
     }
 
@@ -106,7 +129,6 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
       if (result.results.successful > 0) {
         setBulkText('');
       }
-
     } catch (error) {
       setBulkResults({
         type: 'error',
@@ -126,18 +148,18 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
         <button
           onClick={() => setActiveTab('single')}
           className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'single'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
-            }`}
+            ? 'bg-white text-gray-900 shadow-sm'
+            : 'text-gray-600 hover:text-gray-900'
+          }`}
         >
           Single Wallet
         </button>
         <button
           onClick={() => setActiveTab('bulk')}
           className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'bulk'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
-            }`}
+            ? 'bg-white text-gray-900 shadow-sm'
+            : 'text-gray-600 hover:text-gray-900'
+          }`}
         >
           Bulk Import
         </button>
@@ -148,9 +170,9 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
         <>
           {message && (
             <div className={`mb-4 p-3 rounded-lg ${message.type === 'success'
-                ? 'bg-green-50 border border-green-200 text-green-700'
-                : 'bg-red-50 border border-red-200 text-red-700'
-              }`}>
+              ? 'bg-green-50 border border-green-200 text-green-700'
+              : 'bg-red-50 border border-red-200 text-red-700'
+            }`}>
               {message.text}
             </div>
           )}
@@ -184,6 +206,26 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
               />
             </div>
 
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Groups (Optional)
+              </label>
+              <select
+                multiple
+                value={selectedGroups}
+                onChange={(e) => setSelectedGroups(Array.from(e.target.selectedOptions, option => option.value))}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                disabled={loading || groups.length === 0}
+              >
+                {groups.map(group => (
+                  <option key={group.id} value={group.id}>{group.name}</option>
+                ))}
+              </select>
+              {groups.length === 0 && (
+                <p className="text-sm text-gray-500 mt-1">No groups available. Create groups in the main dashboard.</p>
+              )}
+            </div>
+
             <button
               type="submit"
               disabled={loading || !address.trim()}
@@ -209,23 +251,23 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
             <h4 className="text-sm font-medium text-blue-900 mb-2">Format Instructions:</h4>
             <div className="text-sm text-blue-800 space-y-1">
               <p>• One wallet address per line</p>
-              <p>• Optional: Add name after comma or tab: <code className="bg-blue-100 px-1 rounded">address,name</code></p>
+              <p>• Optional: Add name and groups after comma or tab: <code className="bg-blue-100 px-1 rounded">address,name,group1;group2</code></p>
               <p>• Example:</p>
               <div className="mt-2 bg-blue-100 p-2 rounded font-mono text-xs">
-                9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1<br />
+                9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1,GroupA;GroupB<br />
                 53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC<br />
-                Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
+                Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet,GroupC
               </div>
             </div>
           </div>
 
           {bulkResults && (
             <div className={`mb-4 p-4 rounded-lg border ${bulkResults.type === 'success'
-                ? 'bg-green-50 border-green-200'
-                : 'bg-red-50 border-red-200'
-              }`}>
+              ? 'bg-green-50 border-green-200'
+              : 'bg-red-50 border-red-200'
+            }`}>
               <div className={`font-medium mb-2 ${bulkResults.type === 'success' ? 'text-green-900' : 'text-red-900'
-                }`}>
+              }`}>
                 {bulkResults.message}
               </div>
 
