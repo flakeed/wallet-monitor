@@ -12,366 +12,266 @@ import TokenTracker from './components/TokenTracker';
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
-  const [wallets, setWallets] = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [timeframe, setTimeframe] = useState('24');
-  const [transactionType, setTransactionType] = useState('all');
-  const [view, setView] = useState('tokens'); // 'tokens' | 'transactions'
-  const [groups, setGroups] = useState([]);
-  const [selectedGroup, setSelectedGroup] = useState(null);
+    const [wallets, setWallets] = useState([]);
+    const [transactions, setTransactions] = useState([]);
+    const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [refreshKey, setRefreshKey] = useState(0);
+    const [timeframe, setTimeframe] = useState('24');
+    const [transactionType, setTransactionType] = useState('all');
+    const [view, setView] = useState('tokens');
+    const [groups, setGroups] = useState([]);
+    const [selectedGroup, setSelectedGroup] = useState(null);
 
-  const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
-    try {
-      setError(null);
+    const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
+        try {
+            setLoading(true);
+            setError(null);
 
-      const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
-      const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
-      const groupsUrl = `${API_BASE}/groups`;
+            // Fetch groups
+            const groupsResponse = await fetch(`${API_BASE}/groups`);
+            if (!groupsResponse.ok) throw new Error('Failed to fetch groups');
+            const groupsData = await groupsResponse.json();
+            setGroups(groupsData);
 
-      const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
-        fetch(walletsUrl),
-        fetch(transactionsUrl),
-        fetch(`${API_BASE}/monitoring/status`),
-        fetch(groupsUrl),
-      ]);
+            // Fetch wallets for the selected group or all wallets if no group is selected
+            const walletUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
+            const walletsResponse = await fetch(walletUrl);
+            if (!walletsResponse.ok) throw new Error('Failed to fetch wallets');
+            const walletsData = await walletsResponse.json();
+            setWallets(walletsData);
 
-      if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
-        throw new Error('Failed to fetch data');
-      }
+            // Fetch transactions for the selected group or all transactions
+            const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&type=${type}${groupId ? `&groupId=${groupId}` : ''}`;
+            const transactionsResponse = await fetch(transactionsUrl);
+            if (!transactionsResponse.ok) throw new Error('Failed to fetch transactions');
+            const transactionsData = await transactionsResponse.json();
+            setTransactions(transactionsData);
 
-      const [walletsData, transactionsData, statusData, groupsData] = await Promise.all([
-        walletsRes.json(),
-        transactionsRes.json(),
-        statusRes.json(),
-        groupsRes.json(),
-      ]);
-
-      setWallets(walletsData);
-      setTransactions(transactionsData);
-      setMonitoringStatus(statusData);
-      setGroups(groupsData);
-    } catch (err) {
-      setError(err.message);
-      console.error('Error fetching data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    const sseUrl = `${API_BASE.replace(/\/api$/, '')}/api/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
-    const eventSource = new EventSource(sseUrl);
-
-    eventSource.onmessage = (event) => {
-      try {
-        const newTransaction = JSON.parse(event.data);
-        console.log('New transaction received via SSE:', newTransaction);
-
-        const now = new Date();
-        const txTime = new Date(newTransaction.timestamp);
-        const hoursDiff = (now - txTime) / (1000 * 60 * 60);
-        const matchesTimeframe = hoursDiff <= parseInt(timeframe);
-        const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
-
-        if (matchesTimeframe && matchesType) {
-          setTransactions((prev) => {
-            if (prev.some((tx) => tx.signature === newTransaction.signature)) {
-              return prev;
-            }
-            const formattedTransaction = {
-              signature: newTransaction.signature,
-              time: newTransaction.timestamp,
-              transactionType: newTransaction.transactionType,
-              solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
-              solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
-              wallet: {
-                address: newTransaction.walletAddress,
-                name: wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
-              },
-              tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
-              tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
-            };
-            return [formattedTransaction, ...prev].slice(0, 400);
-          });
+            // Fetch monitoring status
+            const statusResponse = await fetch(`${API_BASE}/monitoring/status`);
+            if (!statusResponse.ok) throw new Error('Failed to fetch monitoring status');
+            const statusData = await statusResponse.json();
+            setMonitoringStatus(statusData);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching data:`, err);
+            setError(err.message);
+        } finally {
+            setLoading(false);
         }
-      } catch (err) {
-        console.error('Error parsing SSE message:', err);
-      }
     };
 
-    eventSource.onerror = () => {
-      console.error('SSE connection error');
-      eventSource.close();
-      setTimeout(() => {
-        console.log('Attempting to reconnect to SSE...');
-      }, 5000);
+    useEffect(() => {
+        fetchData();
+
+        // Set up SSE for real-time transaction updates
+        const groupIdQuery = selectedGroup ? `?groupId=${selectedGroup}` : '';
+        const eventSource = new EventSource(`${API_BASE}/transactions/stream${groupIdQuery}`);
+        eventSource.onmessage = (event) => {
+            try {
+                const transaction = JSON.parse(event.data);
+                setTransactions((prev) => [transaction, ...prev.slice(0, 99)]);
+            } catch (err) {
+                console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE transaction:`, err);
+            }
+        };
+        eventSource.onerror = () => {
+            console.error(`[${new Date().toISOString()}] ❌ SSE connection error`);
+            eventSource.close();
+        };
+
+        return () => eventSource.close();
+    }, [refreshKey, selectedGroup]);
+
+    const addWallet = async (address, name, groupId) => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await fetch(`${API_BASE}/wallets`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ address, name, groupId: groupId || null }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to add wallet');
+            console.log(`[${new Date().toISOString()}] ✅ Wallet added: ${address}${groupId ? ` to group ${groupId}` : ''}`);
+            setRefreshKey((prev) => prev + 1);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error adding wallet:`, err);
+            setError(err.message);
+            setLoading(false);
+        }
     };
 
-    return () => {
-      eventSource.close();
-      console.log('SSE connection closed');
+    const addWalletsBulk = async (wallets, groupId) => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await fetch(`${API_BASE}/wallets/bulk`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ wallets, groupId: groupId || null }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to import wallets');
+            console.log(`[${new Date().toISOString()}] ✅ Bulk import completed: ${data.results.successful} successful, ${data.results.failed} failed`);
+            setRefreshKey((prev) => prev + 1);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error in bulk import:`, err);
+            setError(err.message);
+            setLoading(false);
+        }
     };
-  }, [timeframe, transactionType, wallets, selectedGroup]);
 
-  const handleTimeframeChange = (newTimeframe) => {
-    setTimeframe(newTimeframe);
-    setLoading(true);
-    fetchData(newTimeframe, transactionType, selectedGroup);
-  };
+    const removeWallet = async (address) => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await fetch(`${API_BASE}/wallets/${address}`, {
+                method: 'DELETE',
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to remove wallet');
+            console.log(`[${new Date().toISOString()}] 🗑️ Wallet removed: ${address}`);
+            setRefreshKey((prev) => prev + 1);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error removing wallet:`, err);
+            setError(err.message);
+            setLoading(false);
+        }
+    };
 
-  const handleTransactionTypeChange = (newType) => {
-    setTransactionType(newType);
-    setLoading(true);
-    fetchData(timeframe, newType, selectedGroup);
-  };
+    const removeAllWallets = async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            const url = selectedGroup ? `${API_BASE}/wallets?groupId=${selectedGroup}` : `${API_BASE}/wallets`;
+            const response = await fetch(url, {
+                method: 'DELETE',
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to remove all wallets');
+            console.log(`[${new Date().toISOString()}] 🗑️ All wallets removed${selectedGroup ? ` for group ${selectedGroup}` : ''}`);
+            setRefreshKey((prev) => prev + 1);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, err);
+            setError(err.message);
+            setLoading(false);
+        }
+    };
 
-  const handleGroupChange = (groupId) => {
-    setSelectedGroup(groupId || null);
-    setLoading(true);
-    fetchData(timeframe, transactionType, groupId || null);
-  };
+    const toggleMonitoring = async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            const action = monitoringStatus.isMonitoring ? 'stop' : 'start';
+            const response = await fetch(`${API_BASE}/monitoring/toggle`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, groupId: selectedGroup || null }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to toggle monitoring');
+            console.log(`[${new Date().toISOString()}] ${action === 'start' ? '🚀 Monitoring started' : '⏹️ Monitoring stopped'}${selectedGroup ? ` for group ${selectedGroup}` : ''}`);
+            setRefreshKey((prev) => prev + 1);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error toggling monitoring:`, err);
+            setError(err.message);
+            setLoading(false);
+        }
+    };
 
-  const addWallet = async (address, name, groupId) => {
-    try {
-      const response = await fetch(`${API_BASE}/wallets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.trim(), name: name.trim() || null, groupId }),
-      });
+    const createGroup = async (name) => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await fetch(`${API_BASE}/groups`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed to create group');
+            console.log(`[${new Date().toISOString()}] ✅ Group created: ${name}`);
+            setRefreshKey((prev) => prev + 1);
+        } catch (err) {
+            console.error(`[${new Date().toISOString()}] ❌ Error creating group:`, err);
+            setError(err.message);
+            setLoading(false);
+        }
+    };
 
-      const data = await response.json();
+    const handleGroupChange = (groupId) => {
+        setSelectedGroup(groupId || null);
+        setRefreshKey((prev) => prev + 1);
+    };
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to add wallet');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message };
-    } catch (err) {
-      throw new Error(err.message);
-    }
-  };
-
-  const addWalletsBulk = async (wallets, groupId) => {
-    try {
-      const response = await fetch(`${API_BASE}/wallets/bulk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallets, groupId }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to import wallets');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message, results: data.results };
-    } catch (err) {
-      throw new Error(err.message);
-    }
-  };
-
-  const removeWallet = async (address) => {
-    try {
-      const response = await fetch(`${API_BASE}/wallets/${address}`, {
-        method: 'DELETE',
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to remove wallet');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message };
-    } catch (err) {
-      throw new Error(err.message);
-    }
-  };
-
-  const createGroup = async (name) => {
-    try {
-      const response = await fetch(`${API_BASE}/groups`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to create group');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message, group: data.group };
-    } catch (err) {
-      throw new Error(err.message);
-    }
-  };
-
-  const toggleMonitoring = async (action) => {
-    try {
-      const response = await fetch(`${API_BASE}/monitoring/toggle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, groupId: selectedGroup }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to toggle monitoring');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [refreshKey]);
-
-  if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 py-8 px-4">
-        <div className="max-w-6xl mx-auto">
-          <Header />
-          <LoadingSpinner />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <div className="max-w-6xl mx-auto">
-        <Header />
-        {error && <ErrorMessage error={error} />}
-        <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
-        <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <select
-                value={selectedGroup || ''}
-                onChange={(e) => handleGroupChange(e.target.value)}
-                className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">All Groups</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.walletCount})
-                  </option>
-                ))}
-              </select>
-              <button
-                className="text-sm px-3 py-1 rounded bg-blue-600 text-white"
-                onClick={() => {
-                  const name = prompt('Enter group name:');
-                  if (name) createGroup(name);
-                }}
-              >
-                Create Group
-              </button>
-            </div>
-            <div className="flex items-center space-x-3">
-              <button
-                className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
-                onClick={() => setView('tokens')}
-              >
-                Token Tracker
-              </button>
-              <button
-                className={`text-sm px-3 py-1 rounded ${view === 'transactions' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
-                onClick={() => setView('transactions')}
-              >
-                Recent Transactions
-              </button>
-            </div>
-            {view === 'transactions' && (
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Type:</span>
-                  <select
+        <div className="container">
+            <Header />
+            {loading && <LoadingSpinner />}
+            {error && <ErrorMessage message={error} />}
+            <div className="controls">
+                <select
+                    value={selectedGroup || ''}
+                    onChange={(e) => handleGroupChange(e.target.value)}
+                >
+                    <option value="">All Groups</option>
+                    {groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                            {group.name} ({group.walletCount})
+                        </option>
+                    ))}
+                </select>
+                <button onClick={toggleMonitoring}>
+                    {monitoringStatus.isMonitoring ? 'Stop Monitoring' : 'Start Monitoring'}
+                </button>
+                <select
+                    value={timeframe}
+                    onChange={(e) => {
+                        setTimeframe(e.target.value);
+                        setRefreshKey((prev) => prev + 1);
+                    }}
+                >
+                    <option value="1">1 Hour</option>
+                    <option value="24">24 Hours</option>
+                    <option value="168">7 Days</option>
+                </select>
+                <select
                     value={transactionType}
-                    onChange={(e) => handleTransactionTypeChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
+                    onChange={(e) => {
+                        setTransactionType(e.target.value);
+                        setRefreshKey((prev) => prev + 1);
+                    }}
+                >
                     <option value="all">All Transactions</option>
                     <option value="buy">Buy Only</option>
                     <option value="sell">Sell Only</option>
-                  </select>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Period:</span>
-                  <select
-                    value={timeframe}
-                    onChange={(e) => handleTimeframeChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="1">Last 1 hour</option>
-                    <option value="6">Last 6 hours</option>
-                    <option value="24">Last 24 hours</option>
-                    <option value="168">Last 7 days</option>
-                  </select>
-                </div>
-              </div>
-            )}
-          </div>
-          {view === 'transactions' && (
-            <div className="mt-4 grid grid-cols-3 gap-4">
-              <div className="bg-blue-50 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-blue-700">Total Transactions</span>
-                  <span className="font-semibold text-blue-900">{transactions.length}</span>
-                </div>
-              </div>
-              <div className="bg-green-50 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-green-700">Buy Transactions</span>
-                  <span className="font-semibold text-green-900">{transactions.filter((tx) => tx.transactionType === 'buy').length}</span>
-                </div>
-              </div>
-              <div className="bg-red-50 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-red-700">Sell Transactions</span>
-                  <span className="font-semibold text-red-900">{transactions.filter((tx) => tx.transactionType === 'sell').length}</span>
-                </div>
-              </div>
+                </select>
+                <button onClick={() => setView(view === 'tokens' ? 'wallets' : 'tokens')}>
+                    {view === 'tokens' ? 'Show Wallets' : 'Show Token Tracker'}
+                </button>
             </div>
-          )}
-        </div>
-        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} groups={groups} />
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-1">
-            <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
-          </div>
-          <div className="lg:col-span-2">
+            <WalletManager
+                onAddWallet={addWallet}
+                onAddWalletsBulk={addWalletsBulk}
+                onCreateGroup={createGroup}
+                groups={groups}
+            />
+            <MonitoringStatus status={monitoringStatus} />
             {view === 'tokens' ? (
-              <TokenTracker groupId={selectedGroup} />
+                <TokenTracker timeframe={timeframe} groupId={selectedGroup} />
             ) : (
-              <TransactionFeed
-                transactions={transactions}
-                timeframe={timeframe}
-                onTimeframeChange={handleTimeframeChange}
-                transactionType={transactionType}
-                onTransactionTypeChange={handleTransactionTypeChange}
-              />
+                <WalletList
+                    wallets={wallets}
+                    onRemoveWallet={removeWallet}
+                    onRemoveAllWallets={removeAllWallets}
+                />
             )}
-          </div>
+            <TransactionFeed transactions={transactions} />
         </div>
-      </div>
-    </div>
-  );
+    );
 }
 
 export default App;

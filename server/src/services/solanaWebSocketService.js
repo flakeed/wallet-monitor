@@ -222,15 +222,16 @@ class SolanaWebSocketService {
         }
     }
 
-    async removeAllWallets() {
+    async removeAllWallets(groupId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallet subscriptions from WebSocket service`);
-            for (const walletAddress of this.subscriptions.keys()) {
-                await this.unsubscribeFromWallet(walletAddress);
+            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallet subscriptions from WebSocket service${groupId ? ` for group ${groupId}` : ''}`);
+            const wallets = groupId ? await this.db.getWalletsByGroup(groupId) : await this.db.getActiveWallets();
+            for (const wallet of wallets) {
+                await this.unsubscribeFromWallet(wallet.address);
             }
             this.subscriptions.clear();
-            await this.monitoringService.removeAllWallets();
-            console.log(`[${new Date().toISOString()}] ✅ All wallet subscriptions removed from WebSocket service`);
+            await this.monitoringService.removeAllWallets(groupId);
+            console.log(`[${new Date().toISOString()}] ✅ All wallet subscriptions removed from WebSocket service${groupId ? ` for group ${groupId}` : ''}`);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from WebSocket service:`, error.message);
             throw error;
