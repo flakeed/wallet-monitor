@@ -577,6 +577,38 @@ app.get('/api/tokens/tracker', async (req, res) => {
   }
 });
 
+// Token inflow time-series per token for charting
+app.get('/api/tokens/:mint/series', async (req, res) => {
+  try {
+    const { mint } = req.params;
+    const hours = parseInt(req.query.hours) || 24;
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Invalid token mint' });
+    }
+    const series = await db.getTokenInflowSeries(mint, hours);
+    res.json(series);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching token series:`, error);
+    res.status(500).json({ error: 'Failed to fetch token series' });
+  }
+});
+
+// Token operations for markers on chart
+app.get('/api/tokens/:mint/operations', async (req, res) => {
+  try {
+    const { mint } = req.params;
+    const hours = parseInt(req.query.hours) || 24;
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Invalid token mint' });
+    }
+    const ops = await db.getTokenOperations(mint, hours);
+    res.json(ops);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching token operations:`, error);
+    res.status(500).json({ error: 'Failed to fetch token operations' });
+  }
+});
+
 app.get('/api/websocket/status', (req, res) => {
   try {
     const status = solanaWebSocketService.getStatus();

@@ -393,6 +393,66 @@ async getWalletStats(walletId) {
         return result.rows[0];
     }
 
+    /**
+     * Returns time series of SOL inflow per token over a period.
+     * bucket = minute-level timestamp; consumer can downsample client-side.
+     */
+    async getTokenInflowSeries(mint, hours = 24) {
+        const query = `
+            SELECT 
+                date_trunc('minute', t.block_time) AS bucket,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) AS buy_sol,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) AS sell_sol
+            FROM tokens tk
+            JOIN token_operations to_ ON to_.token_id = tk.id
+            JOIN transactions t ON t.id = to_.transaction_id
+            WHERE tk.mint = $1
+              AND t.block_time >= NOW() - INTERVAL '${hours} hours'
+            GROUP BY bucket
+            ORDER BY bucket
+        `;
+        const result = await this.pool.query(query, [mint]);
+        return result.rows.map(r => ({
+            bucket: r.bucket,
+            buy_sol: Number(r.buy_sol || 0),
+            sell_sol: Number(r.sell_sol || 0),
+            net_sol: Number(r.sell_sol || 0) - Number(r.buy_sol || 0),
+        }));
+    }
+
+    /**
+     * Returns individual token operations for a given mint and period for plotting markers
+     */
+    async getTokenOperations(mint, hours = 24) {
+        const query = `
+            SELECT 
+                t.block_time,
+                t.transaction_type,
+                t.sol_spent,
+                t.sol_received,
+                to_.amount as token_amount,
+                tk.decimals,
+                w.address as wallet_address,
+                w.name as wallet_name
+            FROM tokens tk
+            JOIN token_operations to_ ON to_.token_id = tk.id
+            JOIN transactions t ON to_.transaction_id = t.id
+            JOIN wallets w ON t.wallet_id = w.id
+            WHERE tk.mint = $1
+              AND t.block_time >= NOW() - INTERVAL '${hours} hours'
+            ORDER BY t.block_time ASC
+        `;
+        const result = await this.pool.query(query, [mint]);
+        return result.rows.map(r => ({
+            time: r.block_time,
+            type: r.transaction_type,
+            sol: r.transaction_type === 'buy' ? Number(r.sol_spent || 0) : Number(r.sol_received || 0),
+            tokenAmount: Number(r.token_amount || 0),
+            decimals: r.decimals || 0,
+            wallet: { address: r.wallet_address, name: r.wallet_name }
+        }));
+    }
+
     async addMonitoringStats(processedSignatures, totalWallets, scanDuration, errorsCount = 0) {
         const query = `
             INSERT INTO monitoring_stats (
