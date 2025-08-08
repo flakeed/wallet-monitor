@@ -11,6 +11,15 @@ const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const app = express();
 const port = process.env.PORT || 5001;
 
+const https = require('https');
+const fs = require('fs');
+
+// Load SSL certificates
+const sslOptions = {
+  key: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/privkey.pem'),
+  cert: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/fullchain.pem'),
+};
+
 app.use(
   cors({
     origin: [
@@ -549,6 +558,16 @@ process.on('SIGTERM', async () => {
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
+});
+
+https.createServer(sslOptions, app).listen(port, '158.220.125.26', () => {
+  console.log(`[${new Date().toISOString()}] 🚀 Server running on https://158.220.125.26:${port}`);
+  console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
+  console.log(
+    `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
+      monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
+    }`
+  );
 });
 
 app.listen(port, '158.220.125.26', () => {
