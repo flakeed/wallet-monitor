@@ -26,6 +26,10 @@ function TokenTracker() {
 
   // Функция для открытия графика на DEX Screener с адресом токена
   const openDexScreenerChart = (mintAddress) => {
+    if (!mintAddress) {
+      console.warn('No mint address available for chart');
+      return;
+    }
     const dexScreenerUrl = `https://dexscreener.com/solana?search=${encodeURIComponent(mintAddress)}`;
     window.open(dexScreenerUrl, '_blank', 'noopener,noreferrer');
   };
