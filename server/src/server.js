@@ -199,11 +199,12 @@ app.delete('/api/wallets/:address', async (req, res) => {
 
 app.delete('/api/wallets', async (req, res) => {
     try {
-        await solanaWebSocketService.removeAllWallets();
-        const result = await db.removeAllWallets();
+        const groupId = req.query.groupId || null;
+        await solanaWebSocketService.removeAllWallets(groupId);
+        const result = await db.removeAllWallets(groupId);
         res.json({
             success: true,
-            message: `Successfully removed wallets and associated data`,
+            message: `Successfully removed wallets${groupId ? ` for group ${groupId}` : ''}`,
             deletedCount: result.deletedCount,
         });
     } catch (error) {
@@ -433,6 +434,12 @@ app.post('/api/wallets/bulk', async (req, res) => {
             return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
         }
 
+        // Verify group exists
+        const groupCheck = await db.pool.query('SELECT id FROM groups WHERE id = $1', [groupId]);
+        if (groupCheck.rows.length === 0) {
+            return res.status(400).json({ error: 'Group not found' });
+        }
+
         const results = {
             total: wallets.length,
             successful: 0,
@@ -468,6 +475,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
                             address: wallet.address,
                             name: wallet.name || null,
                             id: addedWallet.id,
+                            groupId,
                         });
                     } catch (error) {
                         results.failed++;
@@ -499,6 +507,7 @@ app.get('/api/wallets/bulk-template', (req, res) => {
 # One wallet per line
 # Lines starting with # are ignored
 # Maximum 1000 wallets
+# Must specify groupId in the API request
 
 # Example wallets (replace with real addresses):
 9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1

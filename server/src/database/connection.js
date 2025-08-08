@@ -51,15 +51,35 @@ class Database {
         }
     }
 
-    async addWallet(address, name = null, groupId) {
+    async withTransaction(callback) {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
+            const result = await callback(client);
+            await client.query('COMMIT');
+            return result;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 
-            // Проверяем, существует ли кошелек
+    async addWallet(address, name = null, groupId) {
+        return this.withTransaction(async (client) => {
+            // Check if group exists
+            if (groupId) {
+                const groupCheck = await client.query('SELECT id FROM groups WHERE id = $1', [groupId]);
+                if (groupCheck.rows.length === 0) {
+                    throw new Error('Group not found');
+                }
+            }
+
+            // Check if wallet exists
             let wallet = await this.getWalletByAddress(address);
             if (!wallet) {
-                // Добавляем новый кошелек
+                // Add new wallet
                 const walletQuery = `
                     INSERT INTO wallets (address, name) 
                     VALUES ($1, $2) 
@@ -69,45 +89,32 @@ class Database {
                 wallet = walletResult.rows[0];
             }
 
-            // Проверяем, существует ли группа
+            // Add group association
             if (groupId) {
-                const groupCheck = await client.query('SELECT id FROM groups WHERE id = $1', [groupId]);
-                if (groupCheck.rows.length === 0) {
-                    throw new Error('Group not found');
+                const existingAssociation = await client.query(
+                    'SELECT 1 FROM wallet_groups WHERE wallet_id = $1 AND group_id = $2',
+                    [wallet.id, groupId]
+                );
+                
+                if (existingAssociation.rows.length === 0) {
+                    const groupQuery = `
+                        INSERT INTO wallet_groups (wallet_id, group_id) 
+                        VALUES ($1, $2)
+                        RETURNING wallet_id, group_id
+                    `;
+                    await client.query(groupQuery, [wallet.id, groupId]);
                 }
-
-                // Добавляем связь в wallet_groups
-                const groupQuery = `
-                    INSERT INTO wallet_groups (wallet_id, group_id) 
-                    VALUES ($1, $2)
-                    ON CONFLICT DO NOTHING
-                    RETURNING wallet_id, group_id
-                `;
-                await client.query(groupQuery, [wallet.id, groupId]);
-            } else {
-                throw new Error('Group ID is required');
             }
 
-            await client.query('COMMIT');
             return {
                 ...wallet,
                 group_id: groupId,
             };
-        } catch (error) {
-            await client.query('ROLLBACK');
-            if (error.code === '23505' && error.constraint === 'wallet_groups_pkey') {
-                throw new Error('Wallet is already in this group');
-            }
-            throw new Error(`Failed to add wallet: ${error.message}`);
-        } finally {
-            client.release();
-        }
+        });
     }
 
     async removeWallet(address) {
-        const client = await this.pool.connect();
-        try {
-            await client.query('BEGIN');
+        return this.withTransaction(async (client) => {
             const query = `
                 DELETE FROM wallets 
                 WHERE address = $1
@@ -117,14 +124,30 @@ class Database {
             if (result.rowCount === 0) {
                 throw new Error('Wallet not found');
             }
-            await client.query('COMMIT');
             return result.rows[0];
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw new Error(`Failed to remove wallet: ${error.message}`);
-        } finally {
-            client.release();
-        }
+        });
+    }
+
+    async removeAllWallets(groupId = null) {
+        return this.withTransaction(async (client) => {
+            let query = 'DELETE FROM wallets';
+            const params = [];
+            
+            if (groupId) {
+                query = `
+                    DELETE FROM wallets 
+                    WHERE id IN (
+                        SELECT wallet_id 
+                        FROM wallet_groups 
+                        WHERE group_id = $1
+                    )
+                `;
+                params.push(groupId);
+            }
+
+            const result = await client.query(query, params);
+            return { deletedCount: result.rowCount };
+        });
     }
 
     async getActiveWallets() {
@@ -170,7 +193,7 @@ class Database {
         const result = await this.pool.query(query, [groupId]);
         return result.rows.map(row => ({
             ...row,
-            group: { id: groupId, name: row.group_name },
+            groups: [{ id: groupId, name: row.group_name }],
         }));
     }
 
@@ -447,22 +470,6 @@ class Database {
         `;
         const result = await this.pool.query(query, [walletId]);
         return result.rows[0];
-    }
-
-    async removeAllWallets() {
-        const client = await this.pool.connect();
-        try {
-            await client.query('BEGIN');
-            const query = `DELETE FROM wallets RETURNING id`;
-            const result = await client.query(query);
-            await client.query('COMMIT');
-            return { deletedCount: result.rowCount };
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw new Error(`Failed to remove all wallets: ${error.message}`);
-        } finally {
-            client.release();
-        }
     }
 
     async close() {

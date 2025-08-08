@@ -133,14 +133,11 @@ class SolanaWebSocketService {
         }
 
         if (message.method === 'accountNotification') {
-            const { walletAddress, signature, blockTime, transactionType, solAmount, tokens } = message.params;
-            await this.monitoringService.processTransaction({
+            const { walletAddress, signature, blockTime } = message.params;
+            await this.monitoringService.processWebhookMessage({
                 walletAddress,
                 signature,
                 blockTime,
-                transactionType,
-                solAmount,
-                tokens,
             });
         }
     }
@@ -258,16 +255,24 @@ class SolanaWebSocketService {
             `[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets for group ${this.activeGroupId || 'all'}`
         );
 
-        for (const walletAddress of this.subscriptions.keys()) {
-            await this.unsubscribeFromWallet(walletAddress);
-        }
-        this.subscriptions.clear();
+        const currentSubscriptions = new Set(this.subscriptions.keys());
+        const targetWallets = new Set(wallets.map(w => w.address));
 
+        // Unsubscribe from wallets not in the target group
+        for (const walletAddress of currentSubscriptions) {
+            if (!targetWallets.has(walletAddress)) {
+                await this.unsubscribeFromWallet(walletAddress);
+            }
+        }
+
+        // Subscribe to new wallets
         for (let i = 0; i < wallets.length; i += this.batchSize) {
             const batch = wallets.slice(i, i + this.batchSize);
             await Promise.all(
                 batch.map(async (wallet) => {
-                    await this.subscribeToWallet(wallet.address);
+                    if (!this.subscriptions.has(wallet.address)) {
+                        await this.subscribeToWallet(wallet.address);
+                    }
                 })
             );
             await new Promise((resolve) => setTimeout(resolve, 100));
@@ -302,12 +307,18 @@ class SolanaWebSocketService {
         }
     }
 
-    async removeAllWallets() {
+    async removeAllWallets(groupId = null) {
         try {
-            for (const walletAddress of this.subscriptions.keys()) {
-                await this.unsubscribeFromWallet(walletAddress);
+            const wallets = groupId 
+                ? await this.db.getWalletsByGroup(groupId)
+                : await this.db.getActiveWallets();
+                
+            for (const wallet of wallets) {
+                await this.unsubscribeFromWallet(wallet.address);
             }
             this.subscriptions.clear();
+            await this.db.removeAllWallets(groupId);
+            console.log(`[${new Date().toISOString()}] ✅ Removed all wallets for group ${groupId || 'all'}`);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
             throw error;

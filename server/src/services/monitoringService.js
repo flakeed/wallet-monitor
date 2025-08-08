@@ -174,15 +174,14 @@ class WalletMonitoringService {
             }
 
             return await this.db.withTransaction(async (client) => {
-
                 const query = `
-          INSERT INTO transactions (
-            wallet_id, signature, block_time, transaction_type,
-            sol_spent, sol_received
-          ) 
-          VALUES ($1, $2, $3, $4, $5, $6)
-          RETURNING id, signature, transaction_type
-        `;
+                    INSERT INTO transactions (
+                        wallet_id, signature, block_time, transaction_type,
+                        sol_spent, sol_received
+                    ) 
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id, signature, transaction_type
+                `;
                 const result = await client.query(query, [
                     wallet.id,
                     sig.signature,
@@ -303,15 +302,15 @@ class WalletMonitoringService {
             }
 
             const tokenUpsertQuery = `
-        INSERT INTO tokens (mint, symbol, name, decimals) 
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (mint) DO UPDATE SET
-          symbol = EXCLUDED.symbol,
-          name = EXCLUDED.name,
-          decimals = EXCLUDED.decimals,
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING id
-      `;
+                INSERT INTO tokens (mint, symbol, name, decimals) 
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (mint) DO UPDATE SET
+                    symbol = EXCLUDED.symbol,
+                    name = EXCLUDED.name,
+                    decimals = EXCLUDED.decimals,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            `;
             const tokenResult = await client.query(tokenUpsertQuery, [
                 tokenChange.mint,
                 tokenInfo.symbol,
@@ -323,9 +322,9 @@ class WalletMonitoringService {
             const amount = tokenChange.rawChange / Math.pow(10, tokenChange.decimals);
 
             const operationQuery = `
-        INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
-        VALUES ($1, $2, $3, $4)
-      `;
+                INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
+                VALUES ($1, $2, $3, $4)
+            `;
             await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error saving token operation:`, error.message);
@@ -333,11 +332,11 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
+    async addWallet(address, name = null, groupId) {
         try {
             new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
-            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}...`);
+            const wallet = await this.db.addWallet(address, name, groupId);
+            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}... to group ${groupId}`);
             return wallet;
         } catch (error) {
             throw new Error(`Failed to add wallet: ${error.message}`);
@@ -363,17 +362,17 @@ class WalletMonitoringService {
         }
     }
 
-    async removeAllWallets() {
+    async removeAllWallets(groupId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallets from monitoring service`);
-            const transactions = await this.db.getRecentTransactions(24 * 7);
+            console.log(`[${new Date().toISOString()}] 🗑️ Removing ${groupId ? `group ${groupId}` : 'all'} wallets from monitoring service`);
+            const transactions = await this.db.getRecentTransactions(24 * 7, null, null, groupId);
             const allSignatures = transactions.map((tx) => tx.signature);
             allSignatures.forEach((sig) => this.processedSignatures.delete(sig));
             this.processedSignatures.clear();
-            await this.db.removeAllWallets();
-            console.log(`[${new Date().toISOString()}] ✅ All wallets removed from monitoring service`);
+            await this.db.removeAllWallets(groupId);
+            console.log(`[${new Date().toISOString()}] ✅ ${groupId ? `Group ${groupId}` : 'All'} wallets removed from monitoring service`);
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from monitoring service:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error removing wallets:`, error.message);
             throw error;
         }
     }
