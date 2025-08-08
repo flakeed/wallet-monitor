@@ -24,14 +24,13 @@ function TokenTracker() {
     load();
   }, []);
 
-  // Функция для открытия графика на GMGN.AI с адресом токена
   const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
       console.warn('No mint address available for chart');
       return;
     }
     const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
-    window.open(gmgnUrl, '_blank', 'noopener,noreferrer');
+    window.location.href = gmgnUrl; // Opens the URL in the current window
   };
 
   return (
