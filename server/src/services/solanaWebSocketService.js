@@ -24,7 +24,7 @@ class SolanaWebSocketService {
         this.pendingRequests = new Map();
         this.messageCount = 0;
         this.isStarted = false;
-        this.batchSize = 400;
+        this.batchSize = 50; // Уменьшено для оптимизации
         this.maxSubscriptions = 1000;
         this.activeGroupId = null;
     }
@@ -258,14 +258,12 @@ class SolanaWebSocketService {
         const currentSubscriptions = new Set(this.subscriptions.keys());
         const targetWallets = new Set(wallets.map(w => w.address));
 
-        // Unsubscribe from wallets not in the target group
         for (const walletAddress of currentSubscriptions) {
             if (!targetWallets.has(walletAddress)) {
                 await this.unsubscribeFromWallet(walletAddress);
             }
         }
 
-        // Subscribe to new wallets
         for (let i = 0; i < wallets.length; i += this.batchSize) {
             const batch = wallets.slice(i, i + this.batchSize);
             await Promise.all(
@@ -283,9 +281,10 @@ class SolanaWebSocketService {
     async addWallet(address, name = null, groupId) {
         try {
             const wallet = await this.db.addWallet(address, name, groupId);
-            if (this.isStarted && (!this.activeGroupId || this.activeGroupId === groupId)) {
-                await this.subscribeToWallet(address);
-            }
+            // Подписка отключена во время bulk-импорта для оптимизации
+            // if (this.isStarted && (!this.activeGroupId || this.activeGroupId === groupId)) {
+            //     await this.subscribeToWallet(address);
+            // }
             return wallet;
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${address}:`, error);

@@ -24,7 +24,7 @@ class WalletMonitoringService {
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
-        this.batchSize = 400;
+        this.batchSize = 50; // Уменьшено для оптимизации
         console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized`);
     }
 
@@ -46,23 +46,13 @@ class WalletMonitoringService {
             const requestData = await this.redis.lpop(this.queueKey, this.batchSize);
             if (!requestData || requestData.length === 0) break;
 
-            const requests = requestData.map((data) => {
-                try {
-                    return JSON.parse(data);
-                } catch (error) {
-                    console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, error.message);
-                    return null;
-                }
-            }).filter((req) => req !== null);
-
-            if (requests.length === 0) continue;
-
-            console.log(`[${new Date().toISOString()}] 🔄 Processing batch of ${requests.length} signatures`);
+            console.log(`[${new Date().toISOString()}] 🔄 Processing batch of ${requestData.length} signatures`);
 
             const batchResults = await Promise.all(
-                requests.map(async (request) => {
-                    const { signature, walletAddress, blockTime } = request;
+                requestData.map(async (data) => {
                     try {
+                        const request = JSON.parse(data);
+                        const { signature, walletAddress, blockTime } = request;
                         const wallet = await this.db.getWalletByAddress(walletAddress);
                         if (!wallet) {
                             console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
@@ -88,7 +78,7 @@ class WalletMonitoringService {
                         }
                         return null;
                     } catch (error) {
-                        console.error(`[${new Date().toISOString()}] ❌ Error processing signature ${signature}:`, error.message);
+                        console.error(`[${new Date().toISOString()}] ❌ Error processing signature:`, error.message);
                         return null;
                     }
                 })

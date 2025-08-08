@@ -6,6 +6,7 @@ class Database {
     constructor() {
         this.pool = new Pool({
             connectionString: process.env.DATABASE_URL,
+            max: 20, // Увеличено для обработки bulk-импорта
         });
 
         this.pool.on('error', (err) => {
@@ -41,7 +42,13 @@ class Database {
                         console.warn(`⚠️ Skipping statement due to error: ${err.message}`);
                     }
                 }
-                console.log('✅ Database schema initialized');
+                // Добавляем индексы для оптимизации
+                await client.query(`
+                    CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
+                    CREATE INDEX IF NOT EXISTS idx_wallet_groups_wallet_id ON wallet_groups(wallet_id);
+                    CREATE INDEX IF NOT EXISTS idx_wallet_groups_group_id ON wallet_groups(group_id);
+                `);
+                console.log('✅ Database schema initialized with indexes');
             } finally {
                 client.release();
             }
@@ -68,7 +75,6 @@ class Database {
 
     async addWallet(address, name = null, groupId) {
         return this.withTransaction(async (client) => {
-            // Check if group exists
             if (groupId) {
                 const groupCheck = await client.query('SELECT id FROM groups WHERE id = $1', [groupId]);
                 if (groupCheck.rows.length === 0) {
@@ -76,10 +82,8 @@ class Database {
                 }
             }
 
-            // Check if wallet exists
             let wallet = await this.getWalletByAddress(address);
             if (!wallet) {
-                // Add new wallet
                 const walletQuery = `
                     INSERT INTO wallets (address, name) 
                     VALUES ($1, $2) 
@@ -89,7 +93,6 @@ class Database {
                 wallet = walletResult.rows[0];
             }
 
-            // Add group association
             if (groupId) {
                 const existingAssociation = await client.query(
                     'SELECT 1 FROM wallet_groups WHERE wallet_id = $1 AND group_id = $2',
@@ -103,6 +106,8 @@ class Database {
                         RETURNING wallet_id, group_id
                     `;
                     await client.query(groupQuery, [wallet.id, groupId]);
+                } else {
+                    throw new Error('Wallet is already in this group');
                 }
             }
 

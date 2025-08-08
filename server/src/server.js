@@ -75,7 +75,7 @@ app.get('/api/transactions/stream', (req, res) => {
 
     const subscriber = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
 
-    subscriber.subscribe('transactions', (err) => {
+    subscriber.subscribe('transactions', 'bulk-import-progress', (err) => {
         if (err) {
             console.error(`[${new Date().toISOString()}] ❌ Redis subscription error:`, err.message);
             res.status(500).end();
@@ -86,14 +86,19 @@ app.get('/api/transactions/stream', (req, res) => {
     });
 
     subscriber.on('message', async (channel, message) => {
-        if (channel === 'transactions' && res.writable) {
+        if (!res.writable) return;
+
+        if (channel === 'transactions') {
             const transaction = JSON.parse(message);
             const wallet = await db.getWalletByAddress(transaction.walletAddress);
             const walletInGroup = groupId ? wallet.groups.some(g => g.id === groupId) : true;
             if (walletInGroup) {
-                console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for group ${groupId || 'all'}:`, message);
+                console.log(`[${new Date().toISOString()}] 📡 Sending SSE transaction for group ${groupId || 'all'}:`, message);
                 res.write(`data: ${message}\n\n`);
             }
+        } else if (channel === 'bulk-import-progress') {
+            console.log(`[${new Date().toISOString()}] 📡 Sending SSE progress for group ${groupId || 'all'}:`, message);
+            res.write(`event: progress\ndata: ${message}\n\n`);
         }
     });
 
@@ -434,7 +439,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
             return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
         }
 
-        // Verify group exists
         const groupCheck = await db.pool.query('SELECT id FROM groups WHERE id = $1', [groupId]);
         if (groupCheck.rows.length === 0) {
             return res.status(400).json({ error: 'Group not found' });
@@ -446,6 +450,13 @@ app.post('/api/wallets/bulk', async (req, res) => {
             failed: 0,
             errors: [],
             successfulWallets: [],
+        };
+
+        const batchTimeout = (promise, time) => {
+            return Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Batch timeout')), time)),
+            ]);
         };
 
         for (const wallet of wallets) {
@@ -460,34 +471,53 @@ app.post('/api/wallets/bulk', async (req, res) => {
             }
         }
 
-        const batchSize = 400;
+        const batchSize = 50; // Уменьшено для оптимизации
         for (let i = 0; i < wallets.length; i += batchSize) {
+            console.log(`[${new Date().toISOString()}] 📥 Processing batch ${i}/${wallets.length}, batch size: ${Math.min(batchSize, wallets.length - i)}`);
             const batch = wallets.slice(i, i + batchSize);
-            await Promise.all(
-                batch.map(async (wallet) => {
-                    const hasError = results.errors.some((error) => error.address === wallet.address);
-                    if (hasError) return;
+            try {
+                await batchTimeout(
+                    Promise.all(
+                        batch.map(async (wallet) => {
+                            const hasError = results.errors.some((error) => error.address === wallet.address);
+                            if (hasError) return;
 
-                    try {
-                        const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId);
-                        results.successful++;
-                        results.successfulWallets.push({
-                            address: wallet.address,
-                            name: wallet.name || null,
-                            id: addedWallet.id,
-                            groupId,
-                        });
-                    } catch (error) {
-                        results.failed++;
-                        results.errors.push({
-                            address: wallet.address,
-                            name: wallet.name || null,
-                            error: error.message,
-                        });
-                    }
-                })
-            );
+                            try {
+                                const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId);
+                                results.successful++;
+                                results.successfulWallets.push({
+                                    address: wallet.address,
+                                    name: wallet.name || null,
+                                    id: addedWallet.id,
+                                    groupId,
+                                });
+                            } catch (error) {
+                                results.failed++;
+                                results.errors.push({
+                                    address: wallet.address,
+                                    name: wallet.name || null,
+                                    error: error.message,
+                                });
+                            }
+                        })
+                    ),
+                    30000 // Таймаут 30 секунд на батч
+                );
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Batch ${i} timeout:`, error);
+                results.errors.push({ batch: i, error: error.message });
+            }
+
+            await redis.publish('bulk-import-progress', JSON.stringify({
+                progress: Math.min(((i + batchSize) / wallets.length * 100).toFixed(2), 100),
+                groupId,
+            }));
             await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        // После завершения импорта обновляем подписки
+        if (solanaWebSocketService.isStarted && (!solanaWebSocketService.activeGroupId || solanaWebSocketService.activeGroupId === groupId)) {
+            await solanaWebSocketService.subscribeToWallets();
         }
 
         res.json({
