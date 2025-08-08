@@ -159,3 +159,38 @@ BEGIN
     
     UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
 END $$;
+
+-- Creating table for wallet groups
+CREATE TABLE IF NOT EXISTS groups (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Adding group_id to wallets table
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id);
+
+-- Creating index for group_id
+CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
+
+-- Updating existing tables to include group filtering where necessary
+CREATE OR REPLACE VIEW wallet_stats_view AS
+SELECT 
+    w.id as wallet_id,
+    w.address,
+    w.name as wallet_name,
+    w.group_id,
+    g.name as group_name,
+    COUNT(CASE WHEN t.transaction_type = 'buy' THEN 1 END) as total_buy_transactions,
+    COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as total_sell_transactions,
+    COALESCE(SUM(t.sol_spent), 0) as total_sol_spent,
+    COALESCE(SUM(t.sol_received), 0) as total_sol_received,
+    MAX(t.block_time) as last_transaction_at,
+    COUNT(DISTINCT CASE WHEN to_.operation_type = 'buy' THEN to_.token_id END) as unique_tokens_bought,
+    COUNT(DISTINCT CASE WHEN to_.operation_type = 'sell' THEN to_.token_id END) as unique_tokens_sold
+FROM wallets w
+LEFT JOIN groups g ON w.group_id = g.id
+LEFT JOIN transactions t ON w.id = t.wallet_id
+LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+GROUP BY w.id, w.address, w.name, w.group_id, g.name;

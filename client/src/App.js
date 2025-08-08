@@ -7,6 +7,7 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
+
 // Fallback API base for local dev if env not provided
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
@@ -20,32 +21,38 @@ function App() {
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
   const [view, setView] = useState('tokens'); // 'tokens' | 'transactions'
+  const [groups, setGroups] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState(null);
 
-  const fetchData = async (hours = timeframe, type = transactionType) => {
+  const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
 
-      const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}`;
+      const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
+      const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
 
-      const [walletsRes, transactionsRes, statusRes] = await Promise.all([
-        fetch(`${API_BASE}/wallets`),
+      const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
+        fetch(walletsUrl),
         fetch(transactionsUrl),
         fetch(`${API_BASE}/monitoring/status`),
+        fetch(`${API_BASE}/groups`),
       ]);
 
-      if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok) {
+      if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
         throw new Error('Failed to fetch data');
       }
 
-      const [walletsData, transactionsData, statusData] = await Promise.all([
+      const [walletsData, transactionsData, statusData, groupsData] = await Promise.all([
         walletsRes.json(),
         transactionsRes.json(),
         statusRes.json(),
+        groupsRes.json(),
       ]);
 
       setWallets(walletsData);
       setTransactions(transactionsData);
       setMonitoringStatus(statusData);
+      setGroups(groupsData);
     } catch (err) {
       setError(err.message);
       console.error('Error fetching data:', err);
@@ -55,7 +62,7 @@ function App() {
   };
 
   useEffect(() => {
-    const sseUrl = `${API_BASE.replace(/\/api$/, '')}/api/transactions/stream`;
+    const sseUrl = `${API_BASE.replace(/\/api$/, '')}/api/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
     const eventSource = new EventSource(sseUrl);
 
     eventSource.onmessage = (event) => {
@@ -107,26 +114,32 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets]);
+  }, [timeframe, transactionType, wallets, selectedGroup]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
     setLoading(true);
-    fetchData(newTimeframe, transactionType);
+    fetchData(newTimeframe, transactionType, selectedGroup);
   };
 
   const handleTransactionTypeChange = (newType) => {
     setTransactionType(newType);
     setLoading(true);
-    fetchData(timeframe, newType);
+    fetchData(timeframe, newType, selectedGroup);
   };
 
-  const addWallet = async (address, name) => {
+  const handleGroupChange = (groupId) => {
+    setSelectedGroup(groupId);
+    setLoading(true);
+    fetchData(timeframe, transactionType, groupId);
+  };
+
+  const addWallet = async (address, name, groupId) => {
     try {
       const response = await fetch(`${API_BASE}/wallets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.trim(), name: name.trim() || null }),
+        body: JSON.stringify({ address: address.trim(), name: name.trim() || null, groupId }),
       });
 
       const data = await response.json();
@@ -142,12 +155,12 @@ function App() {
     }
   };
 
-  const addWalletsBulk = async (wallets) => {
+  const addWalletsBulk = async (wallets, groupId) => {
     try {
       const response = await fetch(`${API_BASE}/wallets/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallets }),
+        body: JSON.stringify({ wallets, groupId }),
       });
 
       const data = await response.json();
@@ -182,12 +195,33 @@ function App() {
     }
   };
 
+  const createGroup = async (name) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message, group: data.group };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
   const toggleMonitoring = async (action) => {
     try {
       const response = await fetch(`${API_BASE}/monitoring/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, groupId: selectedGroup }),
       });
 
       const data = await response.json();
@@ -223,9 +257,31 @@ function App() {
         <Header />
         {error && <ErrorMessage error={error} />}
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
-        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} />
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <select
+                value={selectedGroup || ''}
+                onChange={(e) => handleGroupChange(e.target.value || null)}
+                className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">All Groups</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} ({group.walletCount})
+                  </option>
+                ))}
+              </select>
+              <button
+                className="text-sm px-3 py-1 rounded bg-blue-600 text-white"
+                onClick={() => {
+                  const name = prompt('Enter group name:');
+                  if (name) createGroup(name);
+                }}
+              >
+                Create Group
+              </button>
+            </div>
             <div className="flex items-center space-x-3">
               <button
                 className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
@@ -293,13 +349,14 @@ function App() {
             </div>
           )}
         </div>
+        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} groups={groups} />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
           </div>
           <div className="lg:col-span-2">
             {view === 'tokens' ? (
-              <TokenTracker />
+              <TokenTracker groupId={selectedGroup} />
             ) : (
               <TransactionFeed
                 transactions={transactions}
