@@ -150,6 +150,10 @@ app.post('/api/wallets', async (req, res) => {
             return res.status(400).json({ error: 'Wallet address is required' });
         }
 
+        if (!groupId) {
+            return res.status(400).json({ error: 'Group ID is required' });
+        }
+
         if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
             return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
@@ -415,6 +419,10 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
         if (!wallets || !Array.isArray(wallets)) {
             return res.status(400).json({ error: 'Wallets array is required' });
+        }
+
+        if (!groupId) {
+            return res.status(400).json({ error: 'Group ID is required' });
         }
 
         if (wallets.length === 0) {

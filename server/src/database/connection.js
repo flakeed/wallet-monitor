@@ -51,7 +51,7 @@ class Database {
         }
     }
 
-    async addWallet(address, name = null, groupId = null) {
+    async addWallet(address, name = null, groupId) {
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
@@ -69,8 +69,14 @@ class Database {
                 wallet = walletResult.rows[0];
             }
 
-            // Если указана группа, добавляем связь в wallet_groups
+            // Проверяем, существует ли группа
             if (groupId) {
+                const groupCheck = await client.query('SELECT id FROM groups WHERE id = $1', [groupId]);
+                if (groupCheck.rows.length === 0) {
+                    throw new Error('Group not found');
+                }
+
+                // Добавляем связь в wallet_groups
                 const groupQuery = `
                     INSERT INTO wallet_groups (wallet_id, group_id) 
                     VALUES ($1, $2)
@@ -78,6 +84,8 @@ class Database {
                     RETURNING wallet_id, group_id
                 `;
                 await client.query(groupQuery, [wallet.id, groupId]);
+            } else {
+                throw new Error('Group ID is required');
             }
 
             await client.query('COMMIT');

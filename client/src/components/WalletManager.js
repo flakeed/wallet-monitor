@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
+function WalletManager({ onAddWallet, onAddWalletsBulk, groups, selectedGroup }) {
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
   const [groupId, setGroupId] = useState('');
@@ -24,11 +24,16 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
       return;
     }
 
+    if (!groupId && !selectedGroup) {
+      setMessage({ type: 'error', text: 'Group selection is required' });
+      return;
+    }
+
     setLoading(true);
     setMessage(null);
 
     try {
-      const result = await onAddWallet(address, name, groupId || null);
+      const result = await onAddWallet(address, name, groupId || selectedGroup);
       if (result.success) {
         setMessage({ type: 'success', text: result.message });
         setAddress('');
@@ -75,6 +80,11 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
       return;
     }
 
+    if (!groupId && !selectedGroup) {
+      setBulkResults({ type: 'error', message: 'Group selection is required' });
+      return;
+    }
+
     const wallets = parseBulkInput(bulkText);
 
     if (wallets.length === 0) {
@@ -97,7 +107,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
     setBulkResults(null);
 
     try {
-      const result = await onAddWalletsBulk(wallets, groupId || null);
+      const result = await onAddWalletsBulk(wallets, groupId || selectedGroup);
 
       setBulkResults({
         type: 'success',
@@ -188,15 +198,18 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Group (Optional)
+                Group *
               </label>
               <select
-                value={groupId}
+                value={groupId || selectedGroup || ''}
                 onChange={(e) => setGroupId(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                disabled={loading}
+                disabled={loading || !!selectedGroup}
+                required
               >
-                <option value="">Select a group (optional)</option>
+                <option value="" disabled>
+                  Select a group
+                </option>
                 {groups.map((group) => (
                   <option key={group.id} value={group.id}>
                     {group.name} ({group.walletCount} wallets)
@@ -207,7 +220,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
 
             <button
               type="submit"
-              disabled={loading || !address.trim()}
+              disabled={loading || !address.trim() || (!groupId && !selectedGroup)}
               className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
             >
               {loading ? (
@@ -306,15 +319,18 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Group (Optional)
+                Group *
               </label>
               <select
-                value={groupId}
+                value={groupId || selectedGroup || ''}
                 onChange={(e) => setGroupId(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                disabled={bulkLoading}
+                disabled={bulkLoading || !!selectedGroup}
+                required
               >
-                <option value="">Select a group (optional)</option>
+                <option value="" disabled>
+                  Select a group
+                </option>
                 {groups.map((group) => (
                   <option key={group.id} value={group.id}>
                     {group.name} ({group.walletCount} wallets)
@@ -325,7 +341,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
 
             <button
               type="submit"
-              disabled={bulkLoading || !bulkText.trim()}
+              disabled={bulkLoading || !bulkText.trim() || (!groupId && !selectedGroup)}
               className="w-full bg-purple-600 text-white py-3 px-4 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
             >
               {bulkLoading ? (

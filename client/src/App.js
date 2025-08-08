@@ -129,9 +129,19 @@ function App() {
     fetchData(timeframe, newType, selectedGroup);
   };
 
-  const handleGroupChange = (groupId) => {
+  const handleGroupChange = async (groupId) => {
     setSelectedGroup(groupId || null);
     setLoading(true);
+    await fetch(`${API_BASE}/monitoring/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'stop' }),
+    });
+    await fetch(`${API_BASE}/monitoring/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', groupId: groupId || null }),
+    });
     fetchData(timeframe, transactionType, groupId || null);
   };
 
@@ -350,7 +360,7 @@ function App() {
             </div>
           )}
         </div>
-        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} groups={groups} />
+        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} groups={groups} selectedGroup={selectedGroup} />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
