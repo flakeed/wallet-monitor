@@ -28,7 +28,7 @@ class SolanaWebSocketService {
         this.maxSubscriptions = 1000;
     }
 
-    async start() {
+    async start(groupId = null) {
         if (this.isStarted) {
             console.log(`[${new Date().toISOString()}] 🔄 WebSocket service already started`);
             return;
@@ -36,7 +36,7 @@ class SolanaWebSocketService {
         console.log(`[${new Date().toISOString()}] 🚀 Starting Solana WebSocket client for ${this.wsUrl}`);
         this.isStarted = true;
         await this.connect();
-        await this.subscribeToWallets();
+        await this.subscribeToWallets(groupId);
     }
 
     async connect() {
@@ -136,8 +136,9 @@ class SolanaWebSocketService {
         return null;
     }
 
-    async subscribeToWallets() {
-        const wallets = await this.db.getActiveWallets();
+    async subscribeToWallets(groupId = null) {
+        await this.unsubscribeAllWallets();
+        const wallets = await this.db.getActiveWallets(groupId);
         if (wallets.length > this.maxSubscriptions) {
             console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
             wallets.splice(this.maxSubscriptions);
@@ -184,12 +185,20 @@ class SolanaWebSocketService {
         this.subscriptions.delete(walletAddress);
     }
 
-    async addWallet(walletAddress, name = null) {
+    async unsubscribeAllWallets() {
+        for (const walletAddress of this.subscriptions.keys()) {
+            await this.unsubscribeFromWallet(walletAddress);
+        }
+        this.subscriptions.clear();
+        console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from all wallets`);
+    }
+
+    async addWallet(walletAddress, name = null, groupId = null) {
         try {
             if (this.subscriptions.size >= this.maxSubscriptions) {
                 throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
             }
-            const wallet = await this.monitoringService.addWallet(walletAddress, name);
+            const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId);
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 await this.subscribeToWallet(walletAddress);
             }
@@ -215,14 +224,23 @@ class SolanaWebSocketService {
     async removeAllWallets() {
         try {
             console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallet subscriptions from WebSocket service`);
-            for (const walletAddress of this.subscriptions.keys()) {
-                await this.unsubscribeFromWallet(walletAddress);
-            }
-            this.subscriptions.clear();
+            await this.unsubscribeAllWallets();
             await this.monitoringService.removeAllWallets();
             console.log(`[${new Date().toISOString()}] ✅ All wallet subscriptions removed from WebSocket service`);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from WebSocket service:`, error.message);
+            throw error;
+        }
+    }
+
+    async switchGroup(groupId) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔄 Switching to group ${groupId || 'all'}`);
+            await this.unsubscribeAllWallets();
+            await this.subscribeToWallets(groupId);
+            console.log(`[${new Date().toISOString()}] ✅ Switched to group ${groupId || 'all'}`);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error.message);
             throw error;
         }
     }
@@ -270,6 +288,7 @@ class SolanaWebSocketService {
     getStatus() {
         const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([addr, subData]) => ({
             address: addr,
+            groupId: wallet.group_id,
             logsSubscription: subData.logs,
         }));
 
@@ -287,9 +306,7 @@ class SolanaWebSocketService {
 
     async stop() {
         this.isStarted = false;
-        for (const walletAddress of this.subscriptions.keys()) {
-            await this.unsubscribeFromWallet(walletAddress);
-        }
+        await this.unsubscribeAllWallets();
         if (this.ws) this.ws.close();
         await this.db.close();
         console.log(`[${new Date().toISOString()}] ⏹️ WebSocket client stopped`);

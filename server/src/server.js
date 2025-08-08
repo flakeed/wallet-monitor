@@ -68,6 +68,7 @@ const startWebSocketService = async () => {
 setTimeout(startWebSocketService, 2000);
 
 app.get('/api/transactions/stream', (req, res) => {
+  const groupId = req.query.groupId;
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -109,9 +110,34 @@ app.get('/api/transactions/stream', (req, res) => {
   }, 30000);
 });
 
+app.get('/api/groups', async (req, res) => {
+  try {
+    const groups = await db.getGroups();
+    res.json(groups);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching groups:`, error);
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Group name is required' });
+    }
+    const group = await db.addGroup(name.trim());
+    res.json({ success: true, group, message: 'Group created successfully' });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error creating group:`, error);
+    res.status(500).json({ error: error.message || 'Failed to create group' });
+  }
+});
+
 app.get('/api/wallets', async (req, res) => {
   try {
-    const wallets = await db.getActiveWallets();
+    const groupId = req.query.groupId;
+    const wallets = await db.getActiveWallets(groupId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
         const stats = await db.getWalletStats(wallet.id);
@@ -138,7 +164,7 @@ app.get('/api/wallets', async (req, res) => {
 
 app.post('/api/wallets', async (req, res) => {
   try {
-    const { address, name } = req.body;
+    const { address, name, groupId } = req.body;
 
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
@@ -148,7 +174,11 @@ app.post('/api/wallets', async (req, res) => {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
     }
 
-    const wallet = await solanaWebSocketService.addWallet(address, name);
+    if (!groupId) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    const wallet = await solanaWebSocketService.addWallet(address, name, groupId);
     res.json({
       success: true,
       wallet,
@@ -166,7 +196,7 @@ app.post('/api/wallets', async (req, res) => {
 
 app.delete('/api/wallets/:address', async (req, res) => {
   try {
-    const address = req.params.address.trim();
+    const address = req.params.address?.trim();
 
     if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
@@ -207,8 +237,9 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
+    const groupId = req.query.groupId;
 
-    const transactions = await db.getRecentTransactions(hours, limit, type);
+    const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
 
     transactions.forEach((row) => {
@@ -269,10 +300,10 @@ app.get('/api/monitoring/status', (req, res) => {
 
 app.post('/api/monitoring/toggle', async (req, res) => {
   try {
-    const { action } = req.body;
+    const { action, groupId } = req.body;
 
     if (action === 'start') {
-      await solanaWebSocketService.start();
+      await solanaWebSocketService.start(groupId);
       res.json({ success: true, message: 'WebSocket monitoring started' });
     } else if (action === 'stop') {
       await solanaWebSocketService.stop();
@@ -288,7 +319,7 @@ app.post('/api/monitoring/toggle', async (req, res) => {
 
 app.get('/api/wallet/:address', async (req, res) => {
   try {
-    const address = req.params.address.trim();
+    const address = req.params.address?.trim();
 
     if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
       return res.status(400).json({ error: 'Invalid Solana public key format' });
@@ -299,7 +330,7 @@ app.get('/api/wallet/:address', async (req, res) => {
       return res.status(404).json({ error: 'Wallet not found in monitoring list' });
     }
 
-    const connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
+    const connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', 'confirmed');
     const publicKey = new PublicKey(address);
     const balanceLamports = await connection.getBalance(publicKey);
     const balanceSol = balanceLamports / 1e9;
@@ -324,7 +355,7 @@ app.get('/api/wallet/:address', async (req, res) => {
       if (row.mint) {
         const tokenData = {
           mint: row.mint,
-          symbol: row.token_name,
+          symbol: row.symbol,
           name: row.token_name,
           amount: Number(row.token_amount),
           decimals: row.decimals || 6,
@@ -356,7 +387,8 @@ app.get('/api/wallet/:address', async (req, res) => {
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const stats = await db.getMonitoringStats();
+    const groupId = req.query.groupId;
+    const stats = await db.getMonitoringStats(groupId);
 
     res.json({
       buyTransactions: stats.buy_transactions_today || 0,
@@ -374,7 +406,7 @@ app.get('/api/stats/transactions', async (req, res) => {
 
 app.post('/api/wallets/bulk', async (req, res) => {
   try {
-    const { wallets } = req.body;
+    const { wallets, groupId } = req.body;
 
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ error: 'Wallets array is required' });
@@ -386,6 +418,10 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     if (wallets.length > 1000) {
       return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
+    }
+
+    if (!groupId) {
+      return res.status(400).json({ error: 'Group ID is required' });
     }
 
     const results = {
@@ -417,7 +453,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
           if (hasError) return;
 
           try {
-            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null);
+            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId);
             results.successful++;
             results.successfulWallets.push({
               address: wallet.address,
@@ -466,7 +502,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
   res.send(template);
 });
 
-app.post('/api/wallets/validate', (req, res) => {
+app.post('/api/wallets/validate', async (req, res) => {
   try {
     const { wallets } = req.body;
 
@@ -485,8 +521,7 @@ app.post('/api/wallets/validate', (req, res) => {
       if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
         validation.invalid++;
         validation.errors.push({
-          address: wallet.address || 'missing',
-          name: wallet.name || null,
+          address: wallet.address || 'invalid',
           error: 'Invalid Solana wallet address format',
         });
       } else {
@@ -504,138 +539,18 @@ app.post('/api/wallets/validate', (req, res) => {
   }
 });
 
-app.get('/api/stats/tokens', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 10;
-    const type = req.query.type;
+const server = https.createServer(sslOptions, app);
 
-    const topTokens = await db.getTopTokens(limit, type);
-    res.json(topTokens);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching top tokens:`, error);
-    res.status(500).json({ error: 'Failed to fetch top tokens' });
-  }
-});
-
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
-app.get('/api/tokens/tracker', async (req, res) => {
-  try {
-    const hours = parseInt(req.query.hours) || 24;
-    const rows = await db.getTokenWalletAggregates(hours);
-
-    const byToken = new Map();
-    for (const row of rows) {
-      if (!byToken.has(row.mint)) {
-        byToken.set(row.mint, {
-          mint: row.mint,
-          symbol: row.symbol,
-          name: row.name,
-          decimals: row.decimals,
-          wallets: [],
-          summary: {
-            uniqueWallets: 0,
-            totalBuys: 0,
-            totalSells: 0,
-            totalSpentSOL: 0,
-            totalReceivedSOL: 0,
-          },
-        });
-      }
-      const token = byToken.get(row.mint);
-      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
-      token.wallets.push({
-        address: row.wallet_address,
-        name: row.wallet_name,
-        txBuys: Number(row.tx_buys) || 0,
-        txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        tokensBought: Number(row.tokens_bought) || 0,
-        tokensSold: Number(row.tokens_sold) || 0,
-        pnlSol: +pnlSol.toFixed(6),
-        lastActivity: row.last_activity,
-      });
-      token.summary.uniqueWallets += 1;
-      token.summary.totalBuys += Number(row.tx_buys) || 0;
-      token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
-    }
-
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-      },
-    }));
-
-    res.json(result);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
-    res.status(500).json({ error: 'Failed to build token tracker' });
-  }
-});
-
-app.get('/api/websocket/status', (req, res) => {
-  try {
-    const status = solanaWebSocketService.getStatus();
-    res.json(status);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error getting WebSocket status:`, error);
-    res.status(500).json({ error: 'Failed to get WebSocket status' });
-  }
-});
-
-app.post('/api/websocket/reconnect', async (req, res) => {
-  try {
-    await solanaWebSocketService.stop();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await solanaWebSocketService.start();
-    res.json({
-      success: true,
-      message: 'WebSocket reconnected successfully',
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error reconnecting WebSocket:`, error);
-    res.status(500).json({ error: 'Failed to reconnect WebSocket' });
-  }
-});
-
-process.on('SIGINT', async () => {
-  console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
-  await monitoringService.close();
-  await solanaWebSocketService.stop();
-  await redis.quit();
-  sseClients.forEach((client) => client.end());
-  process.exit(0);
+server.listen(port, () => {
+  console.log(`[${new Date().toISOString()}] 🚀 HTTPS Server running on port ${port}`);
 });
 
 process.on('SIGTERM', async () => {
-  console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
-  await monitoringService.close();
+  console.log(`[${new Date().toISOString()}] ⏹️ Shutting down server...`);
   await solanaWebSocketService.stop();
-  await redis.quit();
-  sseClients.forEach((client) => client.end());
-  process.exit(0);
+  await monitoringService.close();
+  server.close(() => {
+    console.log(`[${new Date().toISOString()}] ✅ Server shut down`);
+    process.exit(0);
+  });
 });
-
-https.createServer(sslOptions, app).listen(port, '127.0.0.1', () => {
-  console.log(`[${new Date().toISOString()}] 🚀 Server running on https://127.0.0.1:${port}`);
-  console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
-  console.log(
-    `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
-      monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
-    }`
-  );
-});
-
-// app.listen(port, '158.220.125.26', () => {
-//   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
-//   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
-//   console.log(
-//     `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
-//       monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
-//     }`
-//   );
-// });

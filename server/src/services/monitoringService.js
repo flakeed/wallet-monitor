@@ -174,15 +174,14 @@ class WalletMonitoringService {
             }
 
             return await this.db.withTransaction(async (client) => {
-
                 const query = `
-          INSERT INTO transactions (
-            wallet_id, signature, block_time, transaction_type,
-            sol_spent, sol_received
-          ) 
-          VALUES ($1, $2, $3, $4, $5, $6)
-          RETURNING id, signature, transaction_type
-        `;
+                    INSERT INTO transactions (
+                        wallet_id, signature, block_time, transaction_type,
+                        sol_spent, sol_received
+                    ) 
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id, signature, transaction_type
+                `;
                 const result = await client.query(query, [
                     wallet.id,
                     sig.signature,
@@ -303,15 +302,15 @@ class WalletMonitoringService {
             }
 
             const tokenUpsertQuery = `
-        INSERT INTO tokens (mint, symbol, name, decimals) 
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (mint) DO UPDATE SET
-          symbol = EXCLUDED.symbol,
-          name = EXCLUDED.name,
-          decimals = EXCLUDED.decimals,
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING id
-      `;
+                INSERT INTO tokens (mint, symbol, name, decimals) 
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (mint) DO UPDATE SET
+                    symbol = EXCLUDED.symbol,
+                    name = EXCLUDED.name,
+                    decimals = EXCLUDED.decimals,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id
+            `;
             const tokenResult = await client.query(tokenUpsertQuery, [
                 tokenChange.mint,
                 tokenInfo.symbol,
@@ -323,9 +322,9 @@ class WalletMonitoringService {
             const amount = tokenChange.rawChange / Math.pow(10, tokenChange.decimals);
 
             const operationQuery = `
-        INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
-        VALUES ($1, $2, $3, $4)
-      `;
+                INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
+                VALUES ($1, $2, $3, $4)
+            `;
             await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error saving token operation:`, error.message);
@@ -333,10 +332,10 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
+    async addWallet(address, name = null, groupId = null) {
         try {
             new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
+            const wallet = await this.db.addWallet(address, name, groupId);
             console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}...`);
             return wallet;
         } catch (error) {
