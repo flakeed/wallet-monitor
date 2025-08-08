@@ -517,6 +517,66 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
+// Token-centric tracker with wallets and per-wallet PnL-like SOL net
+app.get('/api/tokens/tracker', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const rows = await db.getTokenWalletAggregates(hours);
+
+    const byToken = new Map();
+    for (const row of rows) {
+      if (!byToken.has(row.mint)) {
+        byToken.set(row.mint, {
+          mint: row.mint,
+          symbol: row.symbol,
+          name: row.name,
+          decimals: row.decimals,
+          wallets: [],
+          summary: {
+            uniqueWallets: 0,
+            totalBuys: 0,
+            totalSells: 0,
+            totalSpentSOL: 0,
+            totalReceivedSOL: 0,
+          },
+        });
+      }
+      const token = byToken.get(row.mint);
+      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+      token.wallets.push({
+        address: row.wallet_address,
+        name: row.wallet_name,
+        txBuys: Number(row.tx_buys) || 0,
+        txSells: Number(row.tx_sells) || 0,
+        solSpent: Number(row.sol_spent) || 0,
+        solReceived: Number(row.sol_received) || 0,
+        tokensBought: Number(row.tokens_bought) || 0,
+        tokensSold: Number(row.tokens_sold) || 0,
+        pnlSol: +pnlSol.toFixed(6),
+        lastActivity: row.last_activity,
+      });
+      token.summary.uniqueWallets += 1;
+      token.summary.totalBuys += Number(row.tx_buys) || 0;
+      token.summary.totalSells += Number(row.tx_sells) || 0;
+      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
+      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+    }
+
+    const result = Array.from(byToken.values()).map((t) => ({
+      ...t,
+      summary: {
+        ...t.summary,
+        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+      },
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
+    res.status(500).json({ error: 'Failed to build token tracker' });
+  }
+});
+
 app.get('/api/websocket/status', (req, res) => {
   try {
     const status = solanaWebSocketService.getStatus();

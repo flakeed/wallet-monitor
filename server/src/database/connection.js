@@ -341,6 +341,39 @@ async getWalletStats(walletId) {
         return result.rows;
     }
 
+    /**
+     * Returns per-token per-wallet aggregates for a recent time window.
+     * Each row contains totals of SOL spent/received and token amounts for that wallet on that token.
+     */
+    async getTokenWalletAggregates(hours = 24) {
+        const query = `
+            SELECT 
+                tk.mint,
+                tk.symbol,
+                tk.name,
+                tk.decimals,
+                w.id as wallet_id,
+                w.address as wallet_address,
+                w.name as wallet_name,
+                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
+                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
+                MAX(t.block_time) as last_activity
+            FROM tokens tk
+            JOIN token_operations to_ ON tk.id = to_.token_id
+            JOIN transactions t ON to_.transaction_id = t.id
+            JOIN wallets w ON t.wallet_id = w.id
+            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name
+            ORDER BY tk.mint, wallet_id
+        `;
+        const result = await this.pool.query(query);
+        return result.rows;
+    }
+
     async getMonitoringStats() {
         const query = `
             SELECT 
