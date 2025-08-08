@@ -1,40 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
-  const [address, setAddress] = useState('');
-  const [name, setName] = useState('');
-  const [groupId, setGroupId] = useState('');
+function GroupManager({
+  groups,
+  activeGroup,
+  onCreateGroup,
+  onSwitchGroup,
+  onDeleteGroup,
+  onGetGroupStats,
+  onGetWalletsInGroup,
+  onAddWalletToGroup,
+  onAddWalletsBulkToGroup,
+  onRemoveWalletFromGroup,
+  onRefreshSubscriptions
+}) {
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
+  const [selectedGroupWallets, setSelectedGroupWallets] = useState([]);
+  const [selectedGroupStats, setSelectedGroupStats] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [createGroupName, setCreateGroupName] = useState('');
+  const [createGroupDescription, setCreateGroupDescription] = useState('');
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const [message, setMessage] = useState(null);
-  const [activeTab, setActiveTab] = useState('single');
   const [bulkText, setBulkText] = useState('');
-  const [bulkLoading, setBulkLoading] = useState(false);
-  const [bulkResults, setBulkResults] = useState(null);
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [singleWalletAddress, setSingleWalletAddress] = useState('');
+  const [singleWalletName, setSingleWalletName] = useState('');
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    if (!address.trim()) {
-      setMessage({ type: 'error', text: 'Wallet address is required' });
-      return;
-    }
-
-    if (address.length !== 44) {
-      setMessage({ type: 'error', text: 'Invalid Solana wallet address format' });
-      return;
-    }
-
+  const loadGroupData = async (groupId) => {
+    if (!groupId) return;
+    
     setLoading(true);
-    setMessage(null);
-
     try {
-      const result = await onAddWallet(address, name, groupId || null);
-      if (result.success) {
-        setMessage({ type: 'success', text: result.message });
-        setAddress('');
-        setName('');
-        setGroupId('');
-      }
+      const [wallets, stats] = await Promise.all([
+        onGetWalletsInGroup(groupId),
+        onGetGroupStats(groupId)
+      ]);
+      setSelectedGroupWallets(wallets);
+      setSelectedGroupStats(stats);
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
     } finally {
@@ -42,20 +44,92 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
     }
   };
 
+  const handleSelectGroup = (groupId) => {
+    setSelectedGroupId(groupId);
+    if (groupId) {
+      loadGroupData(groupId);
+    } else {
+      setSelectedGroupWallets([]);
+      setSelectedGroupStats(null);
+    }
+  };
+
+  const handleCreateGroup = async (e) => {
+    e.preventDefault();
+    if (!createGroupName.trim()) return;
+
+    try {
+      const result = await onCreateGroup(createGroupName, createGroupDescription);
+      setMessage({ type: 'success', text: result.message });
+      setCreateGroupName('');
+      setCreateGroupDescription('');
+      setShowCreateForm(false);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    }
+  };
+
+  const handleSwitchGroup = async (groupId) => {
+    try {
+      setLoading(true);
+      const result = await onSwitchGroup(groupId);
+      setMessage({ type: 'success', text: result.message });
+      
+      // Refresh subscriptions after switching
+      await onRefreshSubscriptions();
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!confirm('Are you sure you want to delete this group? All wallets will be removed from the group.')) {
+      return;
+    }
+
+    try {
+      const result = await onDeleteGroup(groupId);
+      setMessage({ type: 'success', text: result.message });
+      
+      if (selectedGroupId === groupId) {
+        setSelectedGroupId(null);
+        setSelectedGroupWallets([]);
+        setSelectedGroupStats(null);
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    }
+  };
+
+  const handleAddSingleWallet = async (e) => {
+    e.preventDefault();
+    if (!selectedGroupId || !singleWalletAddress.trim()) return;
+
+    try {
+      const result = await onAddWalletToGroup(selectedGroupId, singleWalletAddress, singleWalletName);
+      setMessage({ type: 'success', text: result.message });
+      setSingleWalletAddress('');
+      setSingleWalletName('');
+      
+      // Reload group data
+      await loadGroupData(selectedGroupId);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    }
+  };
+
   const parseBulkInput = (text) => {
-    const lines = text.trim().split('\n').filter(line => line.trim());
+    const lines = text.trim().split('\n').filter(line => line.trim() && !line.trim().startsWith('#'));
     const wallets = [];
 
     for (const line of lines) {
       const trimmedLine = line.trim();
-
-      if (trimmedLine.includes(',') || trimmedLine.includes('\t')) {
-        const parts = trimmedLine.split(/[,\t]/).map(p => p.trim());
-        const address = parts[0];
-        const name = parts[1] || null;
-
+      if (trimmedLine.includes(',')) {
+        const [address, name] = trimmedLine.split(',').map(p => p.trim());
         if (address && address.length === 44) {
-          wallets.push({ address, name });
+          wallets.push({ address, name: name || null });
         }
       } else {
         if (trimmedLine.length === 44) {
@@ -63,285 +137,359 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, groups }) {
         }
       }
     }
-
     return wallets;
   };
 
-  const handleBulkSubmit = async (e) => {
+  const handleBulkImport = async (e) => {
     e.preventDefault();
-
-    if (!bulkText.trim()) {
-      setBulkResults({ type: 'error', message: 'Please enter wallet addresses' });
-      return;
-    }
+    if (!selectedGroupId || !bulkText.trim()) return;
 
     const wallets = parseBulkInput(bulkText);
-
     if (wallets.length === 0) {
-      setBulkResults({
-        type: 'error',
-        message: 'No valid wallet addresses found. Make sure addresses are 44 characters long.'
-      });
+      setMessage({ type: 'error', text: 'No valid wallet addresses found' });
       return;
     }
-
-    if (wallets.length > 1000) {
-      setBulkResults({
-        type: 'error',
-        message: 'Maximum 1000 wallets allowed per bulk import. Please split your list.'
-      });
-      return;
-    }
-
-    setBulkLoading(true);
-    setBulkResults(null);
 
     try {
-      const result = await onAddWalletsBulk(wallets, groupId || null);
-
-      setBulkResults({
-        type: 'success',
-        message: result.message,
-        details: result.results
-      });
-
-      if (result.results.successful > 0) {
-        setBulkText('');
-        setGroupId('');
-      }
+      const result = await onAddWalletsBulkToGroup(selectedGroupId, wallets);
+      setMessage({ type: 'success', text: result.message });
+      setBulkText('');
+      setShowBulkImport(false);
+      
+      // Reload group data
+      await loadGroupData(selectedGroupId);
     } catch (error) {
-      setBulkResults({
-        type: 'error',
-        message: `Bulk import failed: ${error.message}`
-      });
-    } finally {
-      setBulkLoading(false);
+      setMessage({ type: 'error', text: error.message });
+    }
+  };
+
+  const handleRemoveWallet = async (address) => {
+    if (!selectedGroupId) return;
+    
+    if (!confirm('Remove this wallet from the group?')) return;
+
+    try {
+      const result = await onRemoveWalletFromGroup(selectedGroupId, address);
+      setMessage({ type: 'success', text: result.message });
+      
+      // Reload group data
+      await loadGroupData(selectedGroupId);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
     }
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
-      <h2 className="text-xl font-semibold text-gray-900 mb-4">Add Wallets for Monitoring</h2>
-
-      {/* Tabs */}
-      <div className="flex space-x-1 mb-6 bg-gray-100 p-1 rounded-lg">
-        <button
-          onClick={() => setActiveTab('single')}
-          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'single'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          Single Wallet
-        </button>
-        <button
-          onClick={() => setActiveTab('bulk')}
-          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'bulk'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
-            }`}
-        >
-          Bulk Import
-        </button>
-      </div>
-
-      {/* Single Wallet Tab */}
-      {activeTab === 'single' && (
-        <>
-          {message && (
-            <div className={`mb-4 p-3 rounded-lg ${message.type === 'success'
-                ? 'bg-green-50 border border-green-200 text-green-700'
-                : 'bg-red-50 border border-red-200 text-red-700'
-              }`}>
-              {message.text}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Wallet Address *
-              </label>
-              <input
-                type="text"
-                value={address}
-                onChange={(e) => setAddress(e.target.value.trim())}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                placeholder="Enter Solana wallet address (44 characters)"
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Name (Optional)
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                placeholder="Give this wallet a name..."
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Group (Optional)
-              </label>
-              <select
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                disabled={loading}
-              >
-                <option value="">Select a group (optional)</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.walletCount} wallets)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading || !address.trim()}
-              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-            >
-              {loading ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Adding Wallet...
-                </>
-              ) : (
-                'Add Wallet'
-              )}
-            </button>
-          </form>
-        </>
+    <div className="space-y-6">
+      {message && (
+        <div className={`p-4 rounded-lg border ${message.type === 'success'
+            ? 'bg-green-50 border-green-200 text-green-700'
+            : 'bg-red-50 border-red-200 text-red-700'
+          }`}>
+          {message.text}
+        </div>
       )}
 
-      {/* Bulk Import Tab */}
-      {activeTab === 'bulk' && (
-        <>
-          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h4 className="text-sm font-medium text-blue-900 mb-2">Format Instructions:</h4>
-            <div className="text-sm text-blue-800 space-y-1">
-              <p>• One wallet address per line</p>
-              <p>• Optional: Add name after comma or tab: <code className="bg-blue-100 px-1 rounded">address,name</code></p>
-              <p>• Example:</p>
-              <div className="mt-2 bg-blue-100 p-2 rounded font-mono text-xs">
-                9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1<br />
-                53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC<br />
-                Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
+      {/* Groups Overview */}
+      <div className="bg-white rounded-lg shadow-sm border p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-gray-900">Wallet Groups</h2>
+          <button
+            onClick={() => setShowCreateForm(!showCreateForm)}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700"
+          >
+            Create New Group
+          </button>
+        </div>
+
+        {showCreateForm && (
+          <form onSubmit={handleCreateGroup} className="mb-6 p-4 bg-gray-50 rounded-lg">
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Group Name *
+                </label>
+                <input
+                  type="text"
+                  value={createGroupDescription}
+                  onChange={(e) => setCreateGroupDescription(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-green-500"
+                  placeholder="Enter group description..."
+                />
               </div>
+              <div className="flex space-x-2">
+                <button
+                  type="submit"
+                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                >
+                  Create Group
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateForm(false)}
+                  className="bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+
+        <div className="grid gap-4">
+          {groups.map((group) => (
+            <div
+              key={group.id}
+              className={`border rounded-lg p-4 ${
+                group.is_active 
+                  ? 'border-blue-500 bg-blue-50' 
+                  : selectedGroupId === group.id
+                  ? 'border-purple-300 bg-purple-50'
+                  : 'border-gray-200 bg-white'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center space-x-2">
+                    <h3 className="font-semibold text-gray-900">{group.name}</h3>
+                    {group.is_active && (
+                      <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded">
+                        Active
+                      </span>
+                    )}
+                    {selectedGroupId === group.id && (
+                      <span className="bg-purple-600 text-white text-xs px-2 py-1 rounded">
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                  {group.description && (
+                    <p className="text-sm text-gray-600 mt-1">{group.description}</p>
+                  )}
+                  <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
+                    <span>{group.wallet_count || 0} wallets</span>
+                    <span>Created: {new Date(group.created_at).toLocaleDateString()}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleSelectGroup(selectedGroupId === group.id ? null : group.id)}
+                    className={`px-3 py-1 rounded text-sm ${
+                      selectedGroupId === group.id
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {selectedGroupId === group.id ? 'Deselect' : 'Select'}
+                  </button>
+
+                  {!group.is_active && (
+                    <button
+                      onClick={() => handleSwitchGroup(group.id)}
+                      disabled={loading}
+                      className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      Activate
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => handleDeleteGroup(group.id)}
+                    disabled={group.is_active}
+                    className="bg-red-600 text-white px-3 py-1 rounded text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={group.is_active ? "Cannot delete active group" : "Delete group"}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {groups.length === 0 && (
+            <div className="text-center py-8 text-gray-500">
+              No groups created yet. Create your first group to organize wallets.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Selected Group Details */}
+      {selectedGroupId && (
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">
+              Group: {groups.find(g => g.id === selectedGroupId)?.name}
+            </h3>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => setShowBulkImport(!showBulkImport)}
+                className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+              >
+                Bulk Import
+              </button>
             </div>
           </div>
 
-          {bulkResults && (
-            <div className={`mb-4 p-4 rounded-lg border ${bulkResults.type === 'success'
-                ? 'bg-green-50 border-green-200'
-                : 'bg-red-50 border-red-200'
-              }`}>
-              <div className={`font-medium mb-2 ${bulkResults.type === 'success' ? 'text-green-900' : 'text-red-900'
-                }`}>
-                {bulkResults.message}
+          {/* Group Statistics */}
+          {selectedGroupStats && (
+            <div className="grid grid-cols-4 gap-4 mb-6">
+              <div className="bg-blue-50 rounded-lg p-3">
+                <div className="text-sm text-blue-700">Total Wallets</div>
+                <div className="text-lg font-semibold text-blue-900">
+                  {selectedGroupStats.totalWallets}
+                </div>
               </div>
+              <div className="bg-green-50 rounded-lg p-3">
+                <div className="text-sm text-green-700">Buy Transactions</div>
+                <div className="text-lg font-semibold text-green-900">
+                  {selectedGroupStats.totalBuyTransactions}
+                </div>
+              </div>
+              <div className="bg-red-50 rounded-lg p-3">
+                <div className="text-sm text-red-700">Sell Transactions</div>
+                <div className="text-lg font-semibold text-red-900">
+                  {selectedGroupStats.totalSellTransactions}
+                </div>
+              </div>
+              <div className="bg-yellow-50 rounded-lg p-3">
+                <div className="text-sm text-yellow-700">Net SOL</div>
+                <div className="text-lg font-semibold text-yellow-900">
+                  {selectedGroupStats.netSOL}
+                </div>
+              </div>
+            </div>
+          )}
 
-              {bulkResults.details && (
-                <div className="text-sm space-y-2">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="text-center">
-                      <div className="font-semibold text-gray-900">{bulkResults.details.total}</div>
-                      <div className="text-gray-600">Total</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="font-semibold text-green-600">{bulkResults.details.successful}</div>
-                      <div className="text-gray-600">Successful</div>
-                    </div>
-                    <div className="text-center">
-                      <div className="font-semibold text-red-600">{bulkResults.details.failed}</div>
-                      <div className="text-gray-600">Failed</div>
-                    </div>
-                  </div>
+          {/* Add Single Wallet Form */}
+          <form onSubmit={handleAddSingleWallet} className="mb-6 p-4 bg-gray-50 rounded-lg">
+            <h4 className="font-medium text-gray-900 mb-3">Add Single Wallet</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <input
+                  type="text"
+                  value={singleWalletAddress}
+                  onChange={(e) => setSingleWalletAddress(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
+                  placeholder="Wallet address (44 characters)"
+                  required
+                />
+              </div>
+              <div>
+                <input
+                  type="text"
+                  value={singleWalletName}
+                  onChange={(e) => setSingleWalletName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500"
+                  placeholder="Name (optional)"
+                />
+              </div>
+              <div>
+                <button
+                  type="submit"
+                  className="w-full bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+                >
+                  Add Wallet
+                </button>
+              </div>
+            </div>
+          </form>
 
-                  {bulkResults.details.errors.length > 0 && (
-                    <details className="mt-3">
-                      <summary className="cursor-pointer text-red-700 font-medium">
-                        View Errors ({bulkResults.details.errors.length})
-                      </summary>
-                      <div className="mt-2 max-h-32 overflow-y-auto bg-red-100 p-2 rounded text-xs">
-                        {bulkResults.details.errors.map((error, i) => (
-                          <div key={i} className="text-red-800">
-                            {error.address.slice(0, 8)}...{error.name ? ` (${error.name})` : ''}: {error.error}
-                          </div>
-                        ))}
+          {/* Bulk Import Form */}
+          {showBulkImport && (
+            <form onSubmit={handleBulkImport} className="mb-6 p-4 bg-gray-50 rounded-lg">
+              <h4 className="font-medium text-gray-900 mb-3">Bulk Import Wallets</h4>
+              <div className="space-y-3">
+                <div className="text-sm text-gray-600">
+                  Format: One wallet per line, optionally with name: <code>address,name</code>
+                </div>
+                <textarea
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+                  placeholder="Paste wallet addresses here..."
+                  rows={8}
+                />
+                <div className="text-sm text-gray-500">
+                  {bulkText.trim() && `${parseBulkInput(bulkText).length} valid wallets detected`}
+                </div>
+                <div className="flex space-x-2">
+                  <button
+                    type="submit"
+                    className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+                  >
+                    Import Wallets
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkImport(false)}
+                    className="bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
+
+          {/* Wallets List */}
+          {loading ? (
+            <div className="text-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600 mx-auto"></div>
+              <div className="mt-2 text-gray-500">Loading wallets...</div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <h4 className="font-medium text-gray-900 mb-3">
+                Wallets in Group ({selectedGroupWallets.length})
+              </h4>
+              
+              {selectedGroupWallets.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No wallets in this group yet. Add some wallets to get started.
+                </div>
+              ) : (
+                <div className="max-h-96 overflow-y-auto">
+                  {selectedGroupWallets.map((wallet) => (
+                    <div key={wallet.address} className="flex items-center justify-between p-3 bg-white border rounded">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-mono text-sm text-gray-600">
+                            {wallet.address.slice(0, 8)}...{wallet.address.slice(-8)}
+                          </span>
+                          {wallet.name && (
+                            <span className="text-sm font-medium text-gray-900">
+                              {wallet.name}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          Added: {new Date(wallet.added_to_group_at).toLocaleDateString()}
+                          {wallet.stats && (
+                            <span className="ml-4">
+                              Transactions: {wallet.stats.totalBuyTransactions + wallet.stats.totalSellTransactions} | 
+                              Net SOL: {wallet.stats.netSOL}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </details>
-                  )}
+                      <button
+                        onClick={() => handleRemoveWallet(wallet.address)}
+                        className="text-red-600 hover:text-red-800 text-sm px-3 py-1 rounded hover:bg-red-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           )}
-
-          <form onSubmit={handleBulkSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Wallet Addresses *
-              </label>
-              <textarea
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors font-mono text-sm"
-                placeholder="Paste wallet addresses here, one per line..."
-                rows={10}
-                disabled={bulkLoading}
-              />
-              <div className="mt-2 text-sm text-gray-500">
-                {bulkText.trim() && `${parseBulkInput(bulkText).length} valid wallets detected`}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Group (Optional)
-              </label>
-              <select
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                disabled={bulkLoading}
-              >
-                <option value="">Select a group (optional)</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.walletCount} wallets)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={bulkLoading || !bulkText.trim()}
-              className="w-full bg-purple-600 text-white py-3 px-4 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-            >
-              {bulkLoading ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Importing Wallets...
-                </>
-              ) : (
-                `Import ${parseBulkInput(bulkText).length} Wallets`
-              )}
-            </button>
-          </form>
-        </>
+        </div>
       )}
     </div>
   );
 }
 
-export default WalletManager;
+export default GroupManager;

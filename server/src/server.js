@@ -602,6 +602,419 @@ app.post('/api/websocket/reconnect', async (req, res) => {
   }
 });
 
+// ======= WALLET GROUP ENDPOINTS =======
+
+// Get all wallet groups
+app.get('/api/groups', async (req, res) => {
+  try {
+    const groups = await db.getAllWalletGroups();
+    res.json(groups);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching wallet groups:`, error);
+    res.status(500).json({ error: 'Failed to fetch wallet groups' });
+  }
+});
+
+// Get active wallet group
+app.get('/api/groups/active', async (req, res) => {
+  try {
+    const activeGroup = await db.getActiveWalletGroup();
+    if (!activeGroup) {
+      return res.status(404).json({ error: 'No active group found' });
+    }
+    res.json(activeGroup);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching active group:`, error);
+    res.status(500).json({ error: 'Failed to fetch active group' });
+  }
+});
+
+// Create new wallet group
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({ error: 'Group name is required' });
+    }
+
+    if (name.length > 255) {
+      return res.status(400).json({ error: 'Group name too long (max 255 characters)' });
+    }
+
+    const group = await solanaWebSocketService.createWalletGroup(name.trim(), description?.trim() || null);
+    res.json({
+      success: true,
+      group,
+      message: 'Wallet group created successfully'
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error creating wallet group:`, error);
+    if (error.message.includes('already exists')) {
+      res.status(409).json({ error: 'Group with this name already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to create wallet group' });
+    }
+  }
+});
+
+// Switch active group
+app.post('/api/groups/:groupId/activate', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    await solanaWebSocketService.switchToGroup(groupId);
+    res.json({
+      success: true,
+      message: 'Successfully switched to new active group'
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error switching active group:`, error);
+    res.status(500).json({ error: 'Failed to switch active group' });
+  }
+});
+
+// Delete wallet group
+app.delete('/api/groups/:groupId', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    const deletedGroup = await db.deleteWalletGroup(groupId);
+    res.json({
+      success: true,
+      group: deletedGroup,
+      message: 'Wallet group deleted successfully'
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error deleting wallet group:`, error);
+    if (error.message.includes('Cannot delete active group')) {
+      res.status(400).json({ error: 'Cannot delete active group. Switch to another group first.' });
+    } else if (error.message.includes('not found')) {
+      res.status(404).json({ error: 'Group not found' });
+    } else {
+      res.status(500).json({ error: 'Failed to delete wallet group' });
+    }
+  }
+});
+
+// Get wallets in specific group
+app.get('/api/groups/:groupId/wallets', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    const wallets = await db.getWalletsInGroup(groupId);
+    const walletsWithStats = await Promise.all(
+      wallets.map(async (wallet) => {
+        const stats = await db.getWalletStats(wallet.id);
+        return {
+          ...wallet,
+          stats: {
+            totalBuyTransactions: stats.total_buy_transactions || 0,
+            totalSellTransactions: stats.total_sell_transactions || 0,
+            totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
+            totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
+            totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
+            netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
+            lastTransactionAt: stats.last_transaction_at,
+          },
+        };
+      })
+    );
+    res.json(walletsWithStats);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching group wallets:`, error);
+    res.status(500).json({ error: 'Failed to fetch group wallets' });
+  }
+});
+
+// Add wallet to specific group
+app.post('/api/groups/:groupId/wallets', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const { address, name } = req.body;
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    if (!address) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+
+    if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+      return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+    }
+
+    const wallet = await solanaWebSocketService.addWallet(address, name, groupId);
+    res.json({
+      success: true,
+      wallet,
+      message: 'Wallet added to group successfully'
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error adding wallet to group:`, error);
+    if (error.message.includes('already exists')) {
+      res.status(409).json({ error: 'Wallet is already being monitored' });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Add multiple wallets to specific group
+app.post('/api/groups/:groupId/wallets/bulk', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const { wallets } = req.body;
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    if (!wallets || !Array.isArray(wallets)) {
+      return res.status(400).json({ error: 'Wallets array is required' });
+    }
+
+    if (wallets.length === 0) {
+      return res.status(400).json({ error: 'At least one wallet is required' });
+    }
+
+    if (wallets.length > 1000) {
+      return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
+    }
+
+    // Validate wallet addresses
+    const invalidWallets = [];
+    const validWallets = [];
+
+    for (const wallet of wallets) {
+      if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+        invalidWallets.push({
+          address: wallet.address || 'invalid',
+          name: wallet.name || null,
+          error: 'Invalid Solana wallet address format',
+        });
+      } else {
+        validWallets.push(wallet);
+      }
+    }
+
+    if (invalidWallets.length > 0) {
+      return res.status(400).json({
+        error: 'Invalid wallet addresses found',
+        invalidWallets,
+        validCount: validWallets.length
+      });
+    }
+
+    const results = await solanaWebSocketService.addWalletsToGroup(validWallets, groupId);
+
+    res.json({
+      success: true,
+      message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
+      results
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in bulk wallet import to group:`, error);
+    res.status(500).json({ error: 'Failed to import wallets to group' });
+  }
+});
+
+// Remove wallet from specific group
+app.delete('/api/groups/:groupId/wallets/:address', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const address = req.params.address.trim();
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+      return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+    }
+
+    const wallet = await db.getWalletByAddress(address);
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    await db.removeWalletFromGroup(wallet.id, groupId);
+
+    // If this was in the active group, refresh subscriptions
+    const activeGroup = await db.getActiveWalletGroup();
+    if (activeGroup && activeGroup.id === groupId) {
+      await solanaWebSocketService.refreshSubscriptions();
+    }
+
+    res.json({
+      success: true,
+      message: 'Wallet removed from group successfully'
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error removing wallet from group:`, error);
+    res.status(500).json({ error: 'Failed to remove wallet from group' });
+  }
+});
+
+// Move wallets between groups
+app.post('/api/groups/move-wallets', async (req, res) => {
+  try {
+    const { walletIds, fromGroupId, toGroupId } = req.body;
+
+    if (!toGroupId) {
+      return res.status(400).json({ error: 'Target group ID is required' });
+    }
+
+    if (!walletIds || !Array.isArray(walletIds) || walletIds.length === 0) {
+      return res.status(400).json({ error: 'Wallet IDs array is required' });
+    }
+
+    const result = await db.moveWalletsBetweenGroups(walletIds, fromGroupId, toGroupId);
+
+    // If we're moving from or to the active group, refresh subscriptions
+    const activeGroup = await db.getActiveWalletGroup();
+    if (activeGroup && (activeGroup.id === fromGroupId || activeGroup.id === toGroupId)) {
+      await solanaWebSocketService.refreshSubscriptions();
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully moved ${result.moved} wallets`,
+      result
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error moving wallets between groups:`, error);
+    res.status(500).json({ error: 'Failed to move wallets between groups' });
+  }
+});
+
+// Refresh WebSocket subscriptions for active group
+app.post('/api/groups/refresh-subscriptions', async (req, res) => {
+  try {
+    const result = await solanaWebSocketService.refreshSubscriptions();
+    res.json({
+      success: true,
+      message: 'Subscriptions refreshed successfully',
+      result
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error refreshing subscriptions:`, error);
+    res.status(500).json({ error: 'Failed to refresh subscriptions' });
+  }
+});
+
+// Get group statistics
+app.get('/api/groups/:groupId/stats', async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+
+    if (!groupId || groupId.trim().length === 0) {
+      return res.status(400).json({ error: 'Group ID is required' });
+    }
+
+    const wallets = await db.getWalletsInGroup(groupId);
+    const stats = {
+      totalWallets: wallets.length,
+      totalBuyTransactions: 0,
+      totalSellTransactions: 0,
+      totalSpentSOL: 0,
+      totalReceivedSOL: 0,
+      uniqueTokensBought: 0,
+      uniqueTokensSold: 0,
+      lastTransactionAt: null
+    };
+
+    for (const wallet of wallets) {
+      const walletStats = await db.getWalletStats(wallet.id);
+      stats.totalBuyTransactions += walletStats.total_buy_transactions || 0;
+      stats.totalSellTransactions += walletStats.total_sell_transactions || 0;
+      stats.totalSpentSOL += Number(walletStats.total_sol_spent || 0);
+      stats.totalReceivedSOL += Number(walletStats.total_sol_received || 0);
+      stats.uniqueTokensBought += walletStats.unique_tokens_bought || 0;
+      stats.uniqueTokensSold += walletStats.unique_tokens_sold || 0;
+      
+      if (walletStats.last_transaction_at) {
+        if (!stats.lastTransactionAt || walletStats.last_transaction_at > stats.lastTransactionAt) {
+          stats.lastTransactionAt = walletStats.last_transaction_at;
+        }
+      }
+    }
+
+    // Format numbers
+    stats.totalSpentSOL = Number(stats.totalSpentSOL).toFixed(6);
+    stats.totalReceivedSOL = Number(stats.totalReceivedSOL).toFixed(6);
+    stats.netSOL = (Number(stats.totalReceivedSOL) - Number(stats.totalSpentSOL)).toFixed(6);
+
+    res.json(stats);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching group stats:`, error);
+    res.status(500).json({ error: 'Failed to fetch group statistics' });
+  }
+});
+
+// ======= UPDATED EXISTING ENDPOINTS =======
+
+// Updated wallets endpoint to show active group wallets
+app.get('/api/wallets', async (req, res) => {
+  try {
+    const wallets = await db.getActiveGroupWallets(); // Now returns active group wallets
+    const walletsWithStats = await Promise.all(
+      wallets.map(async (wallet) => {
+        const stats = await db.getWalletStats(wallet.id);
+        return {
+          ...wallet,
+          groupName: wallet.group_name, // Include group info
+          stats: {
+            totalBuyTransactions: stats.total_buy_transactions || 0,
+            totalSellTransactions: stats.total_sell_transactions || 0,
+            totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
+            totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
+            totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
+            netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
+            lastTransactionAt: stats.last_transaction_at,
+          },
+        };
+      })
+    );
+    res.json(walletsWithStats);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error);
+    res.status(500).json({ error: 'Failed to fetch wallets' });
+  }
+});
+
+// Template for bulk group import
+app.get('/api/groups/bulk-template', (req, res) => {
+  const template = `# Bulk Wallet Group Import Template
+# Format: address,name (name is optional)
+# One wallet per line
+# Lines starting with # are ignored
+# Maximum 1000 wallets per group
+
+# Example wallets (replace with real addresses):
+9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
+53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader
+Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
+7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet`;
+
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Disposition', 'attachment; filename="group-wallet-import-template.txt"');
+  res.send(template);
+});
+
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();

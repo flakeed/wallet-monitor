@@ -7,9 +7,10 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
+import GroupManager from './components/GroupManager';
 
 // Fallback API base for local dev if env not provided
-const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
+const API_BASE = process.env.REACT_APP_API_BASE || 'https://api-wallet-monitor.duckdns.org/api';
 
 function App() {
   const [wallets, setWallets] = useState([]);
@@ -20,23 +21,20 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
-  const [view, setView] = useState('tokens'); // 'tokens' | 'transactions'
+  const [view, setView] = useState('tokens'); // 'tokens' | 'transactions' | 'groups'
   const [groups, setGroups] = useState([]);
-  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [activeGroup, setActiveGroup] = useState(null);
 
-  const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
+  const fetchData = async (hours = timeframe, type = transactionType) => {
     try {
       setError(null);
 
-      const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
-      const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
-      const groupsUrl = `${API_BASE}/groups`;
-
-      const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
-        fetch(walletsUrl),
-        fetch(transactionsUrl),
+      const [walletsRes, transactionsRes, statusRes, groupsRes, activeGroupRes] = await Promise.all([
+        fetch(`${API_BASE}/wallets`), // This now returns active group wallets
+        fetch(`${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}`),
         fetch(`${API_BASE}/monitoring/status`),
-        fetch(groupsUrl),
+        fetch(`${API_BASE}/groups`),
+        fetch(`${API_BASE}/groups/active`).catch(() => ({ ok: false }))
       ]);
 
       if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
@@ -50,10 +48,16 @@ function App() {
         groupsRes.json(),
       ]);
 
+      let activeGroupData = null;
+      if (activeGroupRes.ok) {
+        activeGroupData = await activeGroupRes.json();
+      }
+
       setWallets(walletsData);
       setTransactions(transactionsData);
       setMonitoringStatus(statusData);
       setGroups(groupsData);
+      setActiveGroup(activeGroupData);
     } catch (err) {
       setError(err.message);
       console.error('Error fetching data:', err);
@@ -63,7 +67,7 @@ function App() {
   };
 
   useEffect(() => {
-    const sseUrl = `${API_BASE.replace(/\/api$/, '')}/api/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
+    const sseUrl = `${API_BASE.replace(/\/api$/, '')}/api/transactions/stream`;
     const eventSource = new EventSource(sseUrl);
 
     eventSource.onmessage = (event) => {
@@ -86,8 +90,8 @@ function App() {
               signature: newTransaction.signature,
               time: newTransaction.timestamp,
               transactionType: newTransaction.transactionType,
-              solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
-              solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
+              solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount?.toFixed(6) : null,
+              solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount?.toFixed(6) : null,
               wallet: {
                 address: newTransaction.walletAddress,
                 name: wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
@@ -115,32 +119,187 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets, selectedGroup]);
+  }, [timeframe, transactionType, wallets]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
     setLoading(true);
-    fetchData(newTimeframe, transactionType, selectedGroup);
+    fetchData(newTimeframe, transactionType);
   };
 
   const handleTransactionTypeChange = (newType) => {
     setTransactionType(newType);
     setLoading(true);
-    fetchData(timeframe, newType, selectedGroup);
+    fetchData(timeframe, newType);
   };
 
-  const handleGroupChange = (groupId) => {
-    setSelectedGroup(groupId || null);
-    setLoading(true);
-    fetchData(timeframe, transactionType, groupId || null);
+  // Group management functions
+  const createGroup = async (name, description = null) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), description: description?.trim() || null }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message, group: data.group };
+    } catch (err) {
+      throw new Error(err.message);
+    }
   };
 
-  const addWallet = async (address, name, groupId) => {
+  const switchActiveGroup = async (groupId) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/activate`, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to switch group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const deleteGroup = async (groupId) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to delete group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const getGroupStats = async (groupId) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/stats`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch group stats');
+      }
+
+      return await response.json();
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const getWalletsInGroup = async (groupId) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/wallets`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch group wallets');
+      }
+
+      return await response.json();
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const addWalletToGroup = async (groupId, address, name = null) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/wallets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: address.trim(), name: name?.trim() || null }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to add wallet to group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const addWalletsBulkToGroup = async (groupId, wallets) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/wallets/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallets }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to import wallets to group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message, results: data.results };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  const removeWalletFromGroup = async (groupId, address) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups/${groupId}/wallets/${address}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to remove wallet from group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
+  // Legacy wallet functions (for backwards compatibility)
+  const addWallet = async (address, name, groupId = null) => {
+    if (groupId) {
+      return await addWalletToGroup(groupId, address, name);
+    }
+    
+    // Add to active group if no group specified
+    const currentActiveGroup = activeGroup || groups.find(g => g.is_active);
+    if (currentActiveGroup) {
+      return await addWalletToGroup(currentActiveGroup.id, address, name);
+    }
+
+    // Fallback to original API
     try {
       const response = await fetch(`${API_BASE}/wallets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.trim(), name: name.trim() || null, groupId }),
+        body: JSON.stringify({ address: address.trim(), name: name?.trim() || null }),
       });
 
       const data = await response.json();
@@ -156,12 +315,23 @@ function App() {
     }
   };
 
-  const addWalletsBulk = async (wallets, groupId) => {
+  const addWalletsBulk = async (wallets, groupId = null) => {
+    if (groupId) {
+      return await addWalletsBulkToGroup(groupId, wallets);
+    }
+
+    // Add to active group if no group specified
+    const currentActiveGroup = activeGroup || groups.find(g => g.is_active);
+    if (currentActiveGroup) {
+      return await addWalletsBulkToGroup(currentActiveGroup.id, wallets);
+    }
+
+    // Fallback to original API
     try {
       const response = await fetch(`${API_BASE}/wallets/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallets, groupId }),
+        body: JSON.stringify({ wallets }),
       });
 
       const data = await response.json();
@@ -196,22 +366,19 @@ function App() {
     }
   };
 
-  const createGroup = async (name) => {
+  const refreshSubscriptions = async () => {
     try {
-      const response = await fetch(`${API_BASE}/groups`, {
+      const response = await fetch(`${API_BASE}/groups/refresh-subscriptions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create group');
+        throw new Error(data.error || 'Failed to refresh subscriptions');
       }
 
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message, group: data.group };
+      return { success: true, message: data.message, result: data.result };
     } catch (err) {
       throw new Error(err.message);
     }
@@ -222,7 +389,7 @@ function App() {
       const response = await fetch(`${API_BASE}/monitoring/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, groupId: selectedGroup }),
+        body: JSON.stringify({ action }),
       });
 
       const data = await response.json();
@@ -257,46 +424,50 @@ function App() {
       <div className="max-w-6xl mx-auto">
         <Header />
         {error && <ErrorMessage error={error} />}
+        
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
+
+        {/* Active Group Status */}
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <select
-                value={selectedGroup || ''}
-                onChange={(e) => handleGroupChange(e.target.value)}
-                className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">All Groups</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.walletCount})
-                  </option>
-                ))}
-              </select>
-              <button
-                className="text-sm px-3 py-1 rounded bg-blue-600 text-white"
-                onClick={() => {
-                  const name = prompt('Enter group name:');
-                  if (name) createGroup(name);
-                }}
-              >
-                Create Group
-              </button>
+            <div className="flex items-center space-x-4">
+              <div className="text-sm text-gray-600">
+                Active Group: 
+                <span className="ml-2 font-semibold text-gray-900">
+                  {activeGroup ? `${activeGroup.name} (${activeGroup.wallet_count} wallets)` : 'No Active Group'}
+                </span>
+              </div>
+              {activeGroup && (
+                <button
+                  onClick={refreshSubscriptions}
+                  className="text-sm px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
+                >
+                  Refresh Subscriptions
+                </button>
+              )}
             </div>
+            
             <div className="flex items-center space-x-3">
               <button
-                className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                className={`text-sm px-3 py-1 rounded ${view === 'groups' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                onClick={() => setView('groups')}
+              >
+                Manage Groups
+              </button>
+              <button
+                className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                 onClick={() => setView('tokens')}
               >
                 Token Tracker
               </button>
               <button
-                className={`text-sm px-3 py-1 rounded ${view === 'transactions' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                className={`text-sm px-3 py-1 rounded ${view === 'transactions' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
                 onClick={() => setView('transactions')}
               >
                 Recent Transactions
               </button>
             </div>
+
             {view === 'transactions' && (
               <div className="flex items-center space-x-4">
                 <div className="flex items-center space-x-2">
@@ -327,6 +498,7 @@ function App() {
               </div>
             )}
           </div>
+
           {view === 'transactions' && (
             <div className="mt-4 grid grid-cols-3 gap-4">
               <div className="bg-blue-50 rounded-lg p-3">
@@ -350,15 +522,39 @@ function App() {
             </div>
           )}
         </div>
-        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} groups={groups} />
+
+        {view === 'groups' && (
+          <GroupManager 
+            groups={groups}
+            activeGroup={activeGroup}
+            onCreateGroup={createGroup}
+            onSwitchGroup={switchActiveGroup}
+            onDeleteGroup={deleteGroup}
+            onGetGroupStats={getGroupStats}
+            onGetWalletsInGroup={getWalletsInGroup}
+            onAddWalletToGroup={addWalletToGroup}
+            onAddWalletsBulkToGroup={addWalletsBulkToGroup}
+            onRemoveWalletFromGroup={removeWalletFromGroup}
+            onRefreshSubscriptions={refreshSubscriptions}
+          />
+        )}
+
+        {view !== 'groups' && (
+          <WalletManager 
+            onAddWallet={addWallet} 
+            onAddWalletsBulk={addWalletsBulk} 
+            groups={groups}
+          />
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
           </div>
           <div className="lg:col-span-2">
             {view === 'tokens' ? (
-              <TokenTracker groupId={selectedGroup} />
-            ) : (
+              <TokenTracker />
+            ) : view === 'transactions' ? (
               <TransactionFeed
                 transactions={transactions}
                 timeframe={timeframe}
@@ -366,7 +562,7 @@ function App() {
                 transactionType={transactionType}
                 onTransactionTypeChange={handleTransactionTypeChange}
               />
-            )}
+            ) : null}
           </div>
         </div>
       </div>

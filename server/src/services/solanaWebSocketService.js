@@ -26,6 +26,7 @@ class SolanaWebSocketService {
         this.isStarted = false;
         this.batchSize = 400;
         this.maxSubscriptions = 1000;
+        this.currentActiveGroupId = null;
     }
 
     async start() {
@@ -36,7 +37,7 @@ class SolanaWebSocketService {
         console.log(`[${new Date().toISOString()}] 🚀 Starting Solana WebSocket client for ${this.wsUrl}`);
         this.isStarted = true;
         await this.connect();
-        await this.subscribeToWallets();
+        await this.subscribeToActiveGroupWallets();
     }
 
     async connect() {
@@ -136,13 +137,27 @@ class SolanaWebSocketService {
         return null;
     }
 
-    async subscribeToWallets() {
-        const wallets = await this.db.getActiveWallets();
+    // ======= GROUP-AWARE SUBSCRIPTION METHODS =======
+
+    async subscribeToActiveGroupWallets() {
+        // Get active group
+        const activeGroup = await this.db.getActiveWalletGroup();
+        if (!activeGroup) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ No active group found`);
+            return;
+        }
+
+        console.log(`[${new Date().toISOString()}] 📋 Active group: ${activeGroup.name} (${activeGroup.wallet_count} wallets)`);
+        this.currentActiveGroupId = activeGroup.id;
+
+        // Get wallets in active group
+        const wallets = await this.db.getWalletsInGroup(activeGroup.id);
         if (wallets.length > this.maxSubscriptions) {
             console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
             wallets.splice(this.maxSubscriptions);
         }
-        console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets`);
+
+        console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets from group "${activeGroup.name}"`);
 
         for (let i = 0; i < wallets.length; i += this.batchSize) {
             const batch = wallets.slice(i, i + this.batchSize);
@@ -153,7 +168,74 @@ class SolanaWebSocketService {
             );
             await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets`);
+        console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets in group "${activeGroup.name}"`);
+    }
+
+    async switchToGroup(groupId) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔄 Switching to group ${groupId}`);
+
+            // Unsubscribe from current wallets
+            console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${this.subscriptions.size} current wallets`);
+            const currentWallets = Array.from(this.subscriptions.keys());
+            for (const walletAddress of currentWallets) {
+                await this.unsubscribeFromWallet(walletAddress);
+            }
+
+            // Set new active group
+            await this.db.setActiveWalletGroup(groupId);
+            this.currentActiveGroupId = groupId;
+
+            // Subscribe to new group's wallets
+            await this.subscribeToActiveGroupWallets();
+
+            console.log(`[${new Date().toISOString()}] ✅ Successfully switched to group ${groupId}`);
+            return { success: true };
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error switching to group ${groupId}:`, error.message);
+            throw error;
+        }
+    }
+
+    async refreshSubscriptions() {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔄 Refreshing subscriptions for current active group`);
+
+            // Get current active group wallets
+            const activeWallets = await this.db.getActiveGroupWallets();
+            const activeAddresses = new Set(activeWallets.map(w => w.address));
+            const currentSubscriptions = new Set(this.subscriptions.keys());
+
+            // Find wallets to unsubscribe (not in active group anymore)
+            const toUnsubscribe = [...currentSubscriptions].filter(addr => !activeAddresses.has(addr));
+            console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${toUnsubscribe.length} wallets no longer in active group`);
+            for (const address of toUnsubscribe) {
+                await this.unsubscribeFromWallet(address);
+            }
+
+            // Find wallets to subscribe (new in active group)
+            const toSubscribe = [...activeAddresses].filter(addr => !currentSubscriptions.has(addr));
+            console.log(`[${new Date().toISOString()}] 📥 Subscribing to ${toSubscribe.length} new wallets in active group`);
+            for (const address of toSubscribe) {
+                if (this.subscriptions.size >= this.maxSubscriptions) {
+                    console.warn(`[${new Date().toISOString()}] ⚠️ Reached maximum subscription limit`);
+                    break;
+                }
+                await this.subscribeToWallet(address);
+            }
+
+            console.log(`[${new Date().toISOString()}] ✅ Refreshed subscriptions. Total: ${this.subscriptions.size}`);
+            return {
+                unsubscribed: toUnsubscribe.length,
+                subscribed: toSubscribe.length,
+                total: this.subscriptions.size
+            };
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error refreshing subscriptions:`, error.message);
+            throw error;
+        }
     }
 
     async subscribeToWallet(walletAddress) {
@@ -177,22 +259,42 @@ class SolanaWebSocketService {
         const subData = this.subscriptions.get(walletAddress);
         if (!subData) return;
 
-        if (subData.logs) {
-            await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
-            console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from logs for ${walletAddress.slice(0, 8)}...`);
+        try {
+            if (subData.logs) {
+                await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
+                console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from logs for ${walletAddress.slice(0, 8)}...`);
+            }
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error unsubscribing from wallet ${walletAddress}:`, error.message);
+        } finally {
+            this.subscriptions.delete(walletAddress);
         }
-        this.subscriptions.delete(walletAddress);
     }
 
-    async addWallet(walletAddress, name = null) {
+    // ======= WALLET MANAGEMENT METHODS (UPDATED) =======
+
+    async addWallet(walletAddress, name = null, groupId = null) {
         try {
             if (this.subscriptions.size >= this.maxSubscriptions) {
                 throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
             }
-            const wallet = await this.monitoringService.addWallet(walletAddress, name);
+
+            const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId);
+
+            // If wallet was added to active group and we're connected, subscribe to it
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                await this.subscribeToWallet(walletAddress);
+                const activeGroup = await this.db.getActiveWalletGroup();
+                if (activeGroup) {
+                    // Check if wallet is in active group
+                    const walletsInGroup = await this.db.getWalletsInGroup(activeGroup.id);
+                    const isInActiveGroup = walletsInGroup.some(w => w.address === walletAddress);
+                    
+                    if (isInActiveGroup) {
+                        await this.subscribeToWallet(walletAddress);
+                    }
+                }
             }
+
             return wallet;
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${walletAddress}:`, error.message);
@@ -227,6 +329,40 @@ class SolanaWebSocketService {
         }
     }
 
+    // ======= GROUP MANAGEMENT METHODS =======
+
+    async createWalletGroup(name, description = null) {
+        return await this.db.createWalletGroup(name, description);
+    }
+
+    async getAllWalletGroups() {
+        return await this.db.getAllWalletGroups();
+    }
+
+    async getActiveWalletGroup() {
+        return await this.db.getActiveWalletGroup();
+    }
+
+    async addWalletsToGroup(walletAddresses, groupId) {
+        try {
+            const results = await this.db.addWalletsToGroupBulk(walletAddresses, groupId);
+            
+            // If wallets were added to the currently active group, refresh subscriptions
+            const activeGroup = await this.db.getActiveWalletGroup();
+            if (activeGroup && activeGroup.id === groupId && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                console.log(`[${new Date().toISOString()}] 🔄 Refreshing subscriptions after adding wallets to active group`);
+                await this.refreshSubscriptions();
+            }
+            
+            return results;
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error adding wallets to group:`, error.message);
+            throw error;
+        }
+    }
+
+    // ======= UTILITY METHODS =======
+
     sendRequest(method, params, type) {
         return new Promise((resolve, reject) => {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -260,7 +396,7 @@ class SolanaWebSocketService {
         setTimeout(async () => {
             try {
                 await this.connect();
-                await this.subscribeToWallets();
+                await this.subscribeToActiveGroupWallets();
             } catch (error) {
                 console.error(`[${new Date().toISOString()}] ❌ Reconnect failed:`, error.message);
             }
@@ -281,6 +417,7 @@ class SolanaWebSocketService {
             reconnectAttempts: this.reconnectAttempts,
             wsUrl: this.wsUrl,
             rpcUrl: this.solanaRpc,
+            currentActiveGroupId: this.currentActiveGroupId,
             activeWallets: subscriptionDetails,
         };
     }
