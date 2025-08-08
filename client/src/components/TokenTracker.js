@@ -71,30 +71,59 @@ function TokenTracker() {
 
       {/* Модальное окно с графиком */}
       {isChartOpen && selectedToken && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeChart}>
-          <div className="bg-white p-4 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="text-lg font-medium">
-                Chart for {items.find(t => t.mint === selectedToken)?.symbol || selectedToken}
-              </h4>
-              <button
-                onClick={closeChart}
-                className="text-red-600 hover:text-red-800 font-bold text-xl"
-              >
-                &times;
-              </button>
-            </div>
-            <iframe
-              src={`https://gmgn.ai/sol/token/${encodeURIComponent(selectedToken)}`}
-              title="Token Chart"
-              width="100%"
-              height="600"
-              frameBorder="0"
-              style={{ border: '1px solid #ddd' }}
-            />
-          </div>
-        </div>
-      )}
+  <div
+    className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    onClick={closeChart}
+  >
+    <div
+      className="bg-white p-4 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex justify-between items-center mb-4">
+        <h4 className="text-lg font-medium">
+          Chart for {items.find(t => t.mint === selectedToken)?.symbol || selectedToken}
+        </h4>
+        <button
+          onClick={closeChart}
+          className="text-red-600 hover:text-red-800 font-bold text-xl"
+        >
+          &times;
+        </button>
+      </div>
+
+      {/* Попытка встраивания графика */}
+      <iframe
+        src={`https://gmgn.ai/sol/token/${encodeURIComponent(selectedToken)}`}
+        title="Token Chart"
+        width="100%"
+        height="600"
+        frameBorder="0"
+        style={{ border: '1px solid #ddd' }}
+        onError={(e) => {
+          e.target.style.display = 'none';
+          document.getElementById('chart-fallback').style.display = 'block';
+        }}
+      />
+
+      {/* Фолбэк, если iframe не загрузился */}
+      <div
+        id="chart-fallback"
+        style={{ display: 'none' }}
+        className="text-center p-6 text-gray-600"
+      >
+        <p>Не удалось загрузить график внутри приложения.</p>
+        <a
+          href={`https://gmgn.ai/sol/token/${encodeURIComponent(selectedToken)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-block bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          Открыть график в новой вкладке
+        </a>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }
