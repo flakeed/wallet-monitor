@@ -1,14 +1,25 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Create groups table
+CREATE TABLE IF NOT EXISTS groups (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create wallets table with group_id
 CREATE TABLE IF NOT EXISTS wallets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     address VARCHAR(44) UNIQUE NOT NULL,
     name VARCHAR(255),
     is_active BOOLEAN DEFAULT TRUE,
+    group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Create transactions table
 CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID NOT NULL,
@@ -18,9 +29,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     sol_received DECIMAL(20, 9) DEFAULT 0,
     transaction_type VARCHAR(20) DEFAULT 'buy',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
+    FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE CASCADE
 );
 
+-- Create tokens table
 CREATE TABLE IF NOT EXISTS tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     mint VARCHAR(44) UNIQUE NOT NULL,
@@ -31,6 +43,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Create token_operations table
 CREATE TABLE IF NOT EXISTS token_operations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     transaction_id UUID NOT NULL,
@@ -38,10 +51,11 @@ CREATE TABLE IF NOT EXISTS token_operations (
     amount DECIMAL(30, 18) NOT NULL, 
     operation_type VARCHAR(10) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE,
-    FOREIGN KEY (token_id) REFERENCES tokens (id) ON DELETE CASCADE
+    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+    FOREIGN KEY (token_id) REFERENCES tokens(id) ON DELETE CASCADE
 );
 
+-- Create wallet_stats table
 CREATE TABLE IF NOT EXISTS wallet_stats (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID UNIQUE NOT NULL,
@@ -54,9 +68,10 @@ CREATE TABLE IF NOT EXISTS wallet_stats (
     last_transaction_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
+    FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE CASCADE
 );
 
+-- Create monitoring_stats table
 CREATE TABLE IF NOT EXISTS monitoring_stats (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     processed_signatures INTEGER DEFAULT 0,
@@ -66,8 +81,11 @@ CREATE TABLE IF NOT EXISTS monitoring_stats (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
 CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON wallets(is_active);
+CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
@@ -78,29 +96,33 @@ CREATE INDEX IF NOT EXISTS idx_token_operations_type ON token_operations(operati
 CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint);
 CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON tokens(symbol);
 CREATE INDEX IF NOT EXISTS idx_wallet_stats_wallet_id ON wallet_stats(wallet_id);
-
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON transactions(wallet_id, block_time DESC);
 CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON token_operations(token_id, amount DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON transactions(transaction_type, block_time DESC);
 
+-- Create update trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$$ LANGUAGE 'plpgsql';
 
+-- Create triggers
+CREATE TRIGGER update_groups_updated_at BEFORE UPDATE ON groups FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON wallets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON tokens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_wallet_stats_updated_at BEFORE UPDATE ON wallet_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Update wallet_overview view
 CREATE OR REPLACE VIEW wallet_overview AS
 SELECT 
     w.id,
     w.address,
     w.name,
     w.is_active,
+    w.group_id,
     w.created_at,
     COALESCE(ws.total_spent_sol, 0) as total_spent_sol,
     COALESCE(ws.total_received_sol, 0) as total_received_sol,
@@ -113,6 +135,7 @@ FROM wallets w
 LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
 WHERE w.is_active = TRUE;
 
+-- Update recent_transactions_detailed view
 CREATE OR REPLACE VIEW recent_transactions_detailed AS
 SELECT 
     t.id,
@@ -123,6 +146,7 @@ SELECT
     t.sol_received,
     w.address as wallet_address,
     w.name as wallet_name,
+    w.group_id,
     tk.mint,
     tk.symbol,
     tk.name as token_name,
@@ -136,6 +160,7 @@ LEFT JOIN tokens tk ON to_.token_id = tk.id
 WHERE t.block_time >= NOW() - INTERVAL '24 hours'
 ORDER BY t.block_time DESC;
 
+-- Migration for token_operations
 DO $$
 BEGIN
     IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'token_purchases') THEN
@@ -151,6 +176,7 @@ BEGIN
     END IF;
 END $$;
 
+-- Migration for transactions
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'sol_received') THEN

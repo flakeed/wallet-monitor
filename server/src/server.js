@@ -40,15 +40,15 @@ const db = new Database();
 
 const sseClients = new Set();
 
-const startWebSocketService = async () => {
+const startWebSocketService = async (groupId = null) => {
   let retries = 0;
   const maxRetries = 5;
   const retryDelay = 5000;
 
   while (retries < maxRetries) {
     try {
-      await solanaWebSocketService.start();
-      console.log(`[${new Date().toISOString()}] 🚀 Solana WebSocket service started successfully`);
+      await solanaWebSocketService.start(groupId);
+      console.log(`[${new Date().toISOString()}] 🚀 Solana WebSocket service started successfully${groupId ? ` for group ${groupId}` : ''}`);
       return;
     } catch (error) {
       retries++;
@@ -65,7 +65,7 @@ const startWebSocketService = async () => {
   console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
 };
 
-setTimeout(startWebSocketService, 2000);
+setTimeout(() => startWebSocketService(), 2000);
 
 app.get('/api/transactions/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -111,7 +111,8 @@ app.get('/api/transactions/stream', (req, res) => {
 
 app.get('/api/wallets', async (req, res) => {
   try {
-    const wallets = await db.getActiveWallets();
+    const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
+    const wallets = await db.getActiveWallets(groupId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
         const stats = await db.getWalletStats(wallet.id);
@@ -138,7 +139,7 @@ app.get('/api/wallets', async (req, res) => {
 
 app.post('/api/wallets', async (req, res) => {
   try {
-    const { address, name } = req.body;
+    const { address, name, groupId } = req.body;
 
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
@@ -148,7 +149,11 @@ app.post('/api/wallets', async (req, res) => {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
     }
 
-    const wallet = await solanaWebSocketService.addWallet(address, name);
+    if (groupId && isNaN(parseInt(groupId))) {
+      return res.status(400).json({ error: 'Invalid group ID' });
+    }
+
+    const wallet = await solanaWebSocketService.addWallet(address, name, groupId);
     res.json({
       success: true,
       wallet,
@@ -189,11 +194,12 @@ app.delete('/api/wallets/:address', async (req, res) => {
 
 app.delete('/api/wallets', async (req, res) => {
   try {
-    await solanaWebSocketService.removeAllWallets();
-    const result = await db.removeAllWallets();
+    const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
+    await solanaWebSocketService.removeAllWallets(groupId);
+    const result = await db.removeAllWallets(groupId);
     res.json({
       success: true,
-      message: `Successfully removed wallets and associated data`,
+      message: `Successfully removed wallets and associated data${groupId ? ` for group ${groupId}` : ''}`,
       deletedCount: result.deletedCount,
     });
   } catch (error) {
@@ -207,8 +213,9 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
+    const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
 
-    const transactions = await db.getRecentTransactions(hours, limit, type);
+    const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
 
     transactions.forEach((row) => {
@@ -260,6 +267,7 @@ app.get('/api/monitoring/status', (req, res) => {
     res.json({
       isMonitoring: websocketStatus.isConnected,
       processedSignatures: websocketStatus.messageCount,
+      activeGroupId: websocketStatus.activeGroupId,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error getting monitoring status:`, error);
@@ -269,11 +277,11 @@ app.get('/api/monitoring/status', (req, res) => {
 
 app.post('/api/monitoring/toggle', async (req, res) => {
   try {
-    const { action } = req.body;
+    const { action, groupId } = req.body;
 
     if (action === 'start') {
-      await solanaWebSocketService.start();
-      res.json({ success: true, message: 'WebSocket monitoring started' });
+      await solanaWebSocketService.start(groupId ? parseInt(groupId) : null);
+      res.json({ success: true, message: `WebSocket monitoring started${groupId ? ` for group ${groupId}` : ''}` });
     } else if (action === 'stop') {
       await solanaWebSocketService.stop();
       res.json({ success: true, message: 'WebSocket monitoring stopped' });
@@ -304,7 +312,7 @@ app.get('/api/wallet/:address', async (req, res) => {
     const balanceLamports = await connection.getBalance(publicKey);
     const balanceSol = balanceLamports / 1e9;
 
-    const transactions = await db.getRecentTransactions(24 * 7, 100);
+    const transactions = await db.getRecentTransactions(24 * 7, 100, null, wallet.group_id);
     const walletTransactions = transactions.filter((tx) => tx.wallet_address === address);
 
     const groupedTransactions = {};
@@ -344,6 +352,7 @@ app.get('/api/wallet/:address', async (req, res) => {
       address,
       balance: Number(balanceSol).toLocaleString(undefined, { maximumFractionDigits: 6 }),
       operations,
+      groupId: wallet.group_id,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error in /api/wallet:`, error);
@@ -356,7 +365,8 @@ app.get('/api/wallet/:address', async (req, res) => {
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const stats = await db.getMonitoringStats();
+    const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
+    const stats = await db.getMonitoringStats(groupId);
 
     res.json({
       buyTransactions: stats.buy_transactions_today || 0,
@@ -374,7 +384,7 @@ app.get('/api/stats/transactions', async (req, res) => {
 
 app.post('/api/wallets/bulk', async (req, res) => {
   try {
-    const { wallets } = req.body;
+    const { wallets, groupId } = req.body;
 
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ error: 'Wallets array is required' });
@@ -386,6 +396,10 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     if (wallets.length > 1000) {
       return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
+    }
+
+    if (groupId && isNaN(parseInt(groupId))) {
+      return res.status(400).json({ error: 'Invalid group ID' });
     }
 
     const results = {
@@ -417,12 +431,13 @@ app.post('/api/wallets/bulk', async (req, res) => {
           if (hasError) return;
 
           try {
-            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null);
+            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId);
             results.successful++;
             results.successfulWallets.push({
               address: wallet.address,
               name: wallet.name || null,
               id: addedWallet.id,
+              groupId,
             });
           } catch (error) {
             results.failed++;
@@ -508,8 +523,9 @@ app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const type = req.query.type;
+    const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
 
-    const topTokens = await db.getTopTokens(limit, type);
+    const topTokens = await db.getTopTokens(limit, type, groupId);
     res.json(topTokens);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching top tokens:`, error);
@@ -517,11 +533,11 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const rows = await db.getTokenWalletAggregates(hours);
+    const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
+    const rows = await db.getTokenWalletAggregates(hours, groupId);
 
     const byToken = new Map();
     for (const row of rows) {
@@ -589,16 +605,110 @@ app.get('/api/websocket/status', (req, res) => {
 
 app.post('/api/websocket/reconnect', async (req, res) => {
   try {
+    const { groupId } = req.body;
     await solanaWebSocketService.stop();
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    await solanaWebSocketService.start();
+    await solanaWebSocketService.start(groupId ? parseInt(groupId) : null);
     res.json({
       success: true,
-      message: 'WebSocket reconnected successfully',
+      message: `WebSocket reconnected successfully${groupId ? ` for group ${groupId}` : ''}`,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error reconnecting WebSocket:`, error);
     res.status(500).json({ error: 'Failed to reconnect WebSocket' });
+  }
+});
+
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.length < 1 || name.length > 255) {
+      return res.status(400).json({ error: 'Group name is required and must be between 1 and 255 characters' });
+    }
+    const group = await db.createGroup(name);
+    res.json({
+      success: true,
+      group,
+      message: 'Group created successfully',
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error creating group:`, error);
+    res.status(500).json({ error: 'Failed to create group' });
+  }
+});
+
+app.get('/api/groups', async (req, res) => {
+  try {
+    const groups = await db.getGroups();
+    res.json(groups);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching groups:`, error);
+    res.status(500).json({ error: 'Failed to fetch groups' });
+  }
+});
+
+app.put('/api/groups/:groupId', async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    const { name } = req.body;
+    if (isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid group ID' });
+    }
+    if (!name || typeof name !== 'string' || name.length < 1 || name.length > 255) {
+      return res.status(400).json({ error: 'Group name is required and must be between 1 and 255 characters' });
+    }
+    const group = await db.updateGroup(groupId, name);
+    if (!group) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    res.json({
+      success: true,
+      group,
+      message: 'Group updated successfully',
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error updating group:`, error);
+    res.status(500).json({ error: 'Failed to update group' });
+  }
+});
+
+app.delete('/api/groups/:groupId', async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.groupId);
+    if (isNaN(groupId)) {
+      return res.status(400).json({ error: 'Invalid group ID' });
+    }
+    await solanaWebSocketService.removeAllWallets(groupId);
+    const result = await db.deleteGroup(groupId);
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+    res.json({
+      success: true,
+      message: 'Group and associated wallets removed successfully',
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error deleting group:`, error);
+    res.status(500).json({ error: 'Failed to delete group' });
+  }
+});
+
+app.post('/api/monitoring/switch-group', async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    const parsedGroupId = groupId ? parseInt(groupId) : null;
+    if (groupId && isNaN(parsedGroupId)) {
+      return res.status(400).json({ error: 'Invalid group ID' });
+    }
+    await solanaWebSocketService.switchGroup(parsedGroupId);
+    res.json({
+      success: true,
+      message: `Switched to group ${parsedGroupId || 'default'}`,
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error);
+    res.status(500).json({ error: 'Failed to switch group' });
   }
 });
 
@@ -629,13 +739,3 @@ https.createServer(sslOptions, app).listen(port, '127.0.0.1', () => {
     }`
   );
 });
-
-// app.listen(port, '158.220.125.26', () => {
-//   console.log(`[${new Date().toISOString()}] 🚀 Server running on http://158.220.125.26:${port}`);
-//   console.log(`[${new Date().toISOString()}] 📡 Solana WebSocket monitoring: Starting...`);
-//   console.log(
-//     `[${new Date().toISOString()}] 📊 Legacy monitoring service status: ${
-//       monitoringService.getStatus().isMonitoring ? 'Active' : 'Inactive'
-//     }`
-//   );
-// });

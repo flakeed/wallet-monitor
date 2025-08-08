@@ -174,7 +174,6 @@ class WalletMonitoringService {
             }
 
             return await this.db.withTransaction(async (client) => {
-
                 const query = `
           INSERT INTO transactions (
             wallet_id, signature, block_time, transaction_type,
@@ -333,11 +332,11 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
+    async addWallet(address, name = null, groupId = null) {
         try {
             new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
-            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}...`);
+            const wallet = await this.db.addWallet(address, name, groupId);
+            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}... to group ${groupId || 'default'}`);
             return wallet;
         } catch (error) {
             throw new Error(`Failed to add wallet: ${error.message}`);
@@ -363,15 +362,17 @@ class WalletMonitoringService {
         }
     }
 
-    async removeAllWallets() {
+    async removeAllWallets(groupId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallets from monitoring service`);
-            const transactions = await this.db.getRecentTransactions(24 * 7);
+            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallets from monitoring service${groupId ? ` for group ${groupId}` : ''}`);
+            const transactions = await this.db.getRecentTransactions(24 * 7, 1000, null, groupId);
             const allSignatures = transactions.map((tx) => tx.signature);
             allSignatures.forEach((sig) => this.processedSignatures.delete(sig));
-            this.processedSignatures.clear();
-            await this.db.removeAllWallets();
-            console.log(`[${new Date().toISOString()}] ✅ All wallets removed from monitoring service`);
+            if (!groupId) {
+                this.processedSignatures.clear();
+            }
+            await this.db.removeAllWallets(groupId);
+            console.log(`[${new Date().toISOString()}] ✅ All wallets removed from monitoring service${groupId ? ` for group ${groupId}` : ''}`);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from monitoring service:`, error.message);
             throw error;
@@ -390,10 +391,10 @@ class WalletMonitoringService {
         };
     }
 
-    async getDetailedStats() {
+    async getDetailedStats(groupId = null) {
         try {
-            const dbStats = await this.db.getMonitoringStats();
-            const topTokens = await this.db.getTopTokens(5);
+            const dbStats = await this.db.getMonitoringStats(groupId);
+            const topTokens = await this.db.getTopTokens(5, null, groupId);
             return {
                 ...this.getStatus(),
                 database: dbStats,
