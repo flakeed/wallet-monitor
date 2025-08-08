@@ -6,8 +6,9 @@ import TransactionFeed from './components/TransactionFeed';
 import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
-
-const API_BASE = process.env.REACT_APP_API_BASE;
+import TokenTracker from './components/TokenTracker';
+// Fallback API base for local dev if env not provided
+const API_BASE = process.env.REACT_APP_API_BASE || 'http://127.0.0.1:5001/api';
 
 function App() {
   const [wallets, setWallets] = useState([]);
@@ -18,6 +19,7 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
+  const [view, setView] = useState('tokens'); // 'tokens' | 'transactions'
 
   const fetchData = async (hours = timeframe, type = transactionType) => {
     try {
@@ -53,7 +55,8 @@ function App() {
   };
 
   useEffect(() => {
-    const eventSource = new EventSource(`${API_BASE}/transactions/stream`);
+    const sseUrl = `${API_BASE.replace(/\/api$/, '')}/api/transactions/stream`;
+    const eventSource = new EventSource(sseUrl);
 
     eventSource.onmessage = (event) => {
       try {
@@ -223,72 +226,89 @@ function App() {
         <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} />
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-900">Transaction Filters</h3>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-gray-500">Type:</span>
-                <select
-                  value={transactionType}
-                  onChange={(e) => handleTransactionTypeChange(e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="all">All Transactions</option>
-                  <option value="buy">Buy Only</option>
-                  <option value="sell">Sell Only</option>
-                </select>
-              </div>
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-gray-500">Period:</span>
-                <select
-                  value={timeframe}
-                  onChange={(e) => handleTimeframeChange(e.target.value)}
-                  className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="1">Last 1 hour</option>
-                  <option value="6">Last 6 hours</option>
-                  <option value="24">Last 24 hours</option>
-                  <option value="168">Last 7 days</option>
-                </select>
-              </div>
+            <div className="flex items-center space-x-3">
+              <button
+                className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                onClick={() => setView('tokens')}
+              >
+                Token Tracker
+              </button>
+              <button
+                className={`text-sm px-3 py-1 rounded ${view === 'transactions' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                onClick={() => setView('transactions')}
+              >
+                Recent Transactions
+              </button>
             </div>
+            {view === 'transactions' && (
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-gray-500">Type:</span>
+                  <select
+                    value={transactionType}
+                    onChange={(e) => handleTransactionTypeChange(e.target.value)}
+                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="all">All Transactions</option>
+                    <option value="buy">Buy Only</option>
+                    <option value="sell">Sell Only</option>
+                  </select>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-gray-500">Period:</span>
+                  <select
+                    value={timeframe}
+                    onChange={(e) => handleTimeframeChange(e.target.value)}
+                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="1">Last 1 hour</option>
+                    <option value="6">Last 6 hours</option>
+                    <option value="24">Last 24 hours</option>
+                    <option value="168">Last 7 days</option>
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-4">
-            <div className="bg-blue-50 rounded-lg p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-blue-700">Total Transactions</span>
-                <span className="font-semibold text-blue-900">{transactions.length}</span>
+          {view === 'transactions' && (
+            <div className="mt-4 grid grid-cols-3 gap-4">
+              <div className="bg-blue-50 rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-blue-700">Total Transactions</span>
+                  <span className="font-semibold text-blue-900">{transactions.length}</span>
+                </div>
+              </div>
+              <div className="bg-green-50 rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-green-700">Buy Transactions</span>
+                  <span className="font-semibold text-green-900">{transactions.filter((tx) => tx.transactionType === 'buy').length}</span>
+                </div>
+              </div>
+              <div className="bg-red-50 rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-red-700">Sell Transactions</span>
+                  <span className="font-semibold text-red-900">{transactions.filter((tx) => tx.transactionType === 'sell').length}</span>
+                </div>
               </div>
             </div>
-            <div className="bg-green-50 rounded-lg p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-green-700">Buy Transactions</span>
-                <span className="font-semibold text-green-900">
-                  {transactions.filter((tx) => tx.transactionType === 'buy').length}
-                </span>
-              </div>
-            </div>
-            <div className="bg-red-50 rounded-lg p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-red-700">Sell Transactions</span>
-                <span className="font-semibold text-red-900">
-                  {transactions.filter((tx) => tx.transactionType === 'sell').length}
-                </span>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
           </div>
           <div className="lg:col-span-2">
-            <TransactionFeed
-              transactions={transactions}
-              timeframe={timeframe}
-              onTimeframeChange={handleTimeframeChange}
-              transactionType={transactionType}
-              onTransactionTypeChange={handleTransactionTypeChange}
-            />
+            {view === 'tokens' ? (
+              <TokenTracker />
+            ) : (
+              <TransactionFeed
+                transactions={transactions}
+                timeframe={timeframe}
+                onTimeframeChange={handleTimeframeChange}
+                transactionType={transactionType}
+                onTransactionTypeChange={handleTransactionTypeChange}
+              />
+            )}
           </div>
         </div>
       </div>
