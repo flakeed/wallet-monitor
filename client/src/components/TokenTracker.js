@@ -24,22 +24,15 @@ function TokenTracker() {
     load();
   }, []);
 
-  // Функция для открытия графика на DEX Screener с адресом токена
-  const openDexScreenerChart = (mintAddress) => {
+  // Функция для открытия графика на GMGN.AI с адресом токена
+  const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
       console.warn('No mint address available for chart');
       return;
     }
-    const dexScreenerUrl = `https://dexscreener.com/solana?search=${encodeURIComponent(mintAddress)}`;
-    window.open(dexScreenerUrl, '_blank', 'noopener,noreferrer');
+    const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
+    window.open(gmgnUrl, '_blank', 'noopener,noreferrer');
   };
-
-  // Автоматическое открытие графика для первого токена после загрузки
-  useEffect(() => {
-    if (!loading && !error && items.length > 0) {
-      openDexScreenerChart(items[0].mint); // Открываем график для первого токена
-    }
-  }, [loading, error, items]);
 
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
@@ -66,7 +59,7 @@ function TokenTracker() {
         <div>
           {items.map((token) => (
             <div key={token.mint} className="mb-4">
-              <TokenCard token={token} />
+              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
             </div>
           ))}
         </div>
@@ -75,8 +68,8 @@ function TokenTracker() {
   );
 }
 
-// TokenCard без кнопки, так как график открывается автоматически
-function TokenCard({ token }) {
+// Обновленный TokenCard с кнопкой для открытия графика
+function TokenCard({ token, onOpenChart }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   return (
@@ -99,6 +92,12 @@ function TokenCard({ token }) {
           <WalletPill key={w.address} wallet={w} />
         ))}
       </div>
+      <button
+        onClick={onOpenChart}
+        className="mt-2 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+      >
+        Open Chart
+      </button>
     </div>
   );
 }
