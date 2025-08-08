@@ -71,7 +71,7 @@ function TokenTracker() {
   );
 }
 
-// Обновленный TokenCard без кнопки, так как график открывается автоматически
+// TokenCard без кнопки, так как график открывается автоматически
 function TokenCard({ token }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
