@@ -1,27 +1,104 @@
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Ensure the schema exists
+CREATE SCHEMA IF NOT EXISTS public;
 
-CREATE TABLE IF NOT EXISTS wallets (
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA public;
+
+-- Drop stale types (only if not tied to a table)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'wallets' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.wallets CASCADE;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'groups' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.groups CASCADE;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'transactions' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.transactions CASCADE;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'tokens' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.tokens CASCADE;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'token_operations' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.token_operations CASCADE;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'wallet_stats' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.wallet_stats CASCADE;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_type t
+        JOIN pg_namespace n ON t.typnamespace = n.oid
+        WHERE t.typname = 'monitoring_stats' AND n.nspname = 'public' AND t.typrelid = 0
+    ) THEN
+        DROP TYPE IF EXISTS public.monitoring_stats CASCADE;
+    END IF;
+END $$;
+
+-- Create groups table
+CREATE TABLE IF NOT EXISTS public.groups (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create wallets table
+CREATE TABLE IF NOT EXISTS public.wallets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     address VARCHAR(44) UNIQUE NOT NULL,
     name VARCHAR(255),
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    group_id INTEGER REFERENCES public.groups(id)
 );
 
-CREATE TABLE IF NOT EXISTS transactions (
+-- Create transactions table
+CREATE TABLE IF NOT EXISTS public.transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID NOT NULL,
     signature VARCHAR(88) UNIQUE NOT NULL,
     block_time TIMESTAMP WITH TIME ZONE NOT NULL,
-    sol_spent DECIMAL(20, 9) DEFAULT 0, 
+    sol_spent DECIMAL(20, 9) DEFAULT 0,
     sol_received DECIMAL(20, 9) DEFAULT 0,
     transaction_type VARCHAR(20) DEFAULT 'buy',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
+    FOREIGN KEY (wallet_id) REFERENCES public.wallets (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS tokens (
+-- Create tokens table
+CREATE TABLE IF NOT EXISTS public.tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     mint VARCHAR(44) UNIQUE NOT NULL,
     symbol VARCHAR(20),
@@ -31,18 +108,20 @@ CREATE TABLE IF NOT EXISTS tokens (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS token_operations (
+-- Create token_operations table
+CREATE TABLE IF NOT EXISTS public.token_operations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     transaction_id UUID NOT NULL,
     token_id UUID NOT NULL,
-    amount DECIMAL(30, 18) NOT NULL, 
+    amount DECIMAL(30, 18) NOT NULL,
     operation_type VARCHAR(10) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE,
-    FOREIGN KEY (token_id) REFERENCES tokens (id) ON DELETE CASCADE
+    FOREIGN KEY (transaction_id) REFERENCES public.transactions (id) ON DELETE CASCADE,
+    FOREIGN KEY (token_id) REFERENCES public.tokens (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS wallet_stats (
+-- Create wallet_stats table
+CREATE TABLE IF NOT EXISTS public.wallet_stats (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     wallet_id UUID UNIQUE NOT NULL,
     total_spent_sol DECIMAL(20, 9) DEFAULT 0,
@@ -54,10 +133,11 @@ CREATE TABLE IF NOT EXISTS wallet_stats (
     last_transaction_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
+    FOREIGN KEY (wallet_id) REFERENCES public.wallets (id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS monitoring_stats (
+-- Create monitoring_stats table
+CREATE TABLE IF NOT EXISTS public.monitoring_stats (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     processed_signatures INTEGER DEFAULT 0,
     total_wallets_monitored INTEGER DEFAULT 0,
@@ -66,24 +146,26 @@ CREATE TABLE IF NOT EXISTS monitoring_stats (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
-CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON wallets(is_active);
-CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time DESC);
-CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
-CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(transaction_type);
-CREATE INDEX IF NOT EXISTS idx_token_operations_transaction_id ON token_operations(transaction_id);
-CREATE INDEX IF NOT EXISTS idx_token_operations_token_id ON token_operations(token_id);
-CREATE INDEX IF NOT EXISTS idx_token_operations_type ON token_operations(operation_type);
-CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint);
-CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON tokens(symbol);
-CREATE INDEX IF NOT EXISTS idx_wallet_stats_wallet_id ON wallet_stats(wallet_id);
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_wallets_address ON public.wallets(address);
+CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON public.wallets(is_active);
+CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON public.wallets(group_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON public.transactions(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON public.transactions(block_time DESC);
+CREATE INDEX IF NOT EXISTS idx_transactions_signature ON public.transactions(signature);
+CREATE INDEX IF NOT EXISTS idx_transactions_type ON public.transactions(transaction_type);
+CREATE INDEX IF NOT EXISTS idx_token_operations_transaction_id ON public.token_operations(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_token_operations_token_id ON public.token_operations(token_id);
+CREATE INDEX IF NOT EXISTS idx_token_operations_type ON public.token_operations(operation_type);
+CREATE INDEX IF NOT EXISTS idx_tokens_mint ON public.tokens(mint);
+CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON public.tokens(symbol);
+CREATE INDEX IF NOT EXISTS idx_wallet_stats_wallet_id ON public.wallet_stats(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON public.transactions(wallet_id, block_time DESC);
+CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON public.token_operations(token_id, amount DESC);
+CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON public.transactions(transaction_type, block_time DESC);
 
-CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON transactions(wallet_id, block_time DESC);
-CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON token_operations(token_id, amount DESC);
-CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON transactions(transaction_type, block_time DESC);
-
-CREATE OR REPLACE FUNCTION update_updated_at_column()
+-- Create update_updated_at_column function
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
@@ -91,11 +173,13 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
-CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON wallets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON tokens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_wallet_stats_updated_at BEFORE UPDATE ON wallet_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- Create triggers
+CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON public.wallets FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON public.tokens FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER update_wallet_stats_updated_at BEFORE UPDATE ON public.wallet_stats FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-CREATE OR REPLACE VIEW wallet_overview AS
+-- Create wallet_overview view
+CREATE OR REPLACE VIEW public.wallet_overview AS
 SELECT 
     w.id,
     w.address,
@@ -109,11 +193,12 @@ SELECT
     COALESCE(ws.unique_tokens_bought, 0) as unique_tokens_bought,
     COALESCE(ws.unique_tokens_sold, 0) as unique_tokens_sold,
     ws.last_transaction_at
-FROM wallets w
-LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
+FROM public.wallets w
+LEFT JOIN public.wallet_stats ws ON w.id = ws.wallet_id
 WHERE w.is_active = TRUE;
 
-CREATE OR REPLACE VIEW recent_transactions_detailed AS
+-- Create recent_transactions_detailed view
+CREATE OR REPLACE VIEW public.recent_transactions_detailed AS
 SELECT 
     t.id,
     t.signature,
@@ -129,53 +214,41 @@ SELECT
     to_.amount as token_amount,
     to_.operation_type,
     tk.decimals
-FROM transactions t
-JOIN wallets w ON t.wallet_id = w.id
-LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-LEFT JOIN tokens tk ON to_.token_id = tk.id
+FROM public.transactions t
+JOIN public.wallets w ON t.wallet_id = w.id
+LEFT JOIN public.token_operations to_ ON t.id = to_.transaction_id
+LEFT JOIN public.tokens tk ON to_.token_id = tk.id
 WHERE t.block_time >= NOW() - INTERVAL '24 hours'
 ORDER BY t.block_time DESC;
 
+-- Migrate token_purchases to token_operations
 DO $$
 BEGIN
-    IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'token_purchases') THEN
-        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'token_purchases' AND column_name = 'operation_type') THEN
-            ALTER TABLE token_purchases ADD COLUMN operation_type VARCHAR(10) DEFAULT 'buy';
+    IF EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'token_purchases') THEN
+        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'token_purchases' AND column_name = 'operation_type') THEN
+            ALTER TABLE public.token_purchases ADD COLUMN operation_type VARCHAR(10) DEFAULT 'buy';
         END IF;
         
-        ALTER TABLE token_purchases RENAME TO token_operations;
+        ALTER TABLE public.token_purchases RENAME TO token_operations;
         
-        UPDATE token_operations SET operation_type = 'buy' WHERE operation_type IS NULL;
+        UPDATE public.token_operations SET operation_type = 'buy' WHERE operation_type IS NULL;
         
         RAISE NOTICE 'Migrated token_purchases to token_operations';
     END IF;
 END $$;
 
+-- Add sol_received column to transactions if missing
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'sol_received') THEN
-        ALTER TABLE transactions ADD COLUMN sol_received DECIMAL(20, 9);
+    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'sol_received') THEN
+        ALTER TABLE public.transactions ADD COLUMN sol_received DECIMAL(20, 9);
     END IF;
     
-    UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
+    UPDATE public.transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
 END $$;
 
--- Creating table for wallet groups
-CREATE TABLE IF NOT EXISTS groups (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL UNIQUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Adding group_id to wallets table
-ALTER TABLE wallets ADD COLUMN IF NOT EXISTS group_id INTEGER REFERENCES groups(id);
-
--- Creating index for group_id
-CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
-
--- Updating existing tables to include group filtering where necessary
-CREATE OR REPLACE VIEW wallet_stats_view AS
+-- Create wallet_stats_view
+CREATE OR REPLACE VIEW public.wallet_stats_view AS
 SELECT 
     w.id as wallet_id,
     w.address,
@@ -189,8 +262,8 @@ SELECT
     MAX(t.block_time) as last_transaction_at,
     COUNT(DISTINCT CASE WHEN to_.operation_type = 'buy' THEN to_.token_id END) as unique_tokens_bought,
     COUNT(DISTINCT CASE WHEN to_.operation_type = 'sell' THEN to_.token_id END) as unique_tokens_sold
-FROM wallets w
-LEFT JOIN groups g ON w.group_id = g.id
-LEFT JOIN transactions t ON w.id = t.wallet_id
-LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+FROM public.wallets w
+LEFT JOIN public.groups g ON w.group_id = g.id
+LEFT JOIN public.transactions t ON w.id = t.wallet_id
+LEFT JOIN public.token_operations to_ ON t.id = to_.transaction_id
 GROUP BY w.id, w.address, w.name, w.group_id, g.name;

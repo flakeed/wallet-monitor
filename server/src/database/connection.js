@@ -23,7 +23,7 @@ class Database {
             await this.createSchema();
             await this.validateSchema();
         } catch (error) {
-            console.error('❌ Database connection error:', error.message);
+            console.error('❌ Database connection error:', error.message, error.detail);
             throw error;
         }
     }
@@ -36,25 +36,37 @@ class Database {
             const client = await this.pool.connect();
             try {
                 for (const statement of statements) {
-                    await client.query(statement);
+                    try {
+                        await client.query(statement);
+                        console.log(`✅ Executed statement: ${statement.substring(0, 50)}...`);
+                    } catch (err) {
+                        console.error(`❌ Error executing statement: ${statement.substring(0, 50)}...`, err.message, err.detail);
+                        throw err;
+                    }
                 }
                 const migrationPath = path.join(__dirname, 'migrations/001_add_group_id.sql');
                 if (fs.existsSync(migrationPath)) {
                     const migration = fs.readFileSync(migrationPath, 'utf8');
                     const migrationStatements = migration.split(';').map(stmt => stmt.trim()).filter(stmt => stmt.length > 0);
                     for (const statement of migrationStatements) {
-                        await client.query(statement);
+                        try {
+                            await client.query(statement);
+                            console.log(`✅ Executed migration: ${statement.substring(0, 50)}...`);
+                        } catch (err) {
+                            console.error(`❌ Error executing migration: ${statement.substring(0, 50)}...`, err.message, err.detail);
+                            throw err;
+                        }
                     }
                 }
                 console.log('✅ Database schema and migrations initialized');
             } catch (err) {
-                console.error('❌ Error applying schema or migrations:', err.message);
+                console.error('❌ Error applying schema or migrations:', err.message, err.detail);
                 throw err;
             } finally {
                 client.release();
             }
         } catch (error) {
-            console.error('❌ Error creating schema:', error.message);
+            console.error('❌ Error creating schema:', error.message, error.detail);
             throw error;
         }
     }
@@ -66,7 +78,7 @@ class Database {
             tokens: ['id', 'mint', 'symbol', 'name', 'decimals', 'created_at', 'updated_at'],
             transactions: ['id', 'wallet_id', 'signature', 'block_time', 'transaction_type', 'sol_spent', 'sol_received', 'created_at'],
             token_operations: ['id', 'transaction_id', 'token_id', 'amount', 'operation_type', 'created_at'],
-            wallet_stats: ['wallet_id', 'total_spent_sol', 'total_received_sol', 'total_buy_transactions', 'total_sell_transactions', 'unique_tokens_bought', 'unique_tokens_sold', 'last_transaction_at', 'updated_at'],
+            wallet_stats: ['id', 'wallet_id', 'total_spent_sol', 'total_received_sol', 'total_buy_transactions', 'total_sell_transactions', 'unique_tokens_bought', 'unique_tokens_sold', 'last_transaction_at', 'created_at', 'updated_at'],
             monitoring_stats: ['id', 'processed_signatures', 'total_wallets_monitored', 'last_scan_duration', 'errors_count', 'created_at']
         };
 
@@ -74,7 +86,7 @@ class Database {
             const query = `
                 SELECT column_name 
                 FROM information_schema.columns 
-                WHERE table_name = $1
+                WHERE table_schema = 'public' AND table_name = $1
             `;
             const result = await this.pool.query(query, [table]);
             const existingColumns = result.rows.map(row => row.column_name);
@@ -88,7 +100,7 @@ class Database {
 
     async addWallet(address, name = null, groupId = null) {
         const query = `
-            INSERT INTO wallets (address, name, group_id) 
+            INSERT INTO public.wallets (address, name, group_id) 
             VALUES ($1, $2, $3) 
             RETURNING id, address, name, group_id, created_at
         `;
@@ -105,7 +117,7 @@ class Database {
 
     async createGroup(name) {
         const query = `
-            INSERT INTO groups (name)
+            INSERT INTO public.groups (name)
             VALUES ($1)
             RETURNING id, name, created_at
         `;
@@ -123,8 +135,8 @@ class Database {
     async getGroups() {
         const query = `
             SELECT g.id, g.name, COUNT(w.id) as wallet_count
-            FROM groups g
-            LEFT JOIN wallets w ON g.id = w.group_id
+            FROM public.groups g
+            LEFT JOIN public.wallets w ON g.id = w.group_id
             GROUP BY g.id, g.name
             ORDER BY g.created_at
         `;
@@ -134,7 +146,7 @@ class Database {
 
     async removeWallet(address) {
         const query = `
-            DELETE FROM wallets 
+            DELETE FROM public.wallets 
             WHERE address = $1
             RETURNING id
         `;
@@ -151,7 +163,7 @@ class Database {
 
     async getActiveWallets(groupId = null) {
         const query = `
-            SELECT * FROM wallets 
+            SELECT * FROM public.wallets 
             WHERE is_active = TRUE 
             ${groupId ? 'AND group_id = $1' : ''}
             ORDER BY created_at DESC
@@ -163,8 +175,8 @@ class Database {
 
     async removeAllWallets(groupId = null) {
         const query = groupId 
-            ? `DELETE FROM wallets WHERE group_id = $1`
-            : `DELETE FROM wallets`;
+            ? `DELETE FROM public.wallets WHERE group_id = $1`
+            : `DELETE FROM public.wallets`;
         try {
             const params = groupId ? [groupId] : [];
             const result = await this.pool.query(query, params);
@@ -179,7 +191,7 @@ class Database {
     async upsertToken(tokenData) {
         const { mint, symbol, name, decimals } = tokenData;
         const query = `
-            INSERT INTO tokens (mint, symbol, name, decimals) 
+            INSERT INTO public.tokens (mint, symbol, name, decimals) 
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (mint) DO UPDATE SET
                 symbol = EXCLUDED.symbol,
@@ -195,14 +207,14 @@ class Database {
     }
 
     async getTokenByMint(mint) {
-        const query = `SELECT id, mint, symbol, name, decimals FROM tokens WHERE mint = $1`;
+        const query = `SELECT id, mint, symbol, name, decimals FROM public.tokens WHERE mint = $1`;
         const result = await this.pool.query(query, [mint]);
         return result.rows[0];
     }
 
     async addTransaction(walletId, signature, blockTime, transactionType, solAmount) {
         const query = `
-            INSERT INTO transactions (
+            INSERT INTO public.transactions (
                 wallet_id, signature, block_time, transaction_type,
                 sol_spent, sol_received
             ) 
@@ -229,7 +241,7 @@ class Database {
 
     async addTokenOperation(transactionId, tokenId, amount, operationType) {
         const query = `
-            INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
+            INSERT INTO public.token_operations (transaction_id, token_id, amount, operation_type) 
             VALUES ($1, $2, $3, $4)
             RETURNING id
         `;
@@ -238,7 +250,7 @@ class Database {
     }
 
     async getWalletByAddress(address) {
-        const query = `SELECT * FROM wallets WHERE address = $1`;
+        const query = `SELECT * FROM public.wallets WHERE address = $1`;
         const result = await this.pool.query(query, [address]);
         return result.rows[0];
     }
@@ -271,8 +283,8 @@ class Database {
                     w.address as wallet_address,
                     w.name as wallet_name,
                     w.group_id
-                FROM transactions t
-                JOIN wallets w ON t.wallet_id = w.id
+                FROM public.transactions t
+                JOIN public.wallets w ON t.wallet_id = w.id
                 WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
                 ${typeFilter}
                 ${groupFilter}
@@ -305,10 +317,10 @@ class Database {
                     to_.amount as token_amount,
                     to_.operation_type,
                     tk.decimals
-                FROM transactions t
-                JOIN wallets w ON t.wallet_id = w.id
-                LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-                LEFT JOIN tokens tk ON to_.token_id = tk.id
+                FROM public.transactions t
+                JOIN public.wallets w ON t.wallet_id = w.id
+                LEFT JOIN public.token_operations to_ ON t.id = to_.transaction_id
+                LEFT JOIN public.tokens tk ON to_.token_id = tk.id
                 WHERE t.signature IN (${placeholders})
                 ORDER BY t.block_time DESC, t.signature, to_.id
             `;
@@ -336,8 +348,8 @@ class Database {
                     MAX(block_time) as last_transaction_at,
                     COUNT(DISTINCT CASE WHEN to_.operation_type = 'buy' THEN to_.token_id END) as unique_tokens_bought,
                     COUNT(DISTINCT CASE WHEN to_.operation_type = 'sell' THEN to_.token_id END) as unique_tokens_sold
-                FROM transactions t
-                LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+                FROM public.transactions t
+                LEFT JOIN public.token_operations to_ ON t.id = to_.transaction_id
                 WHERE t.wallet_id = $1
             `;
             const result = await this.pool.query(query, [walletId]);
@@ -351,7 +363,7 @@ class Database {
     async updateWalletStats(walletId) {
         const stats = await this.getWalletStats(walletId);
         const query = `
-            INSERT INTO wallet_stats (
+            INSERT INTO public.wallet_stats (
                 wallet_id, total_spent_sol, total_received_sol,
                 total_buy_transactions, total_sell_transactions,
                 unique_tokens_bought, unique_tokens_sold, last_transaction_at
@@ -409,10 +421,10 @@ class Database {
                 SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END) as total_bought,
                 SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END) as total_sold,
                 AVG(CASE WHEN t.transaction_type = 'buy' THEN t.sol_spent ELSE t.sol_received END) as avg_sol_amount
-            FROM tokens tk
-            JOIN token_operations to_ ON tk.id = to_.token_id
-            JOIN transactions t ON to_.transaction_id = t.id
-            JOIN wallets w ON t.wallet_id = w.id
+            FROM public.tokens tk
+            JOIN public.token_operations to_ ON tk.id = to_.token_id
+            JOIN public.transactions t ON to_.transaction_id = t.id
+            JOIN public.wallets w ON t.wallet_id = w.id
             WHERE t.block_time >= NOW() - INTERVAL '24 hours'
             ${typeFilter}
             ${groupFilter}
@@ -445,10 +457,10 @@ class Database {
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
                 MAX(t.block_time) as last_activity
-            FROM tokens tk
-            JOIN token_operations to_ ON tk.id = to_.token_id
-            JOIN transactions t ON to_.transaction_id = t.id
-            JOIN wallets w ON t.wallet_id = w.id
+            FROM public.tokens tk
+            JOIN public.token_operations to_ ON tk.id = to_.token_id
+            JOIN public.transactions t ON to_.transaction_id = t.id
+            JOIN public.wallets w ON t.wallet_id = w.id
             WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
             ${groupFilter}
             GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id
@@ -470,10 +482,10 @@ class Database {
                 COALESCE(SUM(t.sol_spent), 0) as sol_spent_today,
                 COALESCE(SUM(t.sol_received), 0) as sol_received_today,
                 COUNT(DISTINCT to_.token_id) as unique_tokens_today
-            FROM wallets w
-            LEFT JOIN transactions t ON w.id = t.wallet_id 
+            FROM public.wallets w
+            LEFT JOIN public.transactions t ON w.id = t.wallet_id 
                 AND t.block_time >= CURRENT_DATE
-            LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+            LEFT JOIN public.token_operations to_ ON t.id = to_.transaction_id
             WHERE w.is_active = TRUE
             ${groupFilter}
         `;
@@ -490,10 +502,10 @@ class Database {
                 date_trunc('minute', t.block_time) AS bucket,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) AS buy_sol,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) AS sell_sol
-            FROM tokens tk
-            JOIN token_operations to_ ON to_.token_id = tk.id
-            JOIN transactions t ON t.id = to_.transaction_id
-            JOIN wallets w ON t.wallet_id = w.id
+            FROM public.tokens tk
+            JOIN public.token_operations to_ ON to_.token_id = tk.id
+            JOIN public.transactions t ON t.id = to_.transaction_id
+            JOIN public.wallets w ON t.wallet_id = w.id
             WHERE tk.mint = $1
               AND t.block_time >= NOW() - INTERVAL '${hours} hours'
               ${groupFilter}
@@ -524,10 +536,10 @@ class Database {
                 w.address as wallet_address,
                 w.name as wallet_name,
                 w.group_id
-            FROM tokens tk
-            JOIN token_operations to_ ON to_.token_id = tk.id
-            JOIN transactions t ON to_.transaction_id = t.id
-            JOIN wallets w ON t.wallet_id = w.id
+            FROM public.tokens tk
+            JOIN public.token_operations to_ ON to_.token_id = tk.id
+            JOIN public.transactions t ON to_.transaction_id = t.id
+            JOIN public.wallets w ON t.wallet_id = w.id
             WHERE tk.mint = $1
               AND t.block_time >= NOW() - INTERVAL '${hours} hours'
               ${groupFilter}
@@ -546,7 +558,7 @@ class Database {
 
     async addMonitoringStats(processedSignatures, totalWallets, scanDuration, errorsCount = 0) {
         const query = `
-            INSERT INTO monitoring_stats (
+            INSERT INTO public.monitoring_stats (
                 processed_signatures, total_wallets_monitored, 
                 last_scan_duration, errors_count
             ) 
