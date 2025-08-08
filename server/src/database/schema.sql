@@ -1,18 +1,21 @@
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- Creating groups table to store wallet groups
 CREATE TABLE IF NOT EXISTS groups (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL UNIQUE,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL UNIQUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Creating wallets table to store monitored wallet addresses
 CREATE TABLE IF NOT EXISTS wallets (
-    id SERIAL PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     address VARCHAR(44) NOT NULL UNIQUE,
-    name VARCHAR(100),
+    name VARCHAR(255),
     is_active BOOLEAN DEFAULT TRUE,
-    group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
+    group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -31,7 +34,7 @@ CREATE TABLE IF NOT EXISTS tokens (
 -- Creating transactions table to store transaction data
 CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
-    wallet_id INTEGER NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
     signature VARCHAR(88) NOT NULL UNIQUE,
     block_time TIMESTAMP NOT NULL,
     transaction_type VARCHAR(20) NOT NULL CHECK (transaction_type IN ('buy', 'sell')),
@@ -52,7 +55,7 @@ CREATE TABLE IF NOT EXISTS token_operations (
 
 -- Creating wallet_stats table to store aggregated wallet statistics
 CREATE TABLE IF NOT EXISTS wallet_stats (
-    wallet_id INTEGER PRIMARY KEY REFERENCES wallets(id) ON DELETE CASCADE,
+    wallet_id UUID PRIMARY KEY REFERENCES wallets(id) ON DELETE CASCADE,
     total_spent_sol DECIMAL(20,9) DEFAULT 0,
     total_received_sol DECIMAL(20,9) DEFAULT 0,
     total_buy_transactions INTEGER DEFAULT 0,
@@ -97,12 +100,14 @@ GROUP BY w.id, w.address, w.name, w.group_id, g.name;
 -- Creating indexes for performance optimization
 CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
+CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON wallets(is_active);
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time);
 CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
 CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint);
 CREATE INDEX IF NOT EXISTS idx_token_operations_transaction_id ON token_operations(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_token_operations_token_id ON token_operations(token_id);
+CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
 
 -- Adding triggers to update timestamps
 CREATE OR REPLACE FUNCTION update_updated_at_column()

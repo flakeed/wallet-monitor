@@ -21,6 +21,7 @@ class Database {
             console.log('✅ Connected to PostgreSQL database');
             client.release();
             await this.createSchema();
+            await this.validateSchema();
         } catch (error) {
             console.error('❌ Database connection error:', error.message);
             throw error;
@@ -35,12 +36,20 @@ class Database {
             const client = await this.pool.connect();
             try {
                 for (const statement of statements) {
-                    try {
+                    await client.query(statement);
+                }
+                const migrationPath = path.join(__dirname, 'migrations/001_add_group_id.sql');
+                if (fs.existsSync(migrationPath)) {
+                    const migration = fs.readFileSync(migrationPath, 'utf8');
+                    const migrationStatements = migration.split(';').map(stmt => stmt.trim()).filter(stmt => stmt.length > 0);
+                    for (const statement of migrationStatements) {
                         await client.query(statement);
-                    } catch (err) {
                     }
                 }
-                console.log('✅ Database schema initialized');
+                console.log('✅ Database schema and migrations initialized');
+            } catch (err) {
+                console.error('❌ Error applying schema or migrations:', err.message);
+                throw err;
             } finally {
                 client.release();
             }
@@ -48,6 +57,33 @@ class Database {
             console.error('❌ Error creating schema:', error.message);
             throw error;
         }
+    }
+
+    async validateSchema() {
+        const requiredColumns = {
+            wallets: ['id', 'address', 'name', 'is_active', 'group_id', 'created_at', 'updated_at'],
+            groups: ['id', 'name', 'created_at', 'updated_at'],
+            tokens: ['id', 'mint', 'symbol', 'name', 'decimals', 'created_at', 'updated_at'],
+            transactions: ['id', 'wallet_id', 'signature', 'block_time', 'transaction_type', 'sol_spent', 'sol_received', 'created_at'],
+            token_operations: ['id', 'transaction_id', 'token_id', 'amount', 'operation_type', 'created_at'],
+            wallet_stats: ['wallet_id', 'total_spent_sol', 'total_received_sol', 'total_buy_transactions', 'total_sell_transactions', 'unique_tokens_bought', 'unique_tokens_sold', 'last_transaction_at', 'updated_at'],
+            monitoring_stats: ['id', 'processed_signatures', 'total_wallets_monitored', 'last_scan_duration', 'errors_count', 'created_at']
+        };
+
+        for (const [table, columns] of Object.entries(requiredColumns)) {
+            const query = `
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = $1
+            `;
+            const result = await this.pool.query(query, [table]);
+            const existingColumns = result.rows.map(row => row.column_name);
+            const missingColumns = columns.filter(col => !existingColumns.includes(col));
+            if (missingColumns.length > 0) {
+                throw new Error(`Missing columns in ${table}: ${missingColumns.join(', ')}`);
+            }
+        }
+        console.log('✅ Database schema validated');
     }
 
     async addWallet(address, name = null, groupId = null) {
