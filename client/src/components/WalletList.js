@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 
-function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
+function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets, groups, onGroupChange }) {
   const [removingWallet, setRemovingWallet] = useState(null);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [isRemovingAll, setIsRemovingAll] = useState(false);
+  const [movingWallet, setMovingWallet] = useState(null);
+  const [selectedGroupFilter, setSelectedGroupFilter] = useState('');
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
@@ -30,7 +32,7 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
   };
 
   const handleRemoveAll = async () => {
-    if (isRemovingAll) return; // защита от повторного клика
+    if (isRemovingAll) return;
   
     if (!window.confirm('⚠️ Remove ALL wallets from monitoring? This cannot be undone.')) {
       return;
@@ -50,7 +52,19 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
       setIsRemovingAll(false);
     }
   };
-  
+
+  const handleMoveToGroup = async (address, groupId) => {
+    setMovingWallet(address);
+    setError(null);
+    try {
+      await onGroupChange(address, groupId);
+      setSuccess(`Wallet ${address.slice(0, 8)}... moved successfully`);
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setMovingWallet(null);
+    }
+  };
 
   const formatTime = (timeString) => {
     if (!timeString) return 'Never';
@@ -67,10 +81,30 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
     return num.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   };
 
-  if (wallets.length === 0) {
+  // Filter wallets based on selected group
+  const filteredWallets = selectedGroupFilter
+    ? wallets.filter(wallet => wallet.group_id === selectedGroupFilter)
+    : wallets;
+
+  if (filteredWallets.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow-sm border p-6">
         <h3 className="text-xl font-semibold text-gray-900 mb-4">Monitored Wallets</h3>
+        <div className="flex items-center space-x-2 mb-4">
+          <span className="text-sm text-gray-500">Filter by Group:</span>
+          <select
+            value={selectedGroupFilter}
+            onChange={(e) => setSelectedGroupFilter(e.target.value || '')}
+            className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          >
+            <option value="">All Groups</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name} ({group.wallet_count})
+              </option>
+            ))}
+          </select>
+        </div>
         {error && (
           <div className="mb-4 p-2 bg-red-100 text-red-700 rounded">{error}</div>
         )}
@@ -83,7 +117,7 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
           </div>
-          <p className="text-gray-500">No wallets being monitored</p>
+          <p className="text-gray-500">No wallets being monitored{selectedGroupFilter ? ' in this group' : ''}</p>
           <p className="text-sm text-gray-400 mt-1">Add a wallet to start tracking</p>
         </div>
       </div>
@@ -94,30 +128,44 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
     <div className="bg-white rounded-lg shadow-sm border p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-semibold text-gray-900">
-          Monitored Wallets ({wallets.length})
+          Monitored Wallets ({filteredWallets.length})
         </h3>
         <button
-  onClick={handleRemoveAll}
-  disabled={isRemovingAll}
-  className="flex items-center text-sm text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors disabled:opacity-50"
-  title="Remove all wallets from monitoring"
->
-  {isRemovingAll ? (
-    <>
-      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-600 mr-1"></div>
-      Removing...
-    </>
-  ) : (
-    <>
-      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-      </svg>
-      Clear All
-    </>
-  )}
-</button>
-
+          onClick={handleRemoveAll}
+          disabled={isRemovingAll}
+          className="flex items-center text-sm text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors disabled:opacity-50"
+          title="Remove all wallets from monitoring"
+        >
+          {isRemovingAll ? (
+            <>
+              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-600 mr-1"></div>
+              Removing...
+            </>
+          ) : (
+            <>
+              <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Clear All
+            </>
+          )}
+        </button>
+      </div>
+      <div className="flex items-center space-x-2 mb-4">
+        <span className="text-sm text-gray-500">Filter by Group:</span>
+        <select
+          value={selectedGroupFilter}
+          onChange={(e) => setSelectedGroupFilter(e.target.value || '')}
+          className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        >
+          <option value="">All Groups</option>
+          {groups.map((group) => (
+            <option key={group.id} value={group.id}>
+              {group.name} ({group.wallet_count})
+            </option>
+          ))}
+        </select>
       </div>
       {error && (
         <div className="mb-4 p-2 bg-red-100 text-red-700 rounded">{error}</div>
@@ -126,7 +174,7 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
         <div className="mb-4 p-2 bg-green-100 text-green-700 rounded">{success}</div>
       )}
       <div className="space-y-4">
-        {wallets.map((wallet) => (
+        {filteredWallets.map((wallet) => (
           <div key={wallet.address} className="border border-gray-200 rounded-lg p-4">
             <div className="flex items-start justify-between">
               <div className="flex-1 min-w-0">
@@ -188,6 +236,27 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                     </div>
                   )}
                 </div>
+                <div className="mb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-500">Group:</span>
+                    <select
+                      value={wallet.group_id || ''}
+                      onChange={(e) => handleMoveToGroup(wallet.address, e.target.value || null)}
+                      disabled={movingWallet === wallet.address}
+                      className="text-xs border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">No Group</option>
+                      {groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name}
+                        </option>
+                      ))}
+                    </select>
+                    {movingWallet === wallet.address && (
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
+                    )}
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-2 text-xs mb-3">
                   <div className="bg-green-50 rounded p-2">
                     <div className="flex items-center space-x-1">
@@ -232,8 +301,7 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div>
                       <span className="text-gray-500">Net SOL:</span>
-                      <div className={`font-semibold ${Number(wallet.stats.netSOL) >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}>
+                      <div className={`font-semibold ${Number(wallet.stats.netSOL) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                         {Number(wallet.stats.netSOL) >= 0 ? '+' : ''}{formatNumber(wallet.stats.netSOL, 6)}
                       </div>
                     </div>

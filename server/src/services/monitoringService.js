@@ -333,17 +333,16 @@ class WalletMonitoringService {
         }
     }
 
-    async addWallet(address, name = null) {
+    async addWallet(address, name = null, groupId = null) {
         try {
             new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name);
-            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}...`);
+            const wallet = await this.db.addWallet(address, name, groupId);
+            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}... to group: ${groupId ? 'custom' : 'default'}`);
             return wallet;
         } catch (error) {
             throw new Error(`Failed to add wallet: ${error.message}`);
         }
     }
-
     async removeWallet(address) {
         try {
             const wallet = await this.db.getWalletByAddress(address);

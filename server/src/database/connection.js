@@ -60,22 +60,22 @@ class Database {
         }
     }
 
-    async addWallet(address, name = null) {
-        const query = `
-            INSERT INTO wallets (address, name) 
-            VALUES ($1, $2) 
-            RETURNING id, address, name, created_at
-        `;
-        try {
-            const result = await this.pool.query(query, [address, name]);
-            return result.rows[0];
-        } catch (error) {
-            if (error.code === '23505') {
-                throw new Error('Wallet already exists');
-            }
-            throw error;
-        }
-    }
+    // async addWallet(address, name = null) {
+    //     const query = `
+    //         INSERT INTO wallets (address, name) 
+    //         VALUES ($1, $2) 
+    //         RETURNING id, address, name, created_at
+    //     `;
+    //     try {
+    //         const result = await this.pool.query(query, [address, name]);
+    //         return result.rows[0];
+    //     } catch (error) {
+    //         if (error.code === '23505') {
+    //             throw new Error('Wallet already exists');
+    //         }
+    //         throw error;
+    //     }
+    // }
 
     async removeWallet(address) {
         const query = `
@@ -94,15 +94,15 @@ class Database {
         }
     }
 
-    async getActiveWallets() {
-        const query = `
-            SELECT * FROM wallets 
-            WHERE is_active = TRUE 
-            ORDER BY created_at DESC
-        `;
-        const result = await this.pool.query(query);
-        return result.rows;
-    }
+    // async getActiveWallets() {
+    //     const query = `
+    //         SELECT * FROM wallets 
+    //         WHERE is_active = TRUE 
+    //         ORDER BY created_at DESC
+    //     `;
+    //     const result = await this.pool.query(query);
+    //     return result.rows;
+    // }
 
 async removeAllWallets() {
     const query = `DELETE FROM wallets`;
@@ -481,6 +481,193 @@ async getWalletStats(walletId) {
         } finally {
             client.release();
         }
+    }
+
+    async createWalletGroup(name, description = null, color = '#3B82F6') {
+        const query = `
+            INSERT INTO wallet_groups (name, description, color) 
+            VALUES ($1, $2, $3) 
+            RETURNING id, name, description, color, is_active, created_at
+        `;
+        try {
+            const result = await this.pool.query(query, [name, description, color]);
+            return result.rows[0];
+        } catch (error) {
+            if (error.code === '23505') {
+                throw new Error('Group name already exists');
+            }
+            throw error;
+        }
+    }
+    
+    async getWalletGroups() {
+        const query = `
+            SELECT 
+                wg.*,
+                COUNT(w.id) as wallet_count
+            FROM wallet_groups wg
+            LEFT JOIN wallets w ON wg.id = w.group_id AND w.is_active = TRUE
+            WHERE wg.is_active = TRUE
+            GROUP BY wg.id, wg.name, wg.description, wg.color, wg.is_active, wg.created_at, wg.updated_at
+            ORDER BY wg.created_at ASC
+        `;
+        const result = await this.pool.query(query);
+        return result.rows;
+    }
+    
+    async getWalletGroup(groupId) {
+        const query = `
+            SELECT 
+                wg.*,
+                COUNT(w.id) as wallet_count
+            FROM wallet_groups wg
+            LEFT JOIN wallets w ON wg.id = w.group_id AND w.is_active = TRUE
+            WHERE wg.id = $1 AND wg.is_active = TRUE
+            GROUP BY wg.id, wg.name, wg.description, wg.color, wg.is_active, wg.created_at, wg.updated_at
+        `;
+        const result = await this.pool.query(query, [groupId]);
+        return result.rows[0];
+    }
+    
+    async updateWalletGroup(groupId, updates) {
+        const fields = [];
+        const values = [];
+        let paramCount = 1;
+    
+        if (updates.name !== undefined) {
+            fields.push(`name = $${paramCount++}`);
+            values.push(updates.name);
+        }
+        if (updates.description !== undefined) {
+            fields.push(`description = $${paramCount++}`);
+            values.push(updates.description);
+        }
+        if (updates.color !== undefined) {
+            fields.push(`color = $${paramCount++}`);
+            values.push(updates.color);
+        }
+    
+        if (fields.length === 0) {
+            throw new Error('No fields to update');
+        }
+    
+        fields.push(`updated_at = CURRENT_TIMESTAMP`);
+        values.push(groupId);
+    
+        const query = `
+            UPDATE wallet_groups 
+            SET ${fields.join(', ')} 
+            WHERE id = $${paramCount} AND is_active = TRUE
+            RETURNING *
+        `;
+    
+        const result = await this.pool.query(query, values);
+        if (result.rowCount === 0) {
+            throw new Error('Group not found');
+        }
+        return result.rows[0];
+    }
+    
+    async deleteWalletGroup(groupId) {
+        // Check if group has wallets
+        const walletsCheck = await this.pool.query(
+            'SELECT COUNT(*) as count FROM wallets WHERE group_id = $1 AND is_active = TRUE',
+            [groupId]
+        );
+        
+        if (parseInt(walletsCheck.rows[0].count) > 0) {
+            throw new Error('Cannot delete group that contains wallets');
+        }
+    
+        const query = `
+            UPDATE wallet_groups 
+            SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND is_active = TRUE
+            RETURNING id
+        `;
+        const result = await this.pool.query(query, [groupId]);
+        if (result.rowCount === 0) {
+            throw new Error('Group not found');
+        }
+        return result.rows[0];
+    }
+    
+    async getWalletsByGroup(groupId) {
+        const query = `
+            SELECT * FROM wallets 
+            WHERE group_id = $1 AND is_active = TRUE 
+            ORDER BY created_at DESC
+        `;
+        const result = await this.pool.query(query, [groupId]);
+        return result.rows;
+    }
+    
+    async moveWalletToGroup(walletAddress, groupId) {
+        const query = `
+            UPDATE wallets 
+            SET group_id = $1, updated_at = CURRENT_TIMESTAMP
+            WHERE address = $2 AND is_active = TRUE
+            RETURNING *
+        `;
+        const result = await this.pool.query(query, [groupId, walletAddress]);
+        if (result.rowCount === 0) {
+            throw new Error('Wallet not found');
+        }
+        return result.rows[0];
+    }
+    
+    async getDefaultGroup() {
+        const query = `
+            SELECT id FROM wallet_groups 
+            WHERE name = 'Default Group' AND is_active = TRUE 
+            LIMIT 1
+        `;
+        const result = await this.pool.query(query);
+        return result.rows[0];
+    }
+    
+    // Update the existing addWallet method to support groups
+    async addWallet(address, name = null, groupId = null) {
+        if (!groupId) {
+            const defaultGroup = await this.getDefaultGroup();
+            groupId = defaultGroup ? defaultGroup.id : null;
+        }
+    
+        const query = `
+            INSERT INTO wallets (address, name, group_id) 
+            VALUES ($1, $2, $3) 
+            RETURNING id, address, name, group_id, created_at
+        `;
+        try {
+            const result = await this.pool.query(query, [address, name, groupId]);
+            return result.rows[0];
+        } catch (error) {
+            if (error.code === '23505') {
+                throw new Error('Wallet already exists');
+            }
+            throw error;
+        }
+    }
+    
+    // Update getActiveWallets to support filtering by group
+    async getActiveWallets(groupId = null) {
+        let query = `
+            SELECT w.*, wg.name as group_name, wg.color as group_color
+            FROM wallets w
+            LEFT JOIN wallet_groups wg ON w.group_id = wg.id
+            WHERE w.is_active = TRUE
+        `;
+        const params = [];
+        
+        if (groupId) {
+            query += ` AND w.group_id = $1`;
+            params.push(groupId);
+        }
+        
+        query += ` ORDER BY w.created_at DESC`;
+        
+        const result = await this.pool.query(query, params);
+        return result.rows;
     }
 
     async close() {

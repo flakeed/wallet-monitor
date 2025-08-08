@@ -7,11 +7,13 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
-// Fallback API base for local dev if env not provided
+
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
   const [wallets, setWallets] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
   const [loading, setLoading] = useState(true);
@@ -19,38 +21,68 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
-  const [view, setView] = useState('tokens'); // 'tokens' | 'transactions'
+  const [view, setView] = useState('tokens');
 
-  const fetchData = async (hours = timeframe, type = transactionType) => {
+  const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
 
       const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}`;
+      const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
 
-      const [walletsRes, transactionsRes, statusRes] = await Promise.all([
-        fetch(`${API_BASE}/wallets`),
+      const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
+        fetch(walletsUrl),
         fetch(transactionsUrl),
         fetch(`${API_BASE}/monitoring/status`),
+        fetch(`${API_BASE}/groups`),
       ]);
 
-      if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok) {
+      if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
         throw new Error('Failed to fetch data');
       }
 
-      const [walletsData, transactionsData, statusData] = await Promise.all([
+      const [walletsData, transactionsData, statusData, groupsData] = await Promise.all([
         walletsRes.json(),
         transactionsRes.json(),
         statusRes.json(),
+        groupsRes.json(),
       ]);
 
       setWallets(walletsData);
       setTransactions(transactionsData);
       setMonitoringStatus(statusData);
+      setGroups(groupsData);
     } catch (err) {
       setError(err.message);
       console.error('Error fetching data:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const toggleMonitoring = async () => {
+    try {
+      setError(null);
+      const endpoint = monitoringStatus.isMonitoring 
+        ? `${API_BASE}/monitoring/stop`
+        : `${API_BASE}/monitoring/start`;
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to ${monitoringStatus.isMonitoring ? 'stop' : 'start'} monitoring`);
+      }
+
+      const data = await response.json();
+      setMonitoringStatus({ isMonitoring: !monitoringStatus.isMonitoring });
+      return { success: true, message: data.message };
+    } catch (err) {
+      setError(err.message);
+      console.error('Error toggling monitoring:', err);
+      return { success: false, message: err.message };
     }
   };
 
@@ -68,8 +100,9 @@ function App() {
         const hoursDiff = (now - txTime) / (1000 * 60 * 60);
         const matchesTimeframe = hoursDiff <= parseInt(timeframe);
         const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
+        const matchesGroup = !selectedGroup || wallets.some(w => w.address === newTransaction.walletAddress && w.group_id === selectedGroup);
 
-        if (matchesTimeframe && matchesType) {
+        if (matchesTimeframe && matchesType && matchesGroup) {
           setTransactions((prev) => {
             if (prev.some((tx) => tx.signature === newTransaction.signature)) {
               return prev;
@@ -107,26 +140,32 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets]);
+  }, [timeframe, transactionType, wallets, selectedGroup]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
     setLoading(true);
-    fetchData(newTimeframe, transactionType);
+    fetchData(newTimeframe, transactionType, selectedGroup);
   };
 
   const handleTransactionTypeChange = (newType) => {
     setTransactionType(newType);
     setLoading(true);
-    fetchData(timeframe, newType);
+    fetchData(timeframe, newType, selectedGroup);
   };
 
-  const addWallet = async (address, name) => {
+  const handleGroupChange = (groupId) => {
+    setSelectedGroup(groupId);
+    setLoading(true);
+    fetchData(timeframe, transactionType, groupId);
+  };
+
+  const addWallet = async (address, name, groupId) => {
     try {
       const response = await fetch(`${API_BASE}/wallets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.trim(), name: name.trim() || null }),
+        body: JSON.stringify({ address: address.trim(), name: name.trim() || null, groupId }),
       });
 
       const data = await response.json();
@@ -182,23 +221,43 @@ function App() {
     }
   };
 
-  const toggleMonitoring = async (action) => {
+  const removeAllWallets = async () => {
     try {
-      const response = await fetch(`${API_BASE}/monitoring/toggle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+      const response = await fetch(`${API_BASE}/wallets`, {
+        method: 'DELETE',
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to toggle monitoring');
+        throw new Error(data.error || 'Failed to remove all wallets');
       }
 
       setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
     } catch (err) {
-      setError(err.message);
+      throw new Error(err.message);
+    }
+  };
+
+  const createGroup = async (name, description, color) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description, color }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message };
+    } catch (err) {
+      throw new Error(err.message);
     }
   };
 
@@ -223,7 +282,12 @@ function App() {
         <Header />
         {error && <ErrorMessage error={error} />}
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
-        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} />
+        <WalletManager 
+          onAddWallet={addWallet} 
+          onAddWalletsBulk={addWalletsBulk} 
+          groups={groups}
+          onCreateGroup={createGroup}
+        />
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -240,35 +304,52 @@ function App() {
                 Recent Transactions
               </button>
             </div>
-            {view === 'transactions' && (
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Type:</span>
-                  <select
-                    value={transactionType}
-                    onChange={(e) => handleTransactionTypeChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="all">All Transactions</option>
-                    <option value="buy">Buy Only</option>
-                    <option value="sell">Sell Only</option>
-                  </select>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Period:</span>
-                  <select
-                    value={timeframe}
-                    onChange={(e) => handleTimeframeChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="1">Last 1 hour</option>
-                    <option value="6">Last 6 hours</option>
-                    <option value="24">Last 24 hours</option>
-                    <option value="168">Last 7 days</option>
-                  </select>
-                </div>
+            <div className="flex items-center space-x-4">
+              {view === 'transactions' && (
+                <>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-500">Type:</span>
+                    <select
+                      value={transactionType}
+                      onChange={(e) => handleTransactionTypeChange(e.target.value)}
+                      className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="all">All Transactions</option>
+                      <option value="buy">Buy Only</option>
+                      <option value="sell">Sell Only</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-sm text-gray-500">Period:</span>
+                    <select
+                      value={timeframe}
+                      onChange={(e) => handleTimeframeChange(e.target.value)}
+                      className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="1">Last 1 hour</option>
+                      <option value="6">Last 6 hours</option>
+                      <option value="24">Last 24 hours</option>
+                      <option value="168">Last 7 days</option>
+                    </select>
+                  </div>
+                </>
+              )}
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-gray-500">Group:</span>
+                <select
+                  value={selectedGroup || ''}
+                  onChange={(e) => handleGroupChange(e.target.value || null)}
+                  className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">All Groups</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name} ({group.wallet_count})
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
+            </div>
           </div>
           {view === 'transactions' && (
             <div className="mt-4 grid grid-cols-3 gap-4">
@@ -295,7 +376,28 @@ function App() {
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-            <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
+            <WalletList 
+              wallets={wallets} 
+              onRemoveWallet={removeWallet} 
+              onRemoveAllWallets={removeAllWallets}
+              groups={groups}
+              onGroupChange={(address, groupId) => {
+                fetch(`${API_BASE}/wallets/${address}/group`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ groupId }),
+                })
+                  .then(response => response.json())
+                  .then(data => {
+                    if (data.success) {
+                      setRefreshKey(prev => prev + 1);
+                    } else {
+                      setError(data.error || 'Failed to move wallet');
+                    }
+                  })
+                  .catch(err => setError(err.message));
+              }}
+            />
           </div>
           <div className="lg:col-span-2">
             {view === 'tokens' ? (

@@ -184,12 +184,12 @@ class SolanaWebSocketService {
         this.subscriptions.delete(walletAddress);
     }
 
-    async addWallet(walletAddress, name = null) {
+    async addWallet(walletAddress, name = null, groupId = null) {
         try {
             if (this.subscriptions.size >= this.maxSubscriptions) {
                 throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
             }
-            const wallet = await this.monitoringService.addWallet(walletAddress, name);
+            const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId);
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                 await this.subscribeToWallet(walletAddress);
             }

@@ -159,3 +159,41 @@ BEGIN
     
     UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
 END $$;
+
+UPDATE wallets SET group_id = (
+    SELECT id FROM wallet_groups WHERE name = 'Default Group' LIMIT 1
+) WHERE group_id IS NULL;
+
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_groups_active ON wallet_groups(is_active);
+CREATE INDEX IF NOT EXISTS idx_wallet_groups_name ON wallet_groups(name);
+
+-- Add trigger for wallet_groups updated_at
+CREATE TRIGGER update_wallet_groups_updated_at 
+BEFORE UPDATE ON wallet_groups 
+FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Update wallet_overview view to include group information
+DROP VIEW IF EXISTS wallet_overview;
+CREATE OR REPLACE VIEW wallet_overview AS
+SELECT 
+    w.id,
+    w.address,
+    w.name,
+    w.is_active,
+    w.created_at,
+    w.group_id,
+    wg.name as group_name,
+    wg.color as group_color,
+    COALESCE(ws.total_spent_sol, 0) as total_spent_sol,
+    COALESCE(ws.total_received_sol, 0) as total_received_sol,
+    COALESCE(ws.total_buy_transactions, 0) as total_buy_transactions,
+    COALESCE(ws.total_sell_transactions, 0) as total_sell_transactions,
+    COALESCE(ws.unique_tokens_bought, 0) as unique_tokens_bought,
+    COALESCE(ws.unique_tokens_sold, 0) as unique_tokens_sold,
+    ws.last_transaction_at
+FROM wallets w
+LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
+LEFT JOIN wallet_groups wg ON w.group_id = wg.id
+WHERE w.is_active = TRUE;

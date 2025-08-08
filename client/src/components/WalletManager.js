@@ -1,14 +1,22 @@
 import React, { useState } from 'react';
 
-function WalletManager({ onAddWallet, onAddWalletsBulk }) {
+function WalletManager({ onAddWallet, onAddWalletsBulk, groups, onCreateGroup }) {
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
+  const [selectedGroup, setSelectedGroup] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupDescription, setNewGroupDescription] = useState('');
+  const [newGroupColor, setNewGroupColor] = useState('#3B82F6');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [activeTab, setActiveTab] = useState('single');
   const [bulkText, setBulkText] = useState('');
+  const [bulkGroup, setBulkGroup] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [groupMessage, setGroupMessage] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,11 +35,12 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
     setMessage(null);
 
     try {
-      const result = await onAddWallet(address, name);
+      const result = await onAddWallet(address, name, selectedGroup || null);
       if (result.success) {
         setMessage({ type: 'success', text: result.message });
         setAddress('');
         setName('');
+        setSelectedGroup('');
       }
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -53,11 +62,11 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
         const name = parts[1] || null;
 
         if (address && address.length === 44) {
-          wallets.push({ address, name });
+          wallets.push({ address, name, groupId: bulkGroup || null });
         }
       } else {
         if (trimmedLine.length === 44) {
-          wallets.push({ address: trimmedLine, name: null });
+          wallets.push({ address: trimmedLine, name: null, groupId: bulkGroup || null });
         }
       }
     }
@@ -105,8 +114,8 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
 
       if (result.results.successful > 0) {
         setBulkText('');
+        setBulkGroup('');
       }
-
     } catch (error) {
       setBulkResults({
         type: 'error',
@@ -114,6 +123,33 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
       });
     } finally {
       setBulkLoading(false);
+    }
+  };
+
+  const handleCreateGroup = async (e) => {
+    e.preventDefault();
+
+    if (!newGroupName.trim()) {
+      setGroupMessage({ type: 'error', text: 'Group name is required' });
+      return;
+    }
+
+    setGroupLoading(true);
+    setGroupMessage(null);
+
+    try {
+      const result = await onCreateGroup(newGroupName, newGroupDescription, newGroupColor);
+      if (result.success) {
+        setGroupMessage({ type: 'success', text: result.message });
+        setNewGroupName('');
+        setNewGroupDescription('');
+        setNewGroupColor('#3B82F6');
+        setShowCreateGroup(false);
+      }
+    } catch (error) {
+      setGroupMessage({ type: 'error', text: error.message });
+    } finally {
+      setGroupLoading(false);
     }
   };
 
@@ -183,6 +219,112 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
                 disabled={loading}
               />
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Group
+              </label>
+              <div className="flex items-center space-x-2">
+                <select
+                  value={selectedGroup}
+                  onChange={(e) => setSelectedGroup(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                  disabled={loading}
+                >
+                  <option value="">Select a group (optional)</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateGroup(true)}
+                  className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  New Group
+                </button>
+              </div>
+            </div>
+
+            {showCreateGroup && (
+              <div className="border-t pt-4 mt-4">
+                <h4 className="text-sm font-medium text-gray-900 mb-2">Create New Group</h4>
+                {groupMessage && (
+                  <div className={`mb-3 p-2 rounded-lg ${groupMessage.type === 'success'
+                      ? 'bg-green-50 border border-green-200 text-green-700'
+                      : 'bg-red-50 border border-red-200 text-red-700'
+                    }`}>
+                    {groupMessage.text}
+                  </div>
+                )}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Group Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      placeholder="Enter group name"
+                      disabled={groupLoading}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Description (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={newGroupDescription}
+                      onChange={(e) => setNewGroupDescription(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      placeholder="Enter group description"
+                      disabled={groupLoading}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Color
+                    </label>
+                    <input
+                      type="color"
+                      value={newGroupColor}
+                      onChange={(e) => setNewGroupColor(e.target.value)}
+                      className="w-12 h-8 border border-gray-300 rounded"
+                      disabled={groupLoading}
+                    />
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      type="button"
+                      onClick={handleCreateGroup}
+                      disabled={groupLoading || !newGroupName.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {groupLoading ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2 inline-block"></div>
+                          Creating...
+                        </>
+                      ) : (
+                        'Create Group'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateGroup(false)}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"
@@ -282,6 +424,112 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
                 {bulkText.trim() && `${parseBulkInput(bulkText).length} valid wallets detected`}
               </div>
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Group
+              </label>
+              <div className="flex items-center space-x-2">
+                <select
+                  value={bulkGroup}
+                  onChange={(e) => setBulkGroup(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                  disabled={bulkLoading}
+                >
+                  <option value="">Select a group (optional)</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateGroup(true)}
+                  className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  New Group
+                </button>
+              </div>
+            </div>
+
+            {showCreateGroup && (
+              <div className="border-t pt-4 mt-4">
+                <h4 className="text-sm font-medium text-gray-900 mb-2">Create New Group</h4>
+                {groupMessage && (
+                  <div className={`mb-3 p-2 rounded-lg ${groupMessage.type === 'success'
+                      ? 'bg-green-50 border border-green-200 text-green-700'
+                      : 'bg-red-50 border border-red-200 text-red-700'
+                    }`}>
+                    {groupMessage.text}
+                  </div>
+                )}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Group Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      placeholder="Enter group name"
+                      disabled={groupLoading}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Description (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={newGroupDescription}
+                      onChange={(e) => setNewGroupDescription(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      placeholder="Enter group description"
+                      disabled={groupLoading}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Color
+                    </label>
+                    <input
+                      type="color"
+                      value={newGroupColor}
+                      onChange={(e) => setNewGroupColor(e.target.value)}
+                      className="w-12 h-8 border border-gray-300 rounded"
+                      disabled={groupLoading}
+                    />
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      type="button"
+                      onClick={handleCreateGroup}
+                      disabled={groupLoading || !newGroupName.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {groupLoading ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2 inline-block"></div>
+                          Creating...
+                        </>
+                      ) : (
+                        'Create Group'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateGroup(false)}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"
