@@ -111,12 +111,12 @@ CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
 
 -- Adding triggers to update timestamps
 CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $func$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$func$ LANGUAGE plpgsql;
 
 CREATE TRIGGER update_groups_updated_at
     BEFORE UPDATE ON groups

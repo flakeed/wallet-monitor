@@ -2,6 +2,68 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 
+function splitSqlStatements(sql) {
+    const statements = [];
+    let currentStatement = '';
+    let inDollarQuote = false;
+    let dollarTag = '';
+    let i = 0;
+
+    while (i < sql.length) {
+        const char = sql[i];
+
+        if (char === '$' && !inDollarQuote) {
+            let j = i + 1;
+            let tag = '';
+            while (j < sql.length && sql[j] !== '$') {
+                tag += sql[j];
+                j++;
+            }
+            if (j < sql.length && sql[j] === '$') {
+                inDollarQuote = true;
+                dollarTag = tag;
+                currentStatement += sql.slice(i, j + 1);
+                i = j + 1;
+                continue;
+            }
+        } else if (inDollarQuote && char === '$') {
+            let j = i + 1;
+            let tag = '';
+            while (j < sql.length && sql[j] !== '$') {
+                tag += sql[j];
+                j++;
+            }
+            if (j < sql.length && sql[j] === '$' && tag === dollarTag) {
+                inDollarQuote = false;
+                dollarTag = '';
+                currentStatement += sql.slice(i, j + 1);
+                i = j + 1;
+                continue;
+            }
+        }
+
+        if (char === ';' && !inDollarQuote) {
+            const trimmed = currentStatement.trim();
+            if (trimmed.length > 0) {
+                statements.push(trimmed);
+            }
+            currentStatement = '';
+            i++;
+            continue;
+        }
+
+        currentStatement += char;
+        i++;
+    }
+
+    const trimmed = currentStatement.trim();
+    if (trimmed.length > 0) {
+        statements.push(trimmed);
+    }
+
+    return statements;
+}
+
 class Database {
     constructor() {
         this.pool = new Pool({
@@ -28,11 +90,13 @@ class Database {
         }
     }
 
+
+    
     async createSchema() {
         try {
             const schemaPath = path.join(__dirname, 'schema.sql');
             const schema = fs.readFileSync(schemaPath, 'utf8');
-            const statements = schema.split(';').map(stmt => stmt.trim()).filter(stmt => stmt.length > 0);
+            const statements = splitSqlStatements(schema);
             const client = await this.pool.connect();
             try {
                 for (const statement of statements) {
@@ -41,7 +105,7 @@ class Database {
                 const migrationPath = path.join(__dirname, 'migrations/001_add_group_id.sql');
                 if (fs.existsSync(migrationPath)) {
                     const migration = fs.readFileSync(migrationPath, 'utf8');
-                    const migrationStatements = migration.split(';').map(stmt => stmt.trim()).filter(stmt => stmt.length > 0);
+                    const migrationStatements = splitSqlStatements(migration);
                     for (const statement of migrationStatements) {
                         await client.query(statement);
                     }
@@ -59,6 +123,7 @@ class Database {
         }
     }
 
+    
     async validateSchema() {
         const requiredColumns = {
             wallets: ['id', 'address', 'name', 'is_active', 'group_id', 'created_at', 'updated_at'],
