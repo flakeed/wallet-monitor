@@ -30,23 +30,27 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
   };
 
   const handleRemoveAll = async () => {
-    if (!window.confirm('Are you sure you want to remove ALL wallets from monitoring? This action cannot be undone.')) {
+    if (isRemovingAll) return; // защита от повторного клика
+  
+    if (!window.confirm('⚠️ Remove ALL wallets from monitoring? This cannot be undone.')) {
       return;
     }
-
+  
     setIsRemovingAll(true);
     setError(null);
     setSuccess(null);
+  
     try {
       const result = await onRemoveAllWallets();
-      setSuccess(result.message);
-    } catch (error) {
-      console.error('Error removing all wallets:', error);
-      setError(error.message);
+      setSuccess(result?.message || 'All wallets removed successfully.');
+    } catch (err) {
+      console.error('Error removing all wallets:', err);
+      setError(err?.message || 'Failed to remove all wallets.');
     } finally {
       setIsRemovingAll(false);
     }
   };
+  
 
   const formatTime = (timeString) => {
     if (!timeString) return 'Never';
@@ -93,20 +97,27 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
           Monitored Wallets ({wallets.length})
         </h3>
         <button
-          onClick={handleRemoveAll}
-          disabled={isRemovingAll}
-          className="flex items-center text-sm text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors disabled:opacity-50"
-          title="Remove all wallets from monitoring"
-        >
-          {isRemovingAll ? (
-            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-600 mr-1"></div>
-          ) : (
-            <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          )}
-          Clear All
-        </button>
+  onClick={handleRemoveAll}
+  disabled={isRemovingAll}
+  className="flex items-center text-sm text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors disabled:opacity-50"
+  title="Remove all wallets from monitoring"
+>
+  {isRemovingAll ? (
+    <>
+      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-600 mr-1"></div>
+      Removing...
+    </>
+  ) : (
+    <>
+      <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+      </svg>
+      Clear All
+    </>
+  )}
+</button>
+
       </div>
       {error && (
         <div className="mb-4 p-2 bg-red-100 text-red-700 rounded">{error}</div>
