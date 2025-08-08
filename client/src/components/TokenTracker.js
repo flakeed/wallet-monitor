@@ -24,12 +24,18 @@ function TokenTracker() {
     load();
   }, []);
 
+  // Функция для открытия графика на DEX Screener с адресом токена
   const openDexScreenerChart = (mintAddress) => {
-    // Генерация ссылки на DEX Screener с использованием адреса токена
-    // Предполагаем, что токен на Solana; замените на нужную сеть
     const dexScreenerUrl = `https://dexscreener.com/solana?search=${encodeURIComponent(mintAddress)}`;
     window.open(dexScreenerUrl, '_blank', 'noopener,noreferrer');
   };
+
+  // Автоматическое открытие графика для первого токена после загрузки
+  useEffect(() => {
+    if (!loading && !error && items.length > 0) {
+      openDexScreenerChart(items[0].mint); // Открываем график для первого токена
+    }
+  }, [loading, error, items]);
 
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
@@ -56,7 +62,7 @@ function TokenTracker() {
         <div>
           {items.map((token) => (
             <div key={token.mint} className="mb-4">
-              <TokenCard token={token} onOpenChart={() => openDexScreenerChart(token.mint)} />
+              <TokenCard token={token} />
             </div>
           ))}
         </div>
@@ -65,8 +71,8 @@ function TokenTracker() {
   );
 }
 
-// Обновленный TokenCard с кнопкой для открытия графика
-function TokenCard({ token, onOpenChart }) {
+// Обновленный TokenCard без кнопки, так как график открывается автоматически
+function TokenCard({ token }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   return (
@@ -89,12 +95,6 @@ function TokenCard({ token, onOpenChart }) {
           <WalletPill key={w.address} wallet={w} />
         ))}
       </div>
-      <button
-        onClick={onOpenChart}
-        className="mt-2 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
-      >
-        Open Chart
-      </button>
     </div>
   );
 }
