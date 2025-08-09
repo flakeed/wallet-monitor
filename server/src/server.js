@@ -674,7 +674,7 @@ app.post('/api/groups/switch', async (req, res) => {
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
-  await solanaWebSocketService.stop();
+  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
@@ -683,7 +683,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
-  await solanaWebSocketService.stop();
+  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);

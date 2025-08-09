@@ -311,14 +311,22 @@ class SolanaWebSocketService {
         };
     }
 
+
     async stop() {
         this.isStarted = false;
         for (const walletAddress of this.subscriptions.keys()) {
             await this.unsubscribeFromWallet(walletAddress);
         }
         if (this.ws) this.ws.close();
-        await this.db.close();
+        // НЕ закрываем базу данных здесь, только при полном завершении приложения
         console.log(`[${new Date().toISOString()}] ⏹️ WebSocket client stopped`);
+    }
+
+    async shutdown() {
+        console.log(`[${new Date().toISOString()}] 🛑 Shutting down WebSocket service completely...`);
+        await this.stop();
+        await this.db.close();
+        console.log(`[${new Date().toISOString()}] ✅ WebSocket service shutdown complete`);
     }
 }
 
