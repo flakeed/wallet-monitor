@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo} from 'react';
+import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
 
 function TokenTracker({ groupId, transactions, timeframe }) {
@@ -20,9 +20,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       const matchesGroup = !groupId || tx.wallet.group_id === groupId;
       return matchesTimeframe && matchesGroup;
     });
-
-    // Логируем отфильтрованные транзакции для отладки
-    console.log('Filtered transactions:', filteredTransactions);
 
     // Агрегируем данные по токенам
     filteredTransactions.forEach((tx) => {
@@ -104,24 +101,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
 
     return result;
   };
-
-  // Мемоизация результата агрегации
-  const aggregatedTokens = useMemo(() => aggregateTokens(transactions, hours, groupId), [transactions, hours, groupId]);
-
-  // Обновляем items при изменении aggregatedTokens
-  useEffect(() => {
-    setLoading(true);
-    try {
-      console.log('Aggregated tokens:', aggregatedTokens);
-      setItems(aggregatedTokens);
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-      console.error('Error setting aggregated tokens:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [aggregatedTokens]);
 
   // Обновляем items при изменении transactions, hours или groupId
   useEffect(() => {
