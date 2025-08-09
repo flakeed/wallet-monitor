@@ -292,12 +292,11 @@ class SolanaWebSocketService {
     }
 
     getStatus() {
-        console.log("wallet",wallet)
         const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([wallet, subData]) => ({
             address: wallet, 
             logsSubscription: subData.logs,
         }));
-
+    
         return {
             isConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
             isStarted: this.isStarted,
