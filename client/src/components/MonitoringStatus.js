@@ -15,11 +15,11 @@ function MonitoringStatus({ status, onToggle }) {
             </span>
           </div>
 
-          {processedSignatures > 0 && (
+          {/* {processedSignatures > 0 && (
             <div className="text-sm text-gray-500">
               Processed: {processedSignatures.toLocaleString()} signatures
             </div>
-          )}
+          )} */}
         </div>
 
         <div className="flex space-x-2">
@@ -42,7 +42,7 @@ function MonitoringStatus({ status, onToggle }) {
 
       <div className="mt-4 text-sm text-gray-600">
         {isMonitoring ? (
-          <p>🔍 Actively monitoring all tracked wallets for new token purchases. Updates every 30 seconds.</p>
+          <p>🔍 Actively monitoring all tracked wallets for new token purchases.</p>
         ) : (
           <p>⏸️ Monitoring is paused. Click "Start" to begin tracking wallet activities.</p>
         )}

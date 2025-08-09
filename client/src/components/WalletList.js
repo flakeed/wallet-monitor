@@ -188,7 +188,7 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                     </div>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+                {/* <div className="grid grid-cols-2 gap-2 text-xs mb-3">
                   <div className="bg-green-50 rounded p-2">
                     <div className="flex items-center space-x-1">
                       <div className="w-2 h-2 bg-green-500 rounded-full"></div>
@@ -213,8 +213,8 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                       <span className="text-red-600 ml-1">txs</span>
                     </div>
                   </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+                </div> */}
+                {/* <div className="grid grid-cols-2 gap-2 text-xs mb-3">
                   <div>
                     <span className="text-gray-500">SOL Spent:</span>
                     <div className="font-semibold text-red-600">
@@ -227,8 +227,8 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                       +{formatNumber(wallet.stats.totalReceivedSOL, 6)}
                     </div>
                   </div>
-                </div>
-                <div className="border-t pt-2 mt-2">
+                </div> */}
+                {/* <div className="border-t pt-2 mt-2">
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div>
                       <span className="text-gray-500">Net SOL:</span>
@@ -238,15 +238,15 @@ function WalletList({ wallets, onRemoveWallet, onRemoveAllWallets }) {
                       </div>
                     </div>
                   </div>
-                </div>
-                <div className="mt-3 pt-2 border-t">
+                </div> */}
+                {/* <div className="mt-3 pt-2 border-t">
                   <div className="text-xs">
                     <span className="text-gray-500">Last Activity:</span>
                     <span className="ml-1 text-gray-700">
                       {formatTime(wallet.stats.lastTransactionAt)}
                     </span>
                   </div>
-                </div>
+                </div> */}
               </div>
               <button
                 onClick={() => handleRemove(wallet.address)}
