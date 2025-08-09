@@ -291,9 +291,10 @@ class SolanaWebSocketService {
         }, this.reconnectInterval);
     }
 
+
     getStatus() {
-        const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([wallet, subData]) => ({
-            address: wallet, 
+        const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([walletAddress, subData]) => ({
+            address: walletAddress, 
             logsSubscription: subData.logs,
         }));
     
