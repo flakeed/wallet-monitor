@@ -162,31 +162,44 @@ ORDER BY t.block_time DESC;
 
 DO $$
 BEGIN
-    IF EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'token_purchases') THEN
-        IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'token_purchases' AND column_name = 'operation_type') THEN
-            ALTER TABLE token_purchases ADD COLUMN operation_type VARCHAR(10) DEFAULT 'buy';
-        END IF;
-        
-        ALTER TABLE token_purchases RENAME TO token_operations;
-        
-        UPDATE token_operations SET operation_type = 'buy' WHERE operation_type IS NULL;
-        
-        RAISE NOTICE 'Migrated token_purchases to token_operations';
-    END IF;
-END $$;
+    -- Ensure uuid-ossp extension
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'transactions' AND column_name = 'sol_received') THEN
-        ALTER TABLE transactions ADD COLUMN sol_received DECIMAL(20, 9);
-    END IF;
-    
-    UPDATE transactions SET transaction_type = 'buy' WHERE transaction_type IS NULL;
-END $$;
+    -- Convert groups.id to UUID if it's INTEGER
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'groups' AND column_name = 'id' AND data_type = 'integer'
+    ) THEN
+        -- Update wallet_groups
+        ALTER TABLE wallet_groups ADD COLUMN IF NOT EXISTS new_group_id UUID;
+        UPDATE wallet_groups wg
+        SET new_group_id = g.new_id
+        FROM groups g
+        WHERE g.id = wg.group_id;
+        ALTER TABLE wallet_groups DROP CONSTRAINT wallet_groups_group_id_fkey;
+        ALTER TABLE wallet_groups DROP COLUMN group_id;
+        ALTER TABLE wallet_groups RENAME COLUMN new_group_id TO group_id;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'groups') THEN
-        INSERT INTO groups (name) VALUES ('Default Group');
+        -- Update groups
+        ALTER TABLE groups ADD COLUMN IF NOT EXISTS new_id UUID DEFAULT uuid_generate_v4();
+        ALTER TABLE groups DROP CONSTRAINT groups_pkey;
+        ALTER TABLE groups DROP COLUMN id;
+        ALTER TABLE groups RENAME COLUMN new_id TO id;
+        ALTER TABLE groups ADD PRIMARY KEY (id);
+
+        -- Add foreign key back to wallet_groups
+        ALTER TABLE wallet_groups
+        ADD CONSTRAINT wallet_groups_group_id_fkey
+        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE;
+    END IF;
+
+    -- Add group_id to wallets if not exists
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'wallets' AND column_name = 'group_id'
+    ) THEN
+        ALTER TABLE wallets ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
     END IF;
 END $$;
