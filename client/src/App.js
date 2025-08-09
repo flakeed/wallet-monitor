@@ -342,7 +342,6 @@ function App() {
                     <option value="1">Last 1 hour</option>
                     <option value="6">Last 6 hours</option>
                     <option value="24">Last 24 hours</option>
-                    <option value="168">Last 7 days</option>
                   </select>
                 </div>
               </div>
