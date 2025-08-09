@@ -554,11 +554,17 @@ app.get('/api/stats/tokens', async (req, res) => {
 });
 
 // Token-centric tracker with wallets and per-wallet PnL-like SOL net
+// Исправленный endpoint в вашем основном файле сервера
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId ? parseInt(req.query.groupId, 10) : null;
+    
+    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
+    
     const rows = await db.getTokenWalletAggregates(hours, groupId);
+    
+    console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
 
     const byToken = new Map();
     for (const row of rows) {
@@ -580,9 +586,12 @@ app.get('/api/tokens/tracker', async (req, res) => {
       }
       const token = byToken.get(row.mint);
       const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+      
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
+        groupId: row.group_id, // Добавляем group_id для отладки
+        groupName: row.group_name, // Добавляем group_name для отладки
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
         solSpent: Number(row.sol_spent) || 0,
@@ -592,6 +601,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
         pnlSol: +pnlSol.toFixed(6),
         lastActivity: row.last_activity,
       });
+      
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
@@ -607,6 +617,10 @@ app.get('/api/tokens/tracker', async (req, res) => {
       },
     }));
 
+    // Сортировка по абсолютному значению netSOL (самые активные токены первыми)
+    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+
+    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
     res.json(result);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);

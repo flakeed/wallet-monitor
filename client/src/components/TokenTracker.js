@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
 
-function TokenTracker() {
+function TokenTracker({ groupId }) { // Добавляем пропс groupId
   const [items, setItems] = useState([]);
   const [hours, setHours] = useState('24');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const load = async (h = hours) => {
+  const load = async (h = hours, gId = groupId) => {
     try {
       setLoading(true);
-      const trackerRes = await fetch(`${process.env.REACT_APP_API_BASE}/tokens/tracker?hours=${h}`);
+      // ИСПРАВЛЕНИЕ: Добавляем groupId в запрос
+      const url = `${process.env.REACT_APP_API_BASE}/tokens/tracker?hours=${h}${gId ? `&groupId=${gId}` : ''}`;
+      const trackerRes = await fetch(url);
       if (!trackerRes.ok) throw new Error('Failed to fetch data');
       const trackerData = await trackerRes.json();
       setItems(trackerData);
@@ -22,7 +24,7 @@ function TokenTracker() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [groupId, hours]); // Добавляем groupId в зависимости
 
   const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
@@ -30,7 +32,7 @@ function TokenTracker() {
       return;
     }
     const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
-    window.location.href = gmgnUrl; // Opens the URL in the current window
+    window.location.href = gmgnUrl;
   };
 
   return (
@@ -39,7 +41,7 @@ function TokenTracker() {
         <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
         <select
           value={hours}
-          onChange={(e) => { setHours(e.target.value); load(e.target.value); }}
+          onChange={(e) => { setHours(e.target.value); load(e.target.value, groupId); }}
           className="text-sm border border-gray-300 rounded px-2 py-1"
         >
           <option value="1">Last 1 hour</option>
@@ -53,7 +55,7 @@ function TokenTracker() {
       ) : error ? (
         <div className="text-red-600">{error}</div>
       ) : items.length === 0 ? (
-        <div className="text-gray-500">No data</div>
+        <div className="text-gray-500">No token data for selected group/timeframe</div>
       ) : (
         <div>
           {items.map((token) => (
@@ -67,7 +69,6 @@ function TokenTracker() {
   );
 }
 
-// Обновленный TokenCard с кнопкой для открытия графика
 function TokenCard({ token, onOpenChart }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
@@ -79,7 +80,7 @@ function TokenCard({ token, onOpenChart }) {
             <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
             <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
           </div>
-          <div className="text-xs text-gray-500">{token.mint}</div>
+          <div className="text-xs text-gray-500 font-mono">{token.mint}</div>
         </div>
         <div className="text-right">
           <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
