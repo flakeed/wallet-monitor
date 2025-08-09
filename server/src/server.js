@@ -68,7 +68,7 @@ const startWebSocketService = async () => {
 setTimeout(startWebSocketService, 2000);
 
 app.get('/api/transactions/stream', (req, res) => {
-  const groupId = req.query.groupId || null;
+  const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -88,8 +88,22 @@ app.get('/api/transactions/stream', (req, res) => {
 
   subscriber.on('message', (channel, message) => {
     if (channel === 'transactions' && res.writable) {
-      console.log(`[${new Date().toISOString()}] 📡 Sending SSE message:`, message);
-      res.write(`data: ${message}\n\n`);
+      try {
+        const transaction = JSON.parse(message);
+        
+        // Фильтрация по группе
+        if (groupId !== null && transaction.groupId !== groupId) {
+          console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
+          return;
+        }
+        
+        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message:`, message);
+        res.write(`data: ${message}\n\n`);
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
+        // Отправляем сообщение как есть, если не удалось распарсить
+        res.write(`data: ${message}\n\n`);
+      }
     }
   });
 

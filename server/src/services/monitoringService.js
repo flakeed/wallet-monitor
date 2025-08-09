@@ -41,11 +41,11 @@ class WalletMonitoringService {
     async processQueue() {
         if (this.isProcessingQueue) return;
         this.isProcessingQueue = true;
-
+    
         while (true) {
             const requestData = await this.redis.lpop(this.queueKey, this.batchSize);
             if (!requestData || requestData.length === 0) break;
-
+    
             const requests = requestData.map((data) => {
                 try {
                     return JSON.parse(data);
@@ -54,11 +54,11 @@ class WalletMonitoringService {
                     return null;
                 }
             }).filter((req) => req !== null);
-
+    
             if (requests.length === 0) continue;
-
+    
             console.log(`[${new Date().toISOString()}] 🔄 Processing batch of ${requests.length} signatures`);
-
+    
             const batchResults = await Promise.all(
                 requests.map(async (request) => {
                     const { signature, walletAddress, blockTime } = request;
@@ -68,13 +68,16 @@ class WalletMonitoringService {
                             console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
                             return null;
                         }
-
+    
                         const txData = await this.processTransaction({ signature, blockTime }, wallet);
                         if (txData) {
                             console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature}`);
                             return {
                                 signature,
                                 walletAddress,
+                                walletName: wallet.name,
+                                groupId: wallet.group_id,
+                                groupName: wallet.group_name,
                                 transactionType: txData.type,
                                 solAmount: txData.solAmount,
                                 tokens: txData.tokensChanged.map((tc) => ({
@@ -93,7 +96,7 @@ class WalletMonitoringService {
                     }
                 })
             );
-
+    
             const successfulTxs = batchResults.filter((tx) => tx !== null);
             if (successfulTxs.length > 0) {
                 const pipeline = this.redis.pipeline();
@@ -103,7 +106,7 @@ class WalletMonitoringService {
                 await pipeline.exec();
             }
         }
-
+    
         this.isProcessingQueue = false;
         const queueLength = await this.redis.llen(this.queueKey);
         if (queueLength > 0) {
