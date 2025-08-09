@@ -21,13 +21,11 @@ function App() {
   const [transactionType, setTransactionType] = useState('all');
   const [view, setView] = useState('tokens');
   const [groups, setGroups] = useState([]);
-  const [selectedGroup, setSelectedGroup] = useState(null); // Хранится как строка UUID
+  const [selectedGroup, setSelectedGroup] = useState(null);
 
   const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
-
-      // ИСПРАВЛЕНО: передаем groupId как строку, не парсим как число
       const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
       const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
       const groupsUrl = `${API_BASE}/groups`;
@@ -65,20 +63,21 @@ function App() {
   useEffect(() => {
     const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
     const eventSource = new EventSource(sseUrl);
-  
+
     eventSource.onmessage = (event) => {
       try {
         const newTransaction = JSON.parse(event.data);
         console.log('New transaction received via SSE:', newTransaction);
-  
+
         const now = new Date();
         const txTime = new Date(newTransaction.timestamp);
         const hoursDiff = (now - txTime) / (1000 * 60 * 60);
         const matchesTimeframe = hoursDiff <= parseInt(timeframe);
         const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
-        // ИСПРАВЛЕНО: сравнение UUID строк
         const matchesGroup = !selectedGroup || newTransaction.groupId === selectedGroup;
-  
+
+        console.log('Filter check:', { matchesTimeframe, matchesType, matchesGroup });
+
         if (matchesTimeframe && matchesType && matchesGroup) {
           setTransactions((prev) => {
             if (prev.some((tx) => tx.signature === newTransaction.signature)) {
@@ -107,7 +106,7 @@ function App() {
         console.error('Event data:', event.data);
       }
     };
-  
+
     eventSource.onerror = () => {
       console.error('SSE connection error');
       eventSource.close();
@@ -115,7 +114,7 @@ function App() {
         console.log('Attempting to reconnect to SSE...');
       }, 5000);
     };
-  
+
     return () => {
       eventSource.close();
       console.log('SSE connection closed');
@@ -135,11 +134,10 @@ function App() {
   };
 
   const handleGroupChange = async (groupId) => {
-    // ИСПРАВЛЕНО: сохраняем как строку UUID, не парсим как число
     const selectedGroupId = groupId || null;
     setSelectedGroup(selectedGroupId);
     setLoading(true);
-    
+
     try {
       await fetch(`${API_BASE}/groups/switch`, {
         method: 'POST',
@@ -161,7 +159,7 @@ function App() {
         body: JSON.stringify({ 
           address: address.trim(), 
           name: name.trim() || null, 
-          groupId // Передаем как UUID строку
+          groupId
         }),
       });
 
@@ -185,7 +183,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           wallets, 
-          groupId // Передаем как UUID строку
+          groupId
         }),
       });
 
@@ -377,7 +375,7 @@ function App() {
           </div>
           <div className="lg:col-span-2">
             {view === 'tokens' ? (
-              <TokenTracker groupId={selectedGroup} />
+              <TokenTracker groupId={selectedGroup} transactions={transactions} timeframe={timeframe} />
             ) : (
               <TransactionFeed
                 transactions={transactions}

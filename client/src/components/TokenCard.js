@@ -1,39 +1,36 @@
+// TokenCard.js
 import React from 'react';
+import WalletPill from './WalletPill';
 
-function TokenCard({ token }) {
-  if (!token) {
-    return null;
-  }
-
-  const symbol = token.symbol || 'Unknown';
-  const name = token.name || 'Unknown Token';
-  const mint = token.mint || '';
-  const decimals = token.decimals || 4;
-
-  let amount = 0;
-  if (token.amount !== null && token.amount !== undefined) {
-    amount = typeof token.amount === 'number' ? token.amount : parseFloat(token.amount) || 0;
-  }
+function TokenCard({ token, onOpenChart }) {
+  const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   return (
-    <div className="bg-gray-50 rounded-lg p-3">
-      <div className="flex items-center space-x-3">
-
-
-        <div className="flex-1 min-w-0">
+    <div className="border rounded-lg p-4 bg-gray-50">
+      <div className="flex items-center justify-between mb-3">
+        <div className="min-w-0">
           <div className="flex items-center space-x-2">
-            <span className="font-semibold text-gray-900">{symbol}</span>
-            <span className="text-gray-400">•</span>
-            <span className="text-gray-600 truncate">{name}</span>
+            <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
+            <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
           </div>
-          <div className="text-sm text-gray-500">
-            Amount: {amount.toLocaleString(undefined, { maximumFractionDigits: decimals })}
-          </div>
-          <div className="text-xs text-gray-400 font-mono truncate">
-            {mint}
-          </div>
+          <div className="text-xs text-gray-500 font-mono">{token.mint}</div>
+        </div>
+        <div className="text-right">
+          <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
+          <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
         </div>
       </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {token.wallets.map((w) => (
+          <WalletPill key={w.address} wallet={w} />
+        ))}
+      </div>
+      <button
+        onClick={onOpenChart}
+        className="mt-2 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+      >
+        Open Chart
+      </button>
     </div>
   );
 }

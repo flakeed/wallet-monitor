@@ -1,29 +1,147 @@
 import React, { useState, useEffect } from 'react';
+import TokenCard from './TokenCard';
 
-function TokenTracker({ groupId }) {
+function TokenTracker({ groupId, transactions, timeframe }) {
   const [items, setItems] = useState([]);
-  const [hours, setHours] = useState('24');
-  const [loading, setLoading] = useState(true);
+  const [hours, setHours] = useState(timeframe || '24');
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const load = async (h = hours, gId = groupId) => {
+  // Функция для агрегации данных о токенах из транзакций
+  const aggregateTokens = (transactions, hours, groupId) => {
+    const byToken = new Map();
+
+    // Фильтруем транзакции по времени и groupId
+    const now = new Date();
+    const filteredTransactions = transactions.filter((tx) => {
+      const txTime = new Date(tx.time);
+      const hoursDiff = (now - txTime) / (1000 * 60 * 60);
+      const matchesTimeframe = hoursDiff <= parseInt(hours);
+      const matchesGroup = !groupId || tx.wallet.group_id === groupId;
+      return matchesTimeframe && matchesGroup;
+    });
+
+    // Логируем отфильтрованные транзакции для отладки
+    console.log('Filtered transactions:', filteredTransactions);
+
+    // Агрегируем данные по токенам
+    filteredTransactions.forEach((tx) => {
+      const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
+      if (!tokens || tokens.length === 0) return;
+
+      tokens.forEach((token) => {
+        if (!byToken.has(token.mint)) {
+          byToken.set(token.mint, {
+            mint: token.mint,
+            symbol: token.symbol || 'Unknown',
+            name: token.name || 'Unknown Token',
+            decimals: token.decimals || 6,
+            wallets: [],
+            summary: {
+              uniqueWallets: new Set(),
+              totalBuys: 0,
+              totalSells: 0,
+              totalSpentSOL: 0,
+              totalReceivedSOL: 0,
+              netSOL: 0,
+            },
+          });
+        }
+
+        const tokenData = byToken.get(token.mint);
+        const walletAddress = tx.wallet.address;
+        const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
+
+        // Обновляем статистику кошелька
+        if (!wallet) {
+          tokenData.wallets.push({
+            address: walletAddress,
+            name: tx.wallet.name || null,
+            groupId: tx.wallet.group_id,
+            groupName: tx.wallet.group_name,
+            txBuys: tx.transactionType === 'buy' ? 1 : 0,
+            txSells: tx.transactionType === 'sell' ? 1 : 0,
+            solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
+            solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
+            tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
+            tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
+            pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
+                    (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
+            lastActivity: tx.time,
+          });
+          tokenData.summary.uniqueWallets.add(walletAddress);
+        } else {
+          wallet.txBuys += tx.transactionType === 'buy' ? 1 : 0;
+          wallet.txSells += tx.transactionType === 'sell' ? 1 : 0;
+          wallet.solSpent += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
+          wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+          wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
+          wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
+          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
+          wallet.lastActivity = tx.time > wallet.lastActivity ? tx.time : wallet.lastActivity;
+        }
+
+        // Обновляем summary
+        tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
+        tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
+        tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
+        tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+      });
+    });
+
+    // Формируем итоговый массив токенов
+    const result = Array.from(byToken.values()).map((t) => ({
+      ...t,
+      summary: {
+        ...t.summary,
+        uniqueWallets: t.summary.uniqueWallets.size,
+        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+      },
+    }));
+
+    // Сортируем по абсолютному значению netSOL
+    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+
+    return result;
+  };
+
+  // Мемоизация результата агрегации
+  const aggregatedTokens = useMemo(() => aggregateTokens(transactions, hours, groupId), [transactions, hours, groupId]);
+
+  // Обновляем items при изменении aggregatedTokens
+  useEffect(() => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const url = `${process.env.REACT_APP_API_BASE}/tokens/tracker?hours=${h}${gId ? `&groupId=${gId}` : ''}`;
-      const trackerRes = await fetch(url);
-      if (!trackerRes.ok) throw new Error('Failed to fetch data');
-      const trackerData = await trackerRes.json();
-      setItems(trackerData);
+      console.log('Aggregated tokens:', aggregatedTokens);
+      setItems(aggregatedTokens);
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+      console.error('Error setting aggregated tokens:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [aggregatedTokens]);
+
+  // Обновляем items при изменении transactions, hours или groupId
+  useEffect(() => {
+    setLoading(true);
+    try {
+      const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
+      console.log('Aggregated tokens:', aggregatedTokens);
+      setItems(aggregatedTokens);
+      setError(null);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [transactions, hours, groupId]);
 
+  // Синхронизируем hours с timeframe из пропсов
   useEffect(() => {
-    load();
-  }, [groupId, hours]);
+    setHours(timeframe);
+  }, [timeframe]);
 
   const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
@@ -40,7 +158,7 @@ function TokenTracker({ groupId }) {
         <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
         <select
           value={hours}
-          onChange={(e) => { setHours(e.target.value); load(e.target.value, groupId); }}
+          onChange={(e) => setHours(e.target.value)}
           className="text-sm border border-gray-300 rounded px-2 py-1"
         >
           <option value="1">Last 1 hour</option>
@@ -63,58 +181,6 @@ function TokenTracker({ groupId }) {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function TokenCard({ token, onOpenChart }) {
-  const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
-
-  return (
-    <div className="border rounded-lg p-4 bg-gray-50">
-      <div className="flex items-center justify-between mb-3">
-        <div className="min-w-0">
-          <div className="flex items-center space-x-2">
-            <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
-            <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
-          </div>
-          <div className="text-xs text-gray-500 font-mono">{token.mint}</div>
-        </div>
-        <div className="text-right">
-          <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
-          <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {token.wallets.map((w) => (
-          <WalletPill key={w.address} wallet={w} />
-        ))}
-      </div>
-      <button
-        onClick={onOpenChart}
-        className="mt-2 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
-      >
-        Open Chart
-      </button>
-    </div>
-  );
-}
-
-function WalletPill({ wallet }) {
-  const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-  const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
-  const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
-
-  return (
-    <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
-      <div className="truncate max-w-xs">
-        <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
-        <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
-      </div>
-      <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
-      </div>
     </div>
   );
 }
