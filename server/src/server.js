@@ -68,8 +68,8 @@ const startWebSocketService = async () => {
 setTimeout(startWebSocketService, 2000);
 
 app.get('/api/transactions/stream', (req, res) => {
-  // ИСПРАВЛЕНО: правильно парсим groupId как число или null
-  const groupId = req.query.groupId ? parseInt(req.query.groupId, 10) : null;
+  // ИСПРАВЛЕНО: НЕ парсим groupId как число, оставляем как строку (UUID)
+  const groupId = req.query.groupId || null;
   
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -93,7 +93,7 @@ app.get('/api/transactions/stream', (req, res) => {
       try {
         const transaction = JSON.parse(message);
         
-        // ИСПРАВЛЕНО: строгое сравнение чисел
+        // ИСПРАВЛЕНО: сравнение UUID строк
         if (groupId !== null && transaction.groupId !== groupId) {
           console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
           return;
@@ -103,7 +103,6 @@ app.get('/api/transactions/stream', (req, res) => {
         res.write(`data: ${message}\n\n`);
       } catch (error) {
         console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
-        // Отправляем сообщение как есть, если не удалось распарсить
         res.write(`data: ${message}\n\n`);
       }
     }
@@ -125,9 +124,10 @@ app.get('/api/transactions/stream', (req, res) => {
     }
   }, 30000);
 });
+
 app.get('/api/wallets', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId || null; // Оставляем как строку
     const wallets = await db.getActiveWallets(groupId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
@@ -225,7 +225,7 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId || null; // Оставляем как строку
 
     const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
@@ -276,7 +276,7 @@ app.get('/api/transactions', async (req, res) => {
 
 app.get('/api/monitoring/status', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId || null; // Оставляем как строку
     const monitoringStatus = monitoringService.getStatus();
     const websocketStatus = solanaWebSocketService.getStatus();
     const dbStats = await db.getMonitoringStats(groupId);
@@ -389,7 +389,7 @@ app.get('/api/wallet/:address', async (req, res) => {
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId || null; // Оставляем как строку
     const stats = await db.getMonitoringStats(groupId);
 
     res.json({
@@ -501,6 +501,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
   res.send(template);
 });
 
+
 app.post('/api/wallets/validate', (req, res) => {
   try {
     const { wallets } = req.body;
@@ -543,7 +544,7 @@ app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const type = req.query.type;
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId || null; // Оставляем как строку
 
     const topTokens = await db.getTopTokens(limit, type, groupId);
     res.json(topTokens);
@@ -558,7 +559,8 @@ app.get('/api/stats/tokens', async (req, res) => {
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId ? parseInt(req.query.groupId, 10) : null;
+    // ИСПРАВЛЕНО: НЕ парсим как число, оставляем как строку UUID
+    const groupId = req.query.groupId || null;
     
     console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
     
@@ -590,8 +592,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
-        groupId: row.group_id, // Добавляем group_id для отладки
-        groupName: row.group_name, // Добавляем group_name для отладки
+        groupId: row.group_id,
+        groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
         solSpent: Number(row.sol_spent) || 0,
@@ -617,7 +619,6 @@ app.get('/api/tokens/tracker', async (req, res) => {
       },
     }));
 
-    // Сортировка по абсолютному значению netSOL (самые активные токены первыми)
     result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
 
     console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);

@@ -8,7 +8,6 @@ import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
 
-// Fallback API base for local dev if env not provided
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
@@ -20,14 +19,15 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
-  const [view, setView] = useState('tokens'); // 'tokens' | 'transactions'
+  const [view, setView] = useState('tokens');
   const [groups, setGroups] = useState([]);
-  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [selectedGroup, setSelectedGroup] = useState(null); // Хранится как строка UUID
 
   const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
 
+      // ИСПРАВЛЕНО: передаем groupId как строку, не парсим как число
       const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
       const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
       const groupsUrl = `${API_BASE}/groups`;
@@ -35,7 +35,7 @@ function App() {
       const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
         fetch(walletsUrl),
         fetch(transactionsUrl),
-        fetch(`${API_BASE}/monitoring/status?groupId=${groupId || ''}`),
+        fetch(`${API_BASE}/monitoring/status${groupId ? `?groupId=${groupId}` : ''}`),
         fetch(groupsUrl),
       ]);
 
@@ -76,7 +76,7 @@ function App() {
         const hoursDiff = (now - txTime) / (1000 * 60 * 60);
         const matchesTimeframe = hoursDiff <= parseInt(timeframe);
         const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
-        // ИСПРАВЛЕНО: используем newTransaction.groupId вместо newTransaction.wallet.group_id
+        // ИСПРАВЛЕНО: сравнение UUID строк
         const matchesGroup = !selectedGroup || newTransaction.groupId === selectedGroup;
   
         if (matchesTimeframe && matchesType && matchesGroup) {
@@ -92,10 +92,9 @@ function App() {
               solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
               wallet: {
                 address: newTransaction.walletAddress,
-                // ИСПРАВЛЕНО: используем newTransaction.walletName
                 name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
-                group_id: newTransaction.groupId, // Добавляем group_id для совместимости
-                group_name: newTransaction.groupName, // Добавляем group_name
+                group_id: newTransaction.groupId,
+                group_name: newTransaction.groupName,
               },
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
@@ -105,7 +104,7 @@ function App() {
         }
       } catch (err) {
         console.error('Error parsing SSE message:', err);
-        console.error('Event data:', event.data); // Добавим логирование для отладки
+        console.error('Event data:', event.data);
       }
     };
   
@@ -136,14 +135,22 @@ function App() {
   };
 
   const handleGroupChange = async (groupId) => {
-    setSelectedGroup(groupId || null);
+    // ИСПРАВЛЕНО: сохраняем как строку UUID, не парсим как число
+    const selectedGroupId = groupId || null;
+    setSelectedGroup(selectedGroupId);
     setLoading(true);
-    await fetch(`${API_BASE}/groups/switch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId: groupId || null }),
-    });
-    fetchData(timeframe, transactionType, groupId || null);
+    
+    try {
+      await fetch(`${API_BASE}/groups/switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: selectedGroupId }),
+      });
+      fetchData(timeframe, transactionType, selectedGroupId);
+    } catch (error) {
+      console.error('Error switching group:', error);
+      setError('Failed to switch group');
+    }
   };
 
   const addWallet = async (address, name, groupId) => {
@@ -151,7 +158,11 @@ function App() {
       const response = await fetch(`${API_BASE}/wallets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.trim(), name: name.trim() || null, groupId }),
+        body: JSON.stringify({ 
+          address: address.trim(), 
+          name: name.trim() || null, 
+          groupId // Передаем как UUID строку
+        }),
       });
 
       const data = await response.json();
@@ -172,7 +183,10 @@ function App() {
       const response = await fetch(`${API_BASE}/wallets/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wallets, groupId }),
+        body: JSON.stringify({ 
+          wallets, 
+          groupId // Передаем как UUID строку
+        }),
       });
 
       const data = await response.json();
@@ -284,6 +298,11 @@ function App() {
                   </option>
                 ))}
               </select>
+              {selectedGroup && (
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                  Group: {groups.find(g => g.id === selectedGroup)?.name || 'Unknown'}
+                </span>
+              )}
             </div>
             <div className="flex items-center space-x-3">
               <button
