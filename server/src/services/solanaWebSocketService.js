@@ -292,8 +292,9 @@ class SolanaWebSocketService {
     }
 
     getStatus() {
-        const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([addr, subData]) => ({
-            address: addr,
+        console.log("wallet",wallet)
+        const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([wallet, subData]) => ({
+            address: wallet, 
             logsSubscription: subData.logs,
         }));
 
