@@ -68,7 +68,9 @@ const startWebSocketService = async () => {
 setTimeout(startWebSocketService, 2000);
 
 app.get('/api/transactions/stream', (req, res) => {
-  const groupId = req.query.groupId ? parseInt(req.query.groupId) : null;
+  // ИСПРАВЛЕНО: правильно парсим groupId как число или null
+  const groupId = req.query.groupId ? parseInt(req.query.groupId, 10) : null;
+  
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -91,13 +93,13 @@ app.get('/api/transactions/stream', (req, res) => {
       try {
         const transaction = JSON.parse(message);
         
-        // Фильтрация по группе
+        // ИСПРАВЛЕНО: строгое сравнение чисел
         if (groupId !== null && transaction.groupId !== groupId) {
           console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
           return;
         }
         
-        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message:`, message);
+        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for group ${transaction.groupId}:`, message.substring(0, 100) + '...');
         res.write(`data: ${message}\n\n`);
       } catch (error) {
         console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
@@ -123,7 +125,6 @@ app.get('/api/transactions/stream', (req, res) => {
     }
   }, 30000);
 });
-
 app.get('/api/wallets', async (req, res) => {
   try {
     const groupId = req.query.groupId || null;

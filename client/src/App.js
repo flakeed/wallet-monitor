@@ -65,19 +65,20 @@ function App() {
   useEffect(() => {
     const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
     const eventSource = new EventSource(sseUrl);
-
+  
     eventSource.onmessage = (event) => {
       try {
         const newTransaction = JSON.parse(event.data);
         console.log('New transaction received via SSE:', newTransaction);
-
+  
         const now = new Date();
         const txTime = new Date(newTransaction.timestamp);
         const hoursDiff = (now - txTime) / (1000 * 60 * 60);
         const matchesTimeframe = hoursDiff <= parseInt(timeframe);
         const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
-        const matchesGroup = !selectedGroup || newTransaction.wallet.group_id === selectedGroup;
-
+        // ИСПРАВЛЕНО: используем newTransaction.groupId вместо newTransaction.wallet.group_id
+        const matchesGroup = !selectedGroup || newTransaction.groupId === selectedGroup;
+  
         if (matchesTimeframe && matchesType && matchesGroup) {
           setTransactions((prev) => {
             if (prev.some((tx) => tx.signature === newTransaction.signature)) {
@@ -91,7 +92,10 @@ function App() {
               solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
               wallet: {
                 address: newTransaction.walletAddress,
-                name: wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
+                // ИСПРАВЛЕНО: используем newTransaction.walletName
+                name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
+                group_id: newTransaction.groupId, // Добавляем group_id для совместимости
+                group_name: newTransaction.groupName, // Добавляем group_name
               },
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
@@ -101,9 +105,10 @@ function App() {
         }
       } catch (err) {
         console.error('Error parsing SSE message:', err);
+        console.error('Event data:', event.data); // Добавим логирование для отладки
       }
     };
-
+  
     eventSource.onerror = () => {
       console.error('SSE connection error');
       eventSource.close();
@@ -111,7 +116,7 @@ function App() {
         console.log('Attempting to reconnect to SSE...');
       }, 5000);
     };
-
+  
     return () => {
       eventSource.close();
       console.log('SSE connection closed');
