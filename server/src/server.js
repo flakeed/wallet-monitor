@@ -1,3 +1,4 @@
+// Main server app file
 const express = require('express');
 const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
@@ -173,11 +174,7 @@ app.post('/api/wallets', async (req, res) => {
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error adding wallet:`, error);
-    if (error.message.includes('already exists')) {
-      res.status(409).json({ error: 'Wallet is already being monitored' });
-    } else {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(500).json({ error: error.message });
   }
 });
 

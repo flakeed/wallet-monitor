@@ -1,3 +1,4 @@
+// services/monitoringService.js
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { fetchTokenMetadata, redis } = require('./tokenService');
 const Database = require('../database/connection');
@@ -18,7 +19,7 @@ class WalletMonitoringService {
             totalBuyTransactions: 0,
             totalSellTransactions: 0,
             errors: 0,
-            lastScanDuration: 0,
+           lastScanDuration: 0,
             startTime: Date.now(),
         };
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
@@ -61,7 +62,7 @@ class WalletMonitoringService {
     
             const batchResults = await Promise.all(
                 requests.map(async (request) => {
-                    const { signature, walletAddress, blockTime } = request;
+                    const { signature, walletAddress, blockTime, groupId } = request;
                     try {
                         const wallet = await this.db.getWalletByAddress(walletAddress);
                         if (!wallet) {
@@ -71,13 +72,14 @@ class WalletMonitoringService {
     
                         const txData = await this.processTransaction({ signature, blockTime }, wallet);
                         if (txData) {
+                            const groupName = await this.db.getGroupName(groupId);
                             console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature}`);
                             return {
                                 signature,
                                 walletAddress,
                                 walletName: wallet.name,
-                                groupId: wallet.group_id,
-                                groupName: wallet.group_name,
+                                groupId,
+                                groupName,
                                 transactionType: txData.type,
                                 solAmount: txData.solAmount,
                                 tokens: txData.tokensChanged.map((tc) => ({
@@ -115,13 +117,14 @@ class WalletMonitoringService {
     }
 
     async processWebhookMessage(message) {
-        const { signature, walletAddress, blockTime } = message;
+        const { signature, walletAddress, blockTime, groupId } = message;
         const requestId = require('uuid').v4();
         await this.redis.lpush(this.queueKey, JSON.stringify({
             requestId,
             signature,
             walletAddress,
             blockTime,
+            groupId,
             timestamp: Date.now(),
         }));
         console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature}`);

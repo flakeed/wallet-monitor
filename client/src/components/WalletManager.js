@@ -1,3 +1,4 @@
+// client/src/components/WalletManager.js
 import React, { useState } from 'react';
 
 function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups }) {
@@ -355,7 +356,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
                 <option value="">Select a group (optional)</option>
                 {groups.map((group) => (
                   <option key={group.id} value={group.id}>
-                    {group.name} ({group.walletCount} wallets)
+                    {group.name} ({group.wallet_count} wallets)
                   </option>
                 ))}
               </select>

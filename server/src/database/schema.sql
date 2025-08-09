@@ -1,3 +1,4 @@
+-- database/schema.sql
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE IF NOT EXISTS groups (
@@ -16,13 +17,14 @@ CREATE TABLE IF NOT EXISTS wallets (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Migration to add group_id if not exists
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wallets' AND column_name = 'group_id') THEN
-        ALTER TABLE wallets ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
-    END IF;
-END $$;
+CREATE TABLE IF NOT EXISTS wallet_groups (
+    wallet_id UUID NOT NULL,
+    group_id UUID NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (wallet_id, group_id),
+    FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -84,7 +86,8 @@ CREATE TABLE IF NOT EXISTS monitoring_stats (
 CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
 CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON wallets(is_active);
-CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_groups_wallet_id ON wallet_groups(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_wallet_groups_group_id ON wallet_groups(group_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
@@ -118,8 +121,6 @@ SELECT
     w.id,
     w.address,
     w.name,
-    w.group_id,
-    g.name as group_name,
     w.is_active,
     w.created_at,
     COALESCE(ws.total_spent_sol, 0) as total_spent_sol,
@@ -130,7 +131,6 @@ SELECT
     COALESCE(ws.unique_tokens_sold, 0) as unique_tokens_sold,
     ws.last_transaction_at
 FROM wallets w
-LEFT JOIN groups g ON w.group_id = g.id
 LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
 WHERE w.is_active = TRUE;
 
@@ -144,8 +144,6 @@ SELECT
     t.sol_received,
     w.address as wallet_address,
     w.name as wallet_name,
-    w.group_id,
-    g.name as group_name,
     tk.mint,
     tk.symbol,
     tk.name as token_name,
@@ -154,52 +152,7 @@ SELECT
     tk.decimals
 FROM transactions t
 JOIN wallets w ON t.wallet_id = w.id
-LEFT JOIN groups g ON w.group_id = g.id
 LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
 LEFT JOIN tokens tk ON to_.token_id = tk.id
 WHERE t.block_time >= NOW() - INTERVAL '24 hours'
 ORDER BY t.block_time DESC;
-
-DO $$
-BEGIN
-    -- Ensure uuid-ossp extension
-    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
-    -- Convert groups.id to UUID if it's INTEGER
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'groups' AND column_name = 'id' AND data_type = 'integer'
-    ) THEN
-        -- Update wallet_groups
-        ALTER TABLE wallet_groups ADD COLUMN IF NOT EXISTS new_group_id UUID;
-        UPDATE wallet_groups wg
-        SET new_group_id = g.new_id
-        FROM groups g
-        WHERE g.id = wg.group_id;
-        ALTER TABLE wallet_groups DROP CONSTRAINT wallet_groups_group_id_fkey;
-        ALTER TABLE wallet_groups DROP COLUMN group_id;
-        ALTER TABLE wallet_groups RENAME COLUMN new_group_id TO group_id;
-
-        -- Update groups
-        ALTER TABLE groups ADD COLUMN IF NOT EXISTS new_id UUID DEFAULT uuid_generate_v4();
-        ALTER TABLE groups DROP CONSTRAINT groups_pkey;
-        ALTER TABLE groups DROP COLUMN id;
-        ALTER TABLE groups RENAME COLUMN new_id TO id;
-        ALTER TABLE groups ADD PRIMARY KEY (id);
-
-        -- Add foreign key back to wallet_groups
-        ALTER TABLE wallet_groups
-        ADD CONSTRAINT wallet_groups_group_id_fkey
-        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE;
-    END IF;
-
-    -- Add group_id to wallets if not exists
-    IF NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'wallets' AND column_name = 'group_id'
-    ) THEN
-        ALTER TABLE wallets ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
-    END IF;
-END $$;

@@ -1,3 +1,4 @@
+// services/solanaWebSocketService.js
 const WebSocket = require('ws');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const WalletMonitoringService = require('./monitoringService');
@@ -121,7 +122,8 @@ class SolanaWebSocketService {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
                 return;
             }
-            if (this.activeGroupId && wallet.group_id !== this.activeGroupId) {
+            const isInGroup = await this.db.isWalletInGroup(wallet.id, this.activeGroupId);
+            if (this.activeGroupId && !isInGroup) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress} (not in active group ${this.activeGroupId})`);
                 return;
             }
@@ -129,6 +131,7 @@ class SolanaWebSocketService {
                 signature: result.value.signature,
                 walletAddress,
                 blockTime: result.value.timestamp || Math.floor(Date.now() / 1000),
+                groupId: this.activeGroupId,
             });
         }
     }
@@ -197,7 +200,7 @@ class SolanaWebSocketService {
                 throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
             }
             const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId);
-            if (this.ws && this.ws.readyState === WebSocket.OPEN && (!this.activeGroupId || wallet.group_id === this.activeGroupId)) {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN && (!this.activeGroupId || await this.db.isWalletInGroup(wallet.id, this.activeGroupId))) {
                 await this.subscribeToWallet(walletAddress);
             }
             return wallet;

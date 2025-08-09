@@ -1,3 +1,4 @@
+// database/connection.js
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
@@ -69,9 +70,9 @@ class Database {
 
     async getGroups() {
         const query = `
-            SELECT g.id, g.name, COUNT(w.id) as wallet_count
+            SELECT g.id, g.name, COUNT(wg.wallet_id) as wallet_count
             FROM groups g
-            LEFT JOIN wallets w ON g.id = w.group_id
+            LEFT JOIN wallet_groups wg ON g.id = wg.group_id
             GROUP BY g.id, g.name
             ORDER BY g.created_at
         `;
@@ -80,21 +81,28 @@ class Database {
     }
 
     async addWallet(address, name = null, groupId = null) {
-        const query = `
-            INSERT INTO wallets (address, name, group_id) 
-            VALUES ($1, $2, $3) 
-            RETURNING id, address, name, group_id, created_at
-        `;
-        try {
-            const result = await this.pool.query(query, [address, name, groupId]);
-            return result.rows[0];
-        } catch (error) {
-            if (error.code === '23505') {
-                throw new Error('Wallet already exists');
-            }
-            throw error;
-        }
-    }
+        return await this.withTransaction(async (client) => {
+          const upsertWallet = `
+            INSERT INTO wallets (address, name) 
+            VALUES ($1, $2) 
+            ON CONFLICT (address) DO UPDATE SET name = COALESCE(EXCLUDED.name, wallets.name)
+            RETURNING *
+          `;
+          const walletRes = await client.query(upsertWallet, [address, name]);
+          const wallet = walletRes.rows[0];
+      
+          if (groupId) {
+            const addMembership = `
+              INSERT INTO wallet_groups (wallet_id, group_id)
+              VALUES ($1, $2)
+              ON CONFLICT DO NOTHING
+            `;
+            await client.query(addMembership, [wallet.id, groupId]);
+          }
+      
+          return wallet;
+        });
+      }
 
     async removeWallet(address) {
         const query = `
@@ -117,8 +125,11 @@ class Database {
         let query = `DELETE FROM wallets`;
         const params = [];
         if (groupId) {
-            query += ` WHERE group_id = $1`;
+            query += ` WHERE id IN (SELECT wallet_id FROM wallet_groups WHERE group_id = $1)`;
             params.push(groupId);
+            await this.pool.query('DELETE FROM wallet_groups WHERE group_id = $1', [groupId]);
+        } else {
+            await this.pool.query('DELETE FROM wallet_groups');
         }
         try {
             const result = await this.pool.query(query, params);
@@ -132,20 +143,39 @@ class Database {
 
     async getActiveWallets(groupId = null) {
         let query = `
-            SELECT w.*, g.name as group_name
+            SELECT w.*, NULL as group_name
             FROM wallets w
-            LEFT JOIN groups g ON w.group_id = g.id
-            WHERE w.is_active = TRUE
         `;
         const params = [];
         if (groupId) {
-            query += ` AND w.group_id = $1`;
+            query = `
+              SELECT w.*, (SELECT name FROM groups WHERE id = $1) as group_name
+              FROM wallets w
+              JOIN wallet_groups wg ON w.id = wg.wallet_id
+              WHERE wg.group_id = $1 AND w.is_active = TRUE
+            `;
             params.push(groupId);
+        } else {
+            query += ` WHERE w.is_active = TRUE `;
         }
         query += ` ORDER BY w.created_at DESC`;
         const result = await this.pool.query(query, params);
         return result.rows;
     }
+
+    async isWalletInGroup(walletId, groupId) {
+        if (!groupId) return true; // If no group active, always true
+        const query = 'SELECT 1 FROM wallet_groups WHERE wallet_id = $1 AND group_id = $2 LIMIT 1';
+        const result = await this.pool.query(query, [walletId, groupId]);
+        return result.rowCount > 0;
+      }
+      
+      async getGroupName(groupId) {
+        if (!groupId) return null;
+        const query = 'SELECT name FROM groups WHERE id = $1';
+        const result = await this.pool.query(query, [groupId]);
+        return result.rows[0]?.name || null;
+      }
 
     async upsertToken(tokenData) {
         const { mint, symbol, name, decimals } = tokenData;
@@ -216,85 +246,60 @@ class Database {
 
     async getRecentTransactions(hours = 24, limit = 400, transactionType = null, groupId = null) {
         try {
-            let typeFilter = '';
-            let queryParams = [limit];
-            let paramIndex = 2;
-            
-            if (transactionType) {
-                typeFilter = `AND t.transaction_type = $${paramIndex++}`;
-                queryParams.push(transactionType);
-            }
-            if (groupId) {
-                typeFilter += ` AND w.group_id = $${paramIndex}`;
-                queryParams.push(groupId);
-            }
-
-            const uniqueTransactionsQuery = `
-                SELECT 
-                    t.signature,
-                    t.block_time,
-                    t.transaction_type,
-                    t.sol_spent,
-                    t.sol_received,
-                    w.address as wallet_address,
-                    w.name as wallet_name,
-                    w.group_id,
-                    g.name as group_name
-                FROM transactions t
-                JOIN wallets w ON t.wallet_id = w.id
-                LEFT JOIN groups g ON w.group_id = g.id
-                WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
-                ${typeFilter}
-                ORDER BY t.block_time DESC
-                LIMIT $1
-            `;
-
-            const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
-            
-            if (uniqueTransactions.rows.length === 0) {
-                return [];
-            }
-
-            const signatures = uniqueTransactions.rows.map(row => row.signature);
-            const placeholders = signatures.map((_, index) => `$${index + 1}`).join(',');
-
-            const fullDataQuery = `
-                SELECT 
-                    t.signature,
-                    t.block_time,
-                    t.transaction_type,
-                    t.sol_spent,
-                    t.sol_received,
-                    w.address as wallet_address,
-                    w.name as wallet_name,
-                    w.group_id,
-                    g.name as group_name,
-                    tk.mint,
-                    tk.symbol,
-                    tk.name as token_name,
-                    to_.amount as token_amount,
-                    to_.operation_type,
-                    tk.decimals
-                FROM transactions t
-                JOIN wallets w ON t.wallet_id = w.id
-                LEFT JOIN groups g ON w.group_id = g.id
-                LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-                LEFT JOIN tokens tk ON to_.token_id = tk.id
-                WHERE t.signature IN (${placeholders})
-                ORDER BY t.block_time DESC, t.signature, to_.id
-            `;
-
-            const result = await this.pool.query(fullDataQuery, signatures);
-            
-            console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens`);
-            
-            return result.rows;
-
+          let typeFilter = '';
+          let queryParams = [hours, limit];
+          let paramIndex = 3;
+          
+          if (transactionType) {
+            typeFilter = `AND t.transaction_type = $${paramIndex++}`;
+            queryParams.push(transactionType);
+          }
+          let groupJoin = '';
+          let groupNameSelect = ', NULL as group_name, NULL as group_id';
+          if (groupId) {
+            groupJoin = `JOIN wallet_groups wg ON w.id = wg.wallet_id`;
+            typeFilter += ` AND wg.group_id = $${paramIndex}`;
+            queryParams.push(groupId);
+            groupNameSelect = `, (SELECT name FROM groups WHERE id = $${paramIndex - 1}) as group_name, $${paramIndex - 1} as group_id`;
+          }
+      
+          const fullDataQuery = `
+            SELECT 
+              t.signature,
+              t.block_time,
+              t.transaction_type,
+              t.sol_spent,
+              t.sol_received,
+              w.address as wallet_address,
+              w.name as wallet_name${groupNameSelect},
+              tk.mint,
+              tk.symbol,
+              tk.name as token_name,
+              to_.amount as token_amount,
+              to_.operation_type,
+              tk.decimals
+            FROM transactions t
+            JOIN wallets w ON t.wallet_id = w.id
+            ${groupJoin}
+            LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+            LEFT JOIN tokens tk ON to_.token_id = tk.id
+            WHERE t.block_time >= NOW() - INTERVAL '$1 hours'
+            ${typeFilter}
+            ORDER BY t.block_time DESC
+            LIMIT $2
+          `;
+      
+          const result = await this.pool.query(fullDataQuery, queryParams);
+          
+          console.log(`📊 getRecentTransactions: Found ${result.rows.length} total rows with tokens`);
+          
+          return result.rows;
+      
         } catch (error) {
-            console.error('❌ Error in getRecentTransactions:', error);
-            throw error;
+          console.error('❌ Error in getRecentTransactions:', error);
+          throw error;
         }
-    }
+      }
 
     async getWalletStats(walletId) {
         try {
@@ -357,13 +362,15 @@ class Database {
         let queryParams = [limit];
         let paramIndex = 2;
         
-        if (operationType) {
-            typeFilter = `AND to_.operation_type = $${paramIndex++}`;
-            queryParams.push(operationType);
-        }
+        let groupJoin = '';
         if (groupId) {
-            typeFilter += ` AND w.group_id = $${paramIndex}`;
+            groupJoin = `JOIN wallet_groups wg ON w.id = wg.wallet_id`;
+            typeFilter += ` AND wg.group_id = $${paramIndex++}`;
             queryParams.push(groupId);
+        }
+        if (operationType) {
+            typeFilter += `AND to_.operation_type = $${paramIndex}`;
+            queryParams.push(operationType);
         }
 
         const query = `
@@ -381,6 +388,7 @@ class Database {
             JOIN token_operations to_ ON tk.id = to_.token_id
             JOIN transactions t ON to_.transaction_id = t.id
             JOIN wallets w ON t.wallet_id = w.id
+            ${groupJoin}
             WHERE t.block_time >= NOW() - INTERVAL '24 hours'
             ${typeFilter}
             GROUP BY tk.id, tk.mint, tk.symbol, tk.name
@@ -392,6 +400,7 @@ class Database {
     }
 
     async getTokenWalletAggregates(hours = 24, groupId = null) {
+        let params = [];
         let query = `
             SELECT 
                 tk.mint,
@@ -401,8 +410,6 @@ class Database {
                 w.id as wallet_id,
                 w.address as wallet_address,
                 w.name as wallet_name,
-                w.group_id,
-                g.name as group_name,
                 COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
                 COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
@@ -410,25 +417,43 @@ class Database {
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
                 MAX(t.block_time) as last_activity
+        `;
+        if (groupId) {
+          query += `,
+            $1 as group_id,
+            (SELECT name FROM groups WHERE id = $1) as group_name
+          `;
+          query += `
             FROM tokens tk
             JOIN token_operations to_ ON tk.id = to_.token_id
             JOIN transactions t ON to_.transaction_id = t.id
             JOIN wallets w ON t.wallet_id = w.id
-            LEFT JOIN groups g ON w.group_id = g.id
+            JOIN wallet_groups wg ON w.id = wg.wallet_id
             WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
-        `;
-        const params = [];
-        if (groupId) {
-            query += ` AND w.group_id = $1`;
-            params.push(groupId);
+            AND wg.group_id = $1
+          `;
+          params = [groupId];
+        } else {
+          query += `,
+            NULL as group_id,
+            NULL as group_name
+          `;
+          query += `
+            FROM tokens tk
+            JOIN token_operations to_ ON tk.id = to_.token_id
+            JOIN transactions t ON to_.transaction_id = t.id
+            JOIN wallets w ON t.wallet_id = w.id
+            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+          `;
+          params = [];
         }
         query += `
-            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name
-            ORDER BY tk.mint, wallet_id
+          GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name
+          ORDER BY tk.mint, wallet_id
         `;
         const result = await this.pool.query(query, params);
         return result.rows;
-    }
+      }
 
     async getMonitoringStats(groupId = null) {
         let query = `
@@ -445,9 +470,12 @@ class Database {
             LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
             WHERE w.is_active = TRUE
         `;
-        const params = [];
+        let params = [];
+        let groupJoin = '';
         if (groupId) {
-            query += ` AND w.group_id = $1`;
+            groupJoin = `JOIN wallet_groups wg ON w.id = wg.wallet_id`;
+            query = query.replace('FROM wallets w', `FROM wallets w ${groupJoin}`);
+            query += ` AND wg.group_id = $1`;
             params.push(groupId);
         }
         const result = await this.pool.query(query, params);
@@ -469,7 +497,7 @@ class Database {
         `;
         const params = [mint];
         if (groupId) {
-            query += ` AND w.group_id = $2`;
+            query += ` JOIN wallet_groups wg ON w.id = wg.wallet_id AND wg.group_id = $2`;
             params.push(groupId);
         }
         query += `
@@ -508,7 +536,7 @@ class Database {
         `;
         const params = [mint];
         if (groupId) {
-            query += ` AND w.group_id = $2`;
+            query += ` JOIN wallet_groups wg ON w.id = wg.wallet_id AND wg.group_id = $2`;
             params.push(groupId);
         }
         query += `
