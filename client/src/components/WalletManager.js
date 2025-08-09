@@ -1,14 +1,31 @@
 import React, { useState } from 'react';
 
-function WalletManager({ onAddWallet, onAddWalletsBulk }) {
+function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups }) {
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
+  const [groupId, setGroupId] = useState('');
+  const [newGroupName, setNewGroupName] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [activeTab, setActiveTab] = useState('single');
   const [bulkText, setBulkText] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
+
+  const handleCreateGroup = async (e) => {
+    e.preventDefault();
+    if (!newGroupName.trim()) return;
+    try {
+      setLoading(true);
+      await onCreateGroup(newGroupName.trim());
+      setNewGroupName('');
+      setMessage({ type: 'success', text: 'Group created successfully' });
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,11 +44,12 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
     setMessage(null);
 
     try {
-      const result = await onAddWallet(address, name);
+      const result = await onAddWallet(address, name, groupId || null);
       if (result.success) {
         setMessage({ type: 'success', text: result.message });
         setAddress('');
         setName('');
+        setGroupId('');
       }
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -95,7 +113,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
     setBulkResults(null);
 
     try {
-      const result = await onAddWalletsBulk(wallets);
+      const result = await onAddWalletsBulk(wallets, groupId || null);
 
       setBulkResults({
         type: 'success',
@@ -105,8 +123,8 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
 
       if (result.results.successful > 0) {
         setBulkText('');
+        setGroupId('');
       }
-
     } catch (error) {
       setBulkResults({
         type: 'error',
@@ -120,6 +138,28 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
       <h2 className="text-xl font-semibold text-gray-900 mb-4">Add Wallets for Monitoring</h2>
+
+      {/* Group Creation */}
+      <div className="mb-6">
+        <h3 className="text-lg font-medium text-gray-800 mb-2">Create New Group</h3>
+        <form onSubmit={handleCreateGroup} className="flex space-x-2">
+          <input
+            type="text"
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            placeholder="Enter new group name..."
+            disabled={loading}
+          />
+          <button
+            type="submit"
+            disabled={loading || !newGroupName.trim()}
+            className="bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            Create Group
+          </button>
+        </form>
+      </div>
 
       {/* Tabs */}
       <div className="flex space-x-1 mb-6 bg-gray-100 p-1 rounded-lg">
@@ -182,6 +222,25 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
                 placeholder="Give this wallet a name..."
                 disabled={loading}
               />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Group (Optional)
+              </label>
+              <select
+                value={groupId}
+                onChange={(e) => setGroupId(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                disabled={loading}
+              >
+                <option value="">Select a group (optional)</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} ({group.wallet_count} wallets)
+                  </option>
+                ))}
+              </select>
             </div>
 
             <button
@@ -281,6 +340,25 @@ function WalletManager({ onAddWallet, onAddWalletsBulk }) {
               <div className="mt-2 text-sm text-gray-500">
                 {bulkText.trim() && `${parseBulkInput(bulkText).length} valid wallets detected`}
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Group (Optional)
+              </label>
+              <select
+                value={groupId}
+                onChange={(e) => setGroupId(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                disabled={bulkLoading}
+              >
+                <option value="">Select a group (optional)</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} ({group.walletCount} wallets)
+                  </option>
+                ))}
+              </select>
             </div>
 
             <button
