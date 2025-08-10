@@ -175,6 +175,22 @@ BEGIN
     -- Ensure uuid-ossp extension
     CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'wallet_groups' AND column_name = 'group_id'
+    ) THEN
+        ALTER TABLE wallet_groups
+        ADD COLUMN group_id UUID NOT NULL,
+        ADD CONSTRAINT wallet_groups_group_id_fkey
+            FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE;
+
+        -- Update primary key to include group_id
+        ALTER TABLE wallet_groups
+        DROP CONSTRAINT wallet_groups_pkey,
+        ADD PRIMARY KEY (wallet_id, group_id);
+    END IF;
+
     -- Convert groups.id to UUID if it's INTEGER
     IF EXISTS (
         SELECT 1
