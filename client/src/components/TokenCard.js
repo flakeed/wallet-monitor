@@ -15,6 +15,16 @@ function TokenCard({ token, onOpenChart }) {
       });
   };
 
+  // Function to open chart in new window
+  const openGmgnChartInNewWindow = () => {
+    if (!token.mint) {
+      console.warn('No mint address available for chart');
+      return;
+    }
+    const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(token.mint)}`;
+    window.open(gmgnUrl, '_blank');
+  };
+
   return (
     <div className="border rounded-lg p-4 bg-gray-50">
       <div className="flex items-center justify-between mb-3">
@@ -51,12 +61,20 @@ function TokenCard({ token, onOpenChart }) {
           <WalletPill key={w.address} wallet={w} />
         ))}
       </div>
-      <button
-        onClick={onOpenChart}
-        className="mt-2 w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
-      >
-        Open Chart
-      </button>
+      <div className="mt-2 flex space-x-2">
+        <button
+          onClick={onOpenChart}
+          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+        >
+          Open Chart
+        </button>
+        <button
+          onClick={openGmgnChartInNewWindow}
+          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+        >
+          Open in New Window
+        </button>
+      </div>
     </div>
   );
 }
