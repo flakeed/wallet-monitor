@@ -1,9 +1,19 @@
-// TokenCard.js
 import React from 'react';
 import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
+  // Function to copy text to clipboard
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        console.log('Address copied to clipboard:', text);
+      })
+      .catch((err) => {
+        console.error('Failed to copy address:', err);
+      });
+  };
 
   return (
     <div className="border rounded-lg p-4 bg-gray-50">
@@ -13,7 +23,23 @@ function TokenCard({ token, onOpenChart }) {
             <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
             <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
           </div>
-          <div className="text-xs text-gray-500 font-mono">{token.mint}</div>
+          <div className="flex items-center space-x-1">
+            <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
+            <button
+              onClick={() => copyToClipboard(token.mint)}
+              className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
+              title="Copy address"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
         <div className="text-right">
           <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>

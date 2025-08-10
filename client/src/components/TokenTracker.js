@@ -7,11 +7,11 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Функция для агрегации данных о токенах из транзакций
+  // Function to aggregate token data from transactions
   const aggregateTokens = (transactions, hours, groupId) => {
     const byToken = new Map();
 
-    // Фильтруем транзакции по времени и groupId
+    // Filter transactions by timeframe and groupId
     const now = new Date();
     const filteredTransactions = transactions.filter((tx) => {
       const txTime = new Date(tx.time);
@@ -21,7 +21,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       return matchesTimeframe && matchesGroup;
     });
 
-    // Агрегируем данные по токенам
+    // Aggregate data by token
     filteredTransactions.forEach((tx) => {
       const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
       if (!tokens || tokens.length === 0) return;
@@ -49,7 +49,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         const walletAddress = tx.wallet.address;
         const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
 
-        // Обновляем статистику кошелька
+        // Update wallet stats
         if (!wallet) {
           tokenData.wallets.push({
             address: walletAddress,
@@ -78,7 +78,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
           wallet.lastActivity = tx.time > wallet.lastActivity ? tx.time : wallet.lastActivity;
         }
 
-        // Обновляем summary
+        // Update summary
         tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
         tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
         tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
@@ -86,7 +86,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       });
     });
 
-    // Формируем итоговый массив токенов
+    // Form final token array
     const result = Array.from(byToken.values()).map((t) => ({
       ...t,
       summary: {
@@ -96,13 +96,13 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       },
     }));
 
-    // Сортируем по абсолютному значению netSOL
+    // Sort by absolute netSOL
     result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
 
     return result;
   };
 
-  // Обновляем items при изменении transactions, hours или groupId
+  // Update items on transactions, hours, or groupId change
   useEffect(() => {
     setLoading(true);
     try {
@@ -117,7 +117,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     }
   }, [transactions, hours, groupId]);
 
-  // Синхронизируем hours с timeframe из пропсов
+  // Sync hours with timeframe prop
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);
@@ -129,6 +129,15 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     }
     const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
     window.location.href = gmgnUrl;
+  };
+
+  const openGmgnChartNewTab = (mintAddress) => {
+    if (!mintAddress) {
+      console.warn('No mint address available for chart');
+      return;
+    }
+    const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
+    window.open(gmgnUrl, '_blank');
   };
 
   return (
@@ -154,8 +163,17 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       ) : (
         <div>
           {items.map((token) => (
-            <div key={token.mint} className="mb-4">
-              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
+            <div key={token.mint} className="mb-4 flex items-center">
+              <div className="flex-1">
+                <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
+              </div>
+              <button
+                onClick={() => openGmgnChartNewTab(token.mint)}
+                className="ml-2 bg-blue-600 text-white text-sm px-2 py-1 rounded hover:bg-blue-700 transition"
+                title="Open chart in new tab"
+              >
+                Open in New Tab
+              </button>
             </div>
           ))}
         </div>
