@@ -23,6 +23,28 @@ function App() {
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
 
+  const removeAllWallets = async () => {
+    try {
+      const url = selectedGroup ? `${API_BASE}/wallets?groupId=${selectedGroup}` : `${API_BASE}/wallets`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+  
+      if (!response.ok) {
+        throw new Error('Failed to remove all wallets');
+      }
+  
+      const data = await response.json();
+      setRefreshKey((prev) => prev + 1); // Обновляем состояние для повторной загрузки данных
+      return data;
+    } catch (err) {
+      throw new Error(err.message);
+    }
+  };
+
   const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
@@ -371,7 +393,11 @@ function App() {
         <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} onCreateGroup={createGroup} groups={groups} />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-            <WalletList wallets={wallets} onRemoveWallet={removeWallet} />
+          <WalletList
+  wallets={wallets}
+  onRemoveWallet={removeWallet}
+  onRemoveAllWallets={removeAllWallets}
+/>
           </div>
           <div className="lg:col-span-2">
             {view === 'tokens' ? (
