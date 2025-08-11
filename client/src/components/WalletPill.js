@@ -15,11 +15,30 @@ function WalletPill({ wallet, tokenMint }) {
     window.open(gmgnUrl, '_blank');
   };
 
+  // Function to copy wallet address to clipboard
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(wallet.address);
+  };
+
   return (
     <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
       <div className="truncate max-w-xs">
         <div className="flex items-center space-x-2">
           <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
+          <button
+            onClick={copyToClipboard}
+            className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
+            title="Copy address"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+              />
+            </svg>
+          </button>
           <button
             onClick={openGmgnTokenWithMaker}
             className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
