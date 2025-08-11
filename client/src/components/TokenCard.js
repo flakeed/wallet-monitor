@@ -25,16 +25,6 @@ function TokenCard({ token, onOpenChart }) {
     window.open(gmgnUrl, '_blank');
   };
 
-  // Function to open gmgn.ai token page with maker parameter
-  const openGmgnTokenWithMaker = (walletAddress) => {
-    if (!token.mint || !walletAddress) {
-      console.warn('No mint or wallet address available');
-      return;
-    }
-    const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(token.mint)}?maker=${encodeURIComponent(walletAddress)}`;
-    window.open(gmgnUrl, '_blank');
-  };
-
   return (
     <div className="border rounded-lg p-4 bg-gray-50">
       <div className="flex items-center justify-between mb-3">
@@ -68,15 +58,7 @@ function TokenCard({ token, onOpenChart }) {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {token.wallets.map((w) => (
-          <button
-            key={w.address}
-            onClick={() => w.isBuyer && openGmgnTokenWithMaker(w.address)}
-            className={`w-full ${w.isBuyer ? 'cursor-pointer hover:bg-gray-200' : 'cursor-default'}`}
-            disabled={!w.isBuyer}
-            title={w.isBuyer ? 'View token with maker on gmgn.ai' : ''}
-          >
-            <WalletPill wallet={w} />
-          </button>
+          <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
         ))}
       </div>
       <div className="mt-2 flex space-x-2">
