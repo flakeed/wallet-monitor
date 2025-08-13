@@ -114,10 +114,6 @@ CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON tokens FOR EACH ROW EXE
 CREATE TRIGGER update_wallet_stats_updated_at BEFORE UPDATE ON wallet_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE OR REPLACE VIEW wallet_overview AS
-
-DROP INDEX IF EXISTS idx_wallets_address;
--- Run bulk insert
-CREATE INDEX idx_wallets_address ON wallets(address);
 SELECT 
     w.id,
     w.address,
@@ -137,9 +133,7 @@ FROM wallets w
 LEFT JOIN groups g ON w.group_id = g.id
 LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
 WHERE w.is_active = TRUE;
-DROP INDEX IF EXISTS idx_wallets_address;
--- Run bulk insert
-CREATE INDEX idx_wallets_address ON wallets(address);
+
 CREATE OR REPLACE VIEW recent_transactions_detailed AS
 SELECT 
     t.id,
