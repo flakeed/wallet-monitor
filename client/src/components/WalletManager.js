@@ -101,7 +101,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
       return;
     }
 
-    if (wallets.length > 1000) {
+    if (wallets.length > 10000) {
       setBulkResults({
         type: 'error',
         message: 'Maximum 1000 wallets allowed per bulk import. Please split your list.'
