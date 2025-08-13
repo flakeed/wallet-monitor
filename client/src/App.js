@@ -7,7 +7,7 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
-
+import './index.css';
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
