@@ -408,48 +408,73 @@ app.get('/api/stats/transactions', async (req, res) => {
 
 app.post('/api/wallets/bulk', async (req, res) => {
   try {
-    const { wallets, groupId } = req.body;
+    const { wallets: inputWallets, groupId } = req.body;
 
-    if (!wallets || !Array.isArray(wallets)) {
+    if (!inputWallets || !Array.isArray(inputWallets)) {
       return res.status(400).json({ error: 'Wallets array is required' });
     }
 
-    if (wallets.length === 0) {
+    if (inputWallets.length === 0) {
       return res.status(400).json({ error: 'At least one wallet is required' });
     }
 
-    if (wallets.length > 10000) {
-      return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
+    if (inputWallets.length > 10000) {
+      return res.status(400).json({ error: 'Maximum 10000 wallets allowed per bulk import' });
     }
 
     const results = {
-      total: wallets.length,
+      total: inputWallets.length,
       successful: 0,
       failed: 0,
       errors: [],
       successfulWallets: [],
     };
 
-    for (const wallet of wallets) {
-      if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+    const processedWallets = [];
+    for (const wallet of inputWallets) {
+      let { address, name } = wallet;
+      let originalAddress = address;
+
+      // Detect and handle extra characters
+      if (address && address.length > 44) {
+        const extraChars = address.slice(44);
+        address = address.slice(0, 44); // Trim to 44 characters
+        if (!/^[1-9A-HJ-NP-Za-km-z]{44}$/.test(address)) {
+          results.failed++;
+          results.errors.push({
+            original: originalAddress,
+            address,
+            name,
+            error: `Invalid address format with extra characters: "${extraChars}"`,
+          });
+          continue;
+        } else {
+          results.errors.push({
+            original: originalAddress,
+            address,
+            name,
+            error: `Extra characters detected and trimmed: "${extraChars}"`,
+          });
+        }
+      } else if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
         results.failed++;
         results.errors.push({
-          address: wallet.address || 'invalid',
-          name: wallet.name || null,
+          original: originalAddress,
+          address,
+          name,
           error: 'Invalid Solana wallet address format',
         });
         continue;
       }
+
+      processedWallets.push({ address, name });
     }
 
     const batchSize = 400;
-    for (let i = 0; i < wallets.length; i += batchSize) {
-      const batch = wallets.slice(i, i + batchSize);
+    for (let i = 0; i < processedWallets.length; i += batchSize) {
+      const batch = processedWallets.slice(i, i + batchSize);
       await Promise.all(
         batch.map(async (wallet) => {
-          const hasError = results.errors.some((error) => error.address === wallet.address);
-          if (hasError) return;
-
           try {
             const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId);
             results.successful++;
@@ -462,6 +487,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
           } catch (error) {
             results.failed++;
             results.errors.push({
+              original: wallet.address,
               address: wallet.address,
               name: wallet.name || null,
               error: error.message,
@@ -483,16 +509,18 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
+
 app.get('/api/wallets/bulk-template', (req, res) => {
   const template = `# Bulk Wallet Import Template
 # Format: address,name (name is optional)
 # One wallet per line
 # Lines starting with # are ignored
 # Maximum 10000 wallets
+# Extra characters will be detected and trimmed if possible
 
 # Example wallets (replace with real addresses):
 9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
-53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader
+53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucCxxx,Important Trader  # Extra 'xxx' will be trimmed
 Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
 7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet`;
 

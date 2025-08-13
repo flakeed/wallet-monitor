@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups }) {
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
-  const [groupId, setGroupId] = useState('');
+  [groupId, setGroupId] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
@@ -61,26 +61,53 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
   const parseBulkInput = (text) => {
     const lines = text.trim().split('\n').filter(line => line.trim());
     const wallets = [];
+    const validationErrors = [];
 
     for (const line of lines) {
       const trimmedLine = line.trim();
+      let address = trimmedLine;
+      let name = null;
 
+      // Check for comma or tab to separate address and name
       if (trimmedLine.includes(',') || trimmedLine.includes('\t')) {
         const parts = trimmedLine.split(/[,\t]/).map(p => p.trim());
-        const address = parts[0];
-        const name = parts[1] || null;
+        address = parts[0];
+        name = parts[1] || null;
+      }
 
-        if (address && address.length === 44) {
-          wallets.push({ address, name });
+      // Detect extra characters and attempt to extract valid address
+      if (address.length > 44) {
+        const extraChars = address.slice(44);
+        let validAddress = address.slice(0, 44);
+        if (/^[1-9A-HJ-NP-Za-km-z]+$/.test(validAddress)) {
+          wallets.push({ address: validAddress, name });
+          validationErrors.push({
+            original: trimmedLine,
+            address: validAddress,
+            name,
+            error: `Extra characters detected: "${extraChars}"`,
+          });
+        } else {
+          validationErrors.push({
+            original: trimmedLine,
+            address,
+            name,
+            error: `Invalid address format with extra characters: "${extraChars}"`,
+          });
         }
+      } else if (address.length === 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+        wallets.push({ address, name });
       } else {
-        if (trimmedLine.length === 44) {
-          wallets.push({ address: trimmedLine, name: null });
-        }
+        validationErrors.push({
+          original: trimmedLine,
+          address,
+          name,
+          error: 'Invalid Solana wallet address format',
+        });
       }
     }
 
-    return wallets;
+    return { wallets, validationErrors };
   };
 
   const handleBulkSubmit = async (e) => {
@@ -91,12 +118,13 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
       return;
     }
 
-    const wallets = parseBulkInput(bulkText);
+    const { wallets, validationErrors } = parseBulkInput(bulkText);
 
-    if (wallets.length === 0) {
+    if (wallets.length === 0 && validationErrors.length > 0) {
       setBulkResults({
         type: 'error',
-        message: 'No valid wallet addresses found. Make sure addresses are 44 characters long.'
+        message: 'No valid wallet addresses found. Check the format.',
+        details: { errors: validationErrors },
       });
       return;
     }
@@ -104,7 +132,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     if (wallets.length > 10000) {
       setBulkResults({
         type: 'error',
-        message: 'Maximum 1000 wallets allowed per bulk import. Please split your list.'
+        message: 'Maximum 10000 wallets allowed per bulk import. Please split your list.',
       });
       return;
     }
@@ -115,10 +143,15 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     try {
       const result = await onAddWalletsBulk(wallets, groupId || null);
 
+      const finalResults = {
+        ...result.results,
+        errors: [...(result.results.errors || []), ...validationErrors.filter(err => !err.address || !/^[1-9A-HJ-NP-Za-km-z]{44}$/.test(err.address))],
+      };
+
       setBulkResults({
         type: 'success',
         message: result.message,
-        details: result.results
+        details: finalResults,
       });
 
       if (result.results.successful > 0) {
@@ -128,7 +161,8 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     } catch (error) {
       setBulkResults({
         type: 'error',
-        message: `Bulk import failed: ${error.message}`
+        message: `Bulk import failed: ${error.message}`,
+        details: { errors: validationErrors },
       });
     } finally {
       setBulkLoading(false);
@@ -269,10 +303,11 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
             <div className="text-sm text-blue-800 space-y-1">
               <p>• One wallet address per line</p>
               <p>• Optional: Add name after comma or tab: <code className="bg-blue-100 px-1 rounded">address,name</code></p>
+              <p>• Extra characters will be detected and trimmed if possible</p>
               <p>• Example:</p>
               <div className="mt-2 bg-blue-100 p-2 rounded font-mono text-xs">
                 9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1<br />
-                53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC<br />
+                53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucCxxx<br />
                 Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
               </div>
             </div>
@@ -313,7 +348,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
                       <div className="mt-2 max-h-32 overflow-y-auto bg-red-100 p-2 rounded text-xs">
                         {bulkResults.details.errors.map((error, i) => (
                           <div key={i} className="text-red-800">
-                            {error.address.slice(0, 8)}...{error.name ? ` (${error.name})` : ''}: {error.error}
+                            {error.original.slice(0, 8)}...{error.name ? ` (${error.name})` : ''}: {error.error}
                           </div>
                         ))}
                       </div>
@@ -338,7 +373,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
                 disabled={bulkLoading}
               />
               <div className="mt-2 text-sm text-gray-500">
-                {bulkText.trim() && `${parseBulkInput(bulkText).length} valid wallets detected`}
+                {bulkText.trim() && `${parseBulkInput(bulkText).wallets.length} valid wallets detected`}
               </div>
             </div>
 
@@ -355,7 +390,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
                 <option value="">Select a group (optional)</option>
                 {groups.map((group) => (
                   <option key={group.id} value={group.id}>
-                    {group.name} ({group.walletCount} wallets)
+                    {group.name} ({group.wallet_count} wallets)
                   </option>
                 ))}
               </select>
@@ -372,7 +407,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
                   Importing Wallets...
                 </>
               ) : (
-                `Import ${parseBulkInput(bulkText).length} Wallets`
+                `Import ${parseBulkInput(bulkText).wallets.length} Wallets`
               )}
             </button>
           </form>
