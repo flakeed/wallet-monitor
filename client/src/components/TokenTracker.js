@@ -2,61 +2,45 @@ import React, { useState, useEffect, useCallback } from 'react';
 
 import TokenCard from './TokenCard';
 
-function TokenTracker({ groupId, timeframe = '24' }) {
+function TokenCard({ token, onOpenChart, currentPrice }) {
   const [items, setItems] = useState([]);
-  const [hours, setHours] = useState(timeframe);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tokenPrices, setTokenPrices] = useState({});
   const [priceLoading, setPriceLoading] = useState(false);
 
-  // Fetch token data from API
   const fetchTokenData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
     try {
-      const params = new URLSearchParams();
-      params.append('hours', hours);
-      if (groupId) params.append('groupId', groupId);
-      
-      const response = await fetch(`/api/tokens/tracker?${params}`);
+      const response = await fetch(`/api/tokens/tracker?hours=24`);
       if (!response.ok) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
       
-      const responseData = await response.json();
-      console.log('Fetched token data:', responseData);
+      const data = await response.json();
+      console.log('Fetched token data:', data); // Line 48
+      setItems(data); // This is wrong; causes errors
       
-      // Check if response has data property and it's an array
-      if (!responseData.success || !Array.isArray(responseData.data)) {
-        throw new Error('Invalid API response format: expected an array in data property');
-      }
-      
-      const data = responseData.data; // Extract the data array
-      setItems(data);
-      
-      // Fetch prices for tokens with remaining balances
       const mintsWithBalance = data
-        .filter(token => token.summary.totalTokensRemaining > 0)
+        .filter(token => token.summary.totalTokensRemaining > 0) // Line 53: Error here
         .map(token => token.mint);
       
       if (mintsWithBalance.length > 0) {
         fetchTokenPrices(mintsWithBalance);
       }
     } catch (e) {
-      console.error('Error fetching token data:', e);
+      console.error('Error fetching token data:', e); // Line 60
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [hours, groupId]);
+  }, []);
 
-  // Fetch current token prices (you'll need to implement this based on your price API)
   const fetchTokenPrices = async (mints) => {
     setPriceLoading(true);
     try {
-      // Use local API endpoint instead of Jupiter
       const response = await fetch(`/api/tokens/price/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -81,6 +65,10 @@ function TokenTracker({ groupId, timeframe = '24' }) {
       setPriceLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchTokenData();
+  }, [fetchTokenData]);
 
   // Calculate unrealized PnL for each token
   const calculateUnrealizedPnL = (token, currentPrice) => {
