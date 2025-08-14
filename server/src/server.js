@@ -379,7 +379,7 @@ app.get('/api/wallet/:address', async (req, res) => {
       return res.status(404).json({ error: 'Wallet not found in monitoring list' });
     }
 
-    const connection = new Connection(process.env.HELIUS_RPC_URL, 'confirmed');
+    const connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
     const publicKey = new PublicKey(address);
     const balanceLamports = await connection.getBalance(publicKey);
     const balanceSol = balanceLamports / 1e9;

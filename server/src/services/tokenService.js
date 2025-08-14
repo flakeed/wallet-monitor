@@ -1,6 +1,5 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { TokenListProvider } = require('@solana/spl-token-registry');
-const axios = require('axios');
 const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
@@ -19,12 +18,9 @@ redis.on('error', (err) => {
 });
 
 const promiseStore = new Map();
-const REQUEST_DELAY = 50; 
+const REQUEST_DELAY = 50;
 const TOKEN_CACHE_TTL = 24 * 60 * 60;
-const PRICE_CACHE_TTL = 60 * 60;
 const PROMISE_TTL = 60;
-let lastPriceRequest = 0;
-const PRICE_REQUEST_DELAY = 100; 
 
 (async () => {
     try {
@@ -44,8 +40,8 @@ const PRICE_REQUEST_DELAY = 100;
         await pipeline.exec();
         console.log(`[${new Date().toISOString()}] ✅ Stored ${tokenList.length} tokens in Redis`);
 
-        await redis.del('helius:queue');
-        console.log(`[${new Date().toISOString()}] ✅ Cleared stale Helius queue`);
+        await redis.del('metadata:queue');
+        console.log(`[${new Date().toISOString()}] ✅ Cleared stale metadata queue`);
     } catch (e) {
         console.error(`[${new Date().toISOString()}] Failed to load token registry:`, e.message);
     }
@@ -56,7 +52,7 @@ async function processQueue() {
     isProcessingQueue = true;
 
     while (true) {
-        const requestData = await redis.lpop('helius:queue', 400); 
+        const requestData = await redis.lpop('metadata:queue', 400);
         if (!requestData || requestData.length === 0) break;
 
         const requests = requestData.map((data) => {
@@ -72,10 +68,10 @@ async function processQueue() {
             requests.map(async (request) => {
                 const { requestId, mint, connection: rpcEndpoint } = request;
                 const connection = new Connection(rpcEndpoint, 'confirmed');
-                console.log(`[${new Date().toISOString()}] Processing Helius request ${requestId} for mint ${mint}`);
+                console.log(`[${new Date().toISOString()}] Processing metadata request ${requestId} for mint ${mint}`);
 
                 try {
-                    const result = await processHeliusRequest(mint, connection);
+                    const result = await processTokenMetadataRequest(mint, connection);
                     const promise = promiseStore.get(requestId);
                     if (promise) {
                         promise.resolve(result);
@@ -83,7 +79,7 @@ async function processQueue() {
                         console.warn(`[${new Date().toISOString()}] No promise found for request ${requestId}`);
                     }
                 } catch (error) {
-                    console.error(`[${new Date().toISOString()}] Error processing Helius request ${requestId} for mint ${mint}:`, error.message);
+                    console.error(`[${new Date().toISOString()}] Error processing metadata request ${requestId} for mint ${mint}:`, error.message);
                     const promise = promiseStore.get(requestId);
                     if (promise) {
                         promise.reject(error);
@@ -97,59 +93,31 @@ async function processQueue() {
     }
 
     isProcessingQueue = false;
-    const queueLength = await redis.llen('helius:queue');
+    const queueLength = await redis.llen('metadata:queue');
     if (queueLength > 0) {
         setImmediate(processQueue);
     }
 }
 
-async function processHeliusRequest(mint, connection) {
+async function processTokenMetadataRequest(mint, connection) {
     const cachedToken = await redis.get(`token:${mint}`);
     if (cachedToken) {
         console.log(`[${new Date().toISOString()}] Using Redis cached metadata for mint ${mint}`);
         return JSON.parse(cachedToken);
     }
 
-    const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
-    if (!HELIUS_API_KEY) {
-        console.warn(`[${new Date().toISOString()}] HELIUS_API_KEY not set — trying on-chain metadata`);
+    try {
+        console.log(`[${new Date().toISOString()}] Fetching on-chain metadata for mint: ${mint}`);
         const onChainData = await fetchOnChainMetadata(mint, connection);
-        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token',  decimals: 0 };
+        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
+        await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
+        return data;
+    } catch (e) {
+        console.error(`[${new Date().toISOString()}] Error fetching metadata for mint ${mint}:`, e.message);
+        const data = { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
         await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
         return data;
     }
-
-    try {
-        console.log(`[${new Date().toISOString()}] Fetching metadata for mint: ${mint}`);
-        const response = await axios.post(
-            `https://api.helius.xyz/v0/token-metadata?api-key=${HELIUS_API_KEY}`,
-            { mintAccounts: [mint] },
-            { timeout: 3000 }
-        );
-
-        if (response.data && response.data.length > 0) {
-            const meta = response.data[0];
-
-            const tokenData = {
-                address: mint,
-                symbol: meta.onChainMetadata?.metadata?.data?.symbol || 'Unknown',
-                name: meta.onChainMetadata?.metadata?.data?.name || 'Unknown Token',
-                decimals: meta.onChainAccountInfo?.accountInfo?.data?.parsed?.info?.decimals || 0,
-            };
-
-            await redis.set(`token:${mint}`, JSON.stringify(tokenData), 'EX', TOKEN_CACHE_TTL);
-            return tokenData;
-        }
-
-        console.warn(`[${new Date().toISOString()}] No metadata found for mint ${mint} in Helius API`);
-    } catch (e) {
-        console.error(`[${new Date().toISOString()}] Helius API error for mint ${mint}:`, e.response?.data || e.message);
-    }
-
-    const onChainData = await fetchOnChainMetadata(mint, connection);
-    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token',decimals: 0 };
-    await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
-    return data;
 }
 
 async function fetchTokenMetadata(mint, connection) {
@@ -161,11 +129,11 @@ async function fetchTokenMetadata(mint, connection) {
 
     return new Promise((resolve, reject) => {
         const requestId = uuidv4();
-        console.log(`[${new Date().toISOString()}] Enqueued Helius request ${requestId} for mint ${mint}`);
+        console.log(`[${new Date().toISOString()}] Enqueued metadata request ${requestId} for mint ${mint}`);
 
         promiseStore.set(requestId, { resolve, reject });
 
-        redis.lpush('helius:queue', JSON.stringify({
+        redis.lpush('metadata:queue', JSON.stringify({
             requestId,
             mint,
             connection: connection.rpcEndpoint,
@@ -191,57 +159,6 @@ async function fetchTokenMetadata(mint, connection) {
         }, PROMISE_TTL * 1000);
     });
 }
-
-// async function fetchHistoricalSolPrice(timestamp) {
-//     const cacheKey = `solprice:${timestamp.toISOString().slice(0, 16)}`;
-//     const cachedPrice = await redis.get(cacheKey);
-//     if (cachedPrice) {
-//         console.log(`[${new Date().toISOString()}] ⚡ Fast SOL price cache hit for ${cacheKey}: $${cachedPrice}`);
-//         return parseFloat(cachedPrice);
-//     }
-
-//     const time_now = Date.now();
-//     if (time_now - lastPriceRequest < PRICE_REQUEST_DELAY) {
-//         await new Promise((resolve) => setTimeout(resolve, PRICE_REQUEST_DELAY));
-//     }
-//     lastPriceRequest = Date.now();
-
-//     try {
-//         const time = timestamp.getTime();
-//         console.log(`[${new Date().toISOString()}] Fetching historical SOL price for ${cacheKey}`);
-//         const response = await axios.get(
-//             `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=${time}&endTime=${time + 60000}`,
-//             { timeout: 3000 }
-//         );
-
-//         let price = null;
-//         if (response.data && response.data.length > 0) {
-//             price = parseFloat(response.data[0][4]);
-//             console.log(`[${new Date().toISOString()}] ✅ Got historical SOL price: $${price}`);
-//         } else {
-//             const currentResponse = await axios.get(
-//                 `https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT`,
-//                 { timeout: 3000 }
-//             );
-//             price = parseFloat(currentResponse.data.price);
-//             console.log(`[${new Date().toISOString()}] ✅ Using current SOL price: $${price}`);
-//         }
-
-//         if (price) {
-//             await redis.set(cacheKey, price, 'EX', PRICE_CACHE_TTL);
-//             return price;
-//         }
-
-//         console.warn(`[${new Date().toISOString()}] No price data available for ${cacheKey}`);
-//     } catch (e) {
-//         console.error(`[${new Date().toISOString()}] Error fetching SOL price for ${cacheKey}:`, e.message);
-//     }
-
-//     console.warn(`[${new Date().toISOString()}] Using fallback price for ${cacheKey}`);
-//     const fallbackPrice = 180;
-//     await redis.set(cacheKey, fallbackPrice, 'EX', PRICE_CACHE_TTL);
-//     return fallbackPrice;
-// }
 
 async function fetchOnChainMetadata(mint, connection) {
     try {
