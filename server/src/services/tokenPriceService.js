@@ -85,7 +85,7 @@ class TokenPriceService {
                 return JSON.parse(cached);
             }
 
-            const priceData = await this.fetchJupiterPrice(tokenMint);
+            const priceData = await this.fetchTokenPrice(tokenMint);
             if (priceData) {
                 await this.redis.set(`price:${tokenMint}`, JSON.stringify(priceData), 'EX', this.CACHE_TTL);
                 return priceData;
@@ -98,45 +98,137 @@ class TokenPriceService {
         }
     }
 
-    async fetchJupiterPrice(tokenMint, retries = 3, delay = 1000) {
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            console.log(`[${new Date().toISOString()}] 🔍 Fetching price from Jupiter for ${tokenMint} (attempt ${attempt})`);
-            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=${tokenMint},${this.SOL_MINT}`);
-            if (!response.ok) {
-                console.log(`[${new Date().toISOString()}] ❌ Jupiter API returned ${response.status}`);
-                if (attempt === retries) return null;
-                throw new Error(`HTTP ${response.status}`);
+    async fetchTokenPrice(tokenMint, retries = 3, delay = 1000) {
+        const BIRDEYE_API = 'https://public-api.birdeye.so/public/price';
+        const SOL_MINT = 'So11111111111111111111111111111111111111112';
+    
+        // Функция для получения цены SOL/USD
+        const getSOLPrice = async () => {
+            try {
+                const response = await fetch(`${BIRDEYE_API}?address=${SOL_MINT}`, {
+                    timeout: 5000,
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'wallet-monitor-backend/1.0'
+                    }
+                });
+                if (!response.ok) {
+                    console.error(`[${new Date().toISOString()}] ❌ Birdeye API returned ${response.status} for SOL price`);
+                    return 150; // Фallback-цена SOL в USD
+                }
+                const data = await response.json();
+                return data.data?.value || 150;
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Birdeye SOL price fetch error:`, error.message);
+                return 150;
             }
-
-            const data = await response.json();
-            if (data.data && data.data[tokenMint]) {
-                const tokenPrice = data.data[tokenMint].price;
-                const solPrice = data.data[this.SOL_MINT]?.price || 150;
-
-                const priceData = {
-                    priceInSOL: tokenPrice / solPrice,
-                    priceInUSD: tokenPrice,
-                    source: 'jupiter',
-                    timestamp: Date.now()
-                };
-
-                console.log(`[${new Date().toISOString()}] ✅ Got price for ${tokenMint}: ${priceData.priceInSOL} SOL`);
-                return priceData;
+        };
+    
+        // Основной запрос цены токена
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                console.log(`[${new Date().toISOString()}] 🔍 Fetching price from Birdeye for ${tokenMint} (attempt ${attempt})`);
+                const startTime = Date.now();
+                const response = await fetch(`${BIRDEYE_API}?address=${tokenMint}`, {
+                    timeout: 5000,
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'wallet-monitor-backend/1.0'
+                    }
+                });
+                const duration = Date.now() - startTime;
+    
+                if (!response.ok) {
+                    if (response.status === 429) {
+                        console.log(`[${new Date().toISOString()}] ⚠️ Birdeye rate limit exceeded for ${tokenMint} (duration: ${duration}ms)`);
+                        if (attempt === retries) break;
+                        await new Promise(resolve => setTimeout(resolve, delay * attempt));
+                        continue;
+                    }
+                    console.error(`[${new Date().toISOString()}] ❌ Birdeye API returned ${response.status} for ${tokenMint} (duration: ${duration}ms)`);
+                    if (attempt === retries) break;
+                    throw new Error(`HTTP ${response.status}`);
+                }
+    
+                const data = await response.json();
+                if (data.data && data.data.value) {
+                    const tokenPrice = data.data.value;
+                    const solPrice = await getSOLPrice();
+    
+                    const priceData = {
+                        priceInSOL: tokenPrice / solPrice,
+                        priceInUSD: tokenPrice,
+                        source: 'birdeye',
+                        timestamp: Date.now()
+                    };
+    
+                    console.log(`[${new Date().toISOString()}] ✅ Got price for ${tokenMint}: ${priceData.priceInSOL} SOL (duration: ${duration}ms)`);
+                    return priceData;
+                }
+    
+                console.log(`[${new Date().toISOString()}] ⚠️ No price data from Birdeye for ${tokenMint} (duration: ${duration}ms)`);
+                break;
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Birdeye API error for ${tokenMint} (attempt ${attempt}):`, error.message, error.stack);
+                if (attempt < retries) {
+                    await new Promise(resolve => setTimeout(resolve, delay * attempt));
+                }
             }
-
-            console.log(`[${new Date().toISOString()}] ⚠️ No price data from Jupiter for ${tokenMint}`);
-            return null;
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Jupiter API error (attempt ${attempt}):`, error.message);
-            if (attempt < retries) {
-                await new Promise(resolve => setTimeout(resolve, delay));
-                continue;
-            }
-            return null;
         }
+    
+        // Fallback к Jupiter API (опционально)
+        console.log(`[${new Date().toISOString()}] 🔍 Falling back to Jupiter API for ${tokenMint}`);
+        const JUPITER_API = 'https://price.jup.ag/v4/price';
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                console.log(`[${new Date().toISOString()}] 🔍 Fetching price from Jupiter for ${tokenMint} (attempt ${attempt})`);
+                const response = await fetch(`${JUPITER_API}?ids=${tokenMint},${SOL_MINT}`, {
+                    timeout: 5000,
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'wallet-monitor-backend/1.0'
+                    }
+                });
+    
+                if (!response.ok) {
+                    if (response.status === 429) {
+                        console.log(`[${new Date().toISOString()}] ⚠️ Jupiter rate limit exceeded for ${tokenMint}`);
+                        if (attempt === retries) return null;
+                        await new Promise(resolve => setTimeout(resolve, delay * attempt));
+                        continue;
+                    }
+                    console.error(`[${new Date().toISOString()}] ❌ Jupiter API returned ${response.status} for ${tokenMint}`);
+                    if (attempt === retries) return null;
+                    throw new Error(`HTTP ${response.status}`);
+                }
+    
+                const data = await response.json();
+                if (data.data && data.data[tokenMint]) {
+                    const tokenPrice = data.data[tokenMint].price;
+                    const solPrice = data.data[SOL_MINT]?.price || 150;
+    
+                    const priceData = {
+                        priceInSOL: tokenPrice / solPrice,
+                        priceInUSD: tokenPrice,
+                        source: 'jupiter',
+                        timestamp: Date.now()
+                    };
+    
+                    console.log(`[${new Date().toISOString()}] ✅ Got price from Jupiter for ${tokenMint}: ${priceData.priceInSOL} SOL`);
+                    return priceData;
+                }
+    
+                console.log(`[${new Date().toISOString()}] ⚠️ No price data from Jupiter for ${tokenMint}`);
+                return null;
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Jupiter API error for ${tokenMint} (attempt ${attempt}):`, error.message, error.stack);
+                if (attempt === retries) return null;
+                await new Promise(resolve => setTimeout(resolve, delay * attempt));
+            }
+        }
+    
+        return null;
     }
-}
 
     async getSOLPrice() {
         try {
