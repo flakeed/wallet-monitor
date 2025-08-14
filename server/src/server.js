@@ -98,6 +98,7 @@ async function fetchTokenPrice(mint) {
   try {
     const response = await fetch(`https://api.jup.ag/price/v1/tokens/${mint}`);
     const data = await response.json();
+    console.log(`[${new Date().toISOString()}] Price for ${mint}: ${data.price || 0}`); // Логирование для отладки
     return data.price || 0;
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${mint}:`, error.message);
@@ -652,9 +653,9 @@ app.get('/api/tokens/tracker', async (req, res) => {
             uniqueWallets: 0,
             totalBuys: 0,
             totalSells: 0,
-            totalBought: 0,
-            totalSpentSOL: 0,
-            totalReceivedSOL: 0,
+            totalBoughtTokens: 0, // Общее количество купленных токенов
+            totalSpentSOL: 0,    // Общая сумма потраченных SOL
+            totalReceivedSOL: 0, // Общая сумма полученных SOL
             realizedPNL: 0,
             unrealizedPNL: 0,
           },
@@ -663,9 +664,11 @@ app.get('/api/tokens/tracker', async (req, res) => {
       const token = byToken.get(row.mint);
       const netTokens = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
       const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
-      const averageBuyPrice = token.summary.totalSpentSOL / (token.summary.totalBought || 1); // Избежать деления на 0
-      const unrealizedPNL = netTokens * (token.currentPrice - averageBuyPrice);
-      
+      const totalBoughtTokens = Number(row.tokens_bought || 0);
+      const totalSpentForThisWallet = Number(row.sol_spent || 0);
+      const averageBuyPrice = token.summary.totalSpentSOL / (token.summary.totalBoughtTokens || 1); // Средняя цена покупки
+      const unrealizedPNL = netTokens * (token.currentPrice - averageBuyPrice); // Расчет Unrealized P&L
+
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
@@ -673,10 +676,10 @@ app.get('/api/tokens/tracker', async (req, res) => {
         groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        tokensBought: Number(row.tokens_bought) || 0,
-        tokensSold: Number(row.tokens_sold) || 0,
+        solSpent: totalSpentForThisWallet,
+        solReceived: Number(row.sol_received || 0),
+        tokensBought: totalBoughtTokens,
+        tokensSold: Number(row.tokens_sold || 0),
         tokenBalance: netTokens,
         realizedPNL: +realizedPNL.toFixed(6),
         unrealizedPNL: +unrealizedPNL.toFixed(6),
@@ -686,9 +689,9 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalBought += Number(row.tokens_bought) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalBoughtTokens += totalBoughtTokens;
+      token.summary.totalSpentSOL += totalSpentForThisWallet;
+      token.summary.totalReceivedSOL += Number(row.sol_received || 0);
       token.summary.realizedPNL += realizedPNL;
       token.summary.unrealizedPNL += unrealizedPNL;
     }
@@ -700,6 +703,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
         realizedPNL: +t.summary.realizedPNL.toFixed(6),
         unrealizedPNL: +t.summary.unrealizedPNL.toFixed(6),
+        totalBoughtSOL: +t.summary.totalSpentSOL.toFixed(6), // Переводим Total bought в SOL
       },
     }));
 
