@@ -38,12 +38,13 @@ class Database {
                     try {
                         await client.query(statement);
                     } catch (err) {
-                        // Ignore errors (e.g., table already exists)
+                        console.warn('⚠️ Ignoring schema creation error:', err.message);
                     }
                 }
-                // Add prices table with unique constraint on mint
+                // Ensure prices table with correct unique constraint
                 await client.query(`
-                    CREATE TABLE IF NOT EXISTS prices (
+                    DROP TABLE IF EXISTS prices;
+                    CREATE TABLE prices (
                         id SERIAL PRIMARY KEY,
                         mint VARCHAR(44) NOT NULL,
                         price NUMERIC NOT NULL,

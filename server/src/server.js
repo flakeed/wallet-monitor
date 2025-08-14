@@ -643,12 +643,6 @@ app.get('/api/tokens/tracker', async (req, res) => {
 
             const apis = [
                 {
-                    name: 'Birdeye',
-                    url: `https://public-api.birdeye.so/public/price?address=${mint}`,
-                    headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || 'your-birdeye-api-key' },
-                    getPrice: (data) => data.data?.value || null,
-                },
-                {
                     name: 'CoinGecko',
                     url: `https://api.coingecko.com/api/v3/coins/solana/contract/${mint}`,
                     headers: {},
