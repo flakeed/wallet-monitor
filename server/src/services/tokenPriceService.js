@@ -1,5 +1,6 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const Redis = require('ioredis');
+const fetch = require('node-fetch');
 const { fetchTokenMetadata } = require('./tokenService');
 
 class TokenPriceService {
@@ -10,50 +11,63 @@ class TokenPriceService {
             wsEndpoint: process.env.SOLANA_WS_URL
         });
 
-        // Configure Redis with retry strategy
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212', {
-            maxRetriesPerRequest: 5,
-            retryStrategy: (times) => Math.min(times * 500, 2000), // Retry every 0.5s, up to 2s
+        // Redis configuration with enhanced retry and connection pooling
+        this.redis = new Redis({
+            host: 'switchback.proxy.rlwy.net',
+            port: 25212,
+            password: 'CwBXeFAGuARpNfwwziJyFttVApFFFyGD',
+            maxRetriesPerRequest: 10,
+            retryStrategy: (times) => {
+                if (times > 10) {
+                    console.error(`[${new Date().toISOString()}] 🛑 Redis max retries exceeded`);
+                    return null;
+                }
+                return Math.min(times * 1000, 5000);
+            },
             reconnectOnError: (err) => {
-                console.error(`[${new Date().toISOString()}] ❌ Redis connection error: ${err.message}`);
-                return true; // Attempt to reconnect
-            }
-        });
-
-        this.redisPubSub = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212', {
-            maxRetriesPerRequest: 5,
-            retryStrategy: (times) => Math.min(times * 500, 2000),
-            reconnectOnError: (err) => {
-                console.error(`[${new Date().toISOString()}] ❌ Redis Pub/Sub connection error: ${err.message}`);
+                console.error(`[${new Date().toISOString()}] ❌ Redis reconnect error: ${err.message}`);
                 return true;
-            }
+            },
+            lazyConnect: true
         });
 
-        // In-memory fallback cache
-        this.priceCache = new Map();
-        this.activeTokensCache = new Set();
-        this.CACHE_TTL = 30; // 30 seconds cache for prices
-        this.RAYDIUM_V4 = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
-        this.JUPITER_PRICE_API = 'https://price.jup.ag/v4/price';
-        this.DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
+        this.redisPubSub = new Redis({
+            host: 'switchback.proxy.rlwy.net',
+            port: 25212,
+            password: 'CwBXeFAGuARpNfwwziJyFttVApFFFyGD',
+            maxRetriesPerRequest: 10,
+            retryStrategy: (times) => {
+                if (times > 10) {
+                    console.error(`[${new Date().toISOString()}] 🛑 Redis Pub/Sub max retries exceeded`);
+                    return null;
+                }
+                return Math.min(times * 1000, 5000);
+            },
+            reconnectOnError: (err) => {
+                console.error(`[${new Date().toISOString()}] ❌ Redis Pub/Sub reconnect error: ${err.message}`);
+                return true;
+            },
+            lazyConnect: true
+        });
 
-        // Handle Redis errors
+        this.redis.on('connect', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Redis connected`);
+        });
         this.redis.on('error', (err) => {
             console.error(`[${new Date().toISOString()}] ❌ Redis error: ${err.message}`);
+        });
+        this.redisPubSub.on('connect', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Redis Pub/Sub connected`);
         });
         this.redisPubSub.on('error', (err) => {
             console.error(`[${new Date().toISOString()}] ❌ Redis Pub/Sub error: ${err.message}`);
         });
 
-        // Log successful Redis connection
-        this.redis.on('connect', () => {
-            console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
-        });
-        this.redisPubSub.on('connect', () => {
-            console.log(`[${new Date().toISOString()}] ✅ Connected to Redis Pub/Sub`);
-        });
+        this.priceCache = new Map();
+        this.activeTokensCache = new Set();
+        this.CACHE_TTL = 30; // 30 seconds cache for prices
+        this.DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
 
-        // Start periodic price updates
         this.startPriceUpdater();
     }
 
@@ -105,20 +119,7 @@ class TokenPriceService {
                 return typeof cached === 'string' ? JSON.parse(cached) : cached;
             }
 
-            // Try Jupiter API first
-            const jupiterPrice = await this.fetchJupiterPrice(tokenMint);
-            if (jupiterPrice) {
-                try {
-                    await this.redis.set(`price:${tokenMint}`, JSON.stringify(jupiterPrice), 'EX', this.CACHE_TTL);
-                    await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: jupiterPrice }));
-                } catch (error) {
-                    console.error(`[${new Date().toISOString()}] ❌ Redis cache write error for ${tokenMint}: ${error.message}`);
-                    this.priceCache.set(`price:${tokenMint}`, jupiterPrice);
-                }
-                return jupiterPrice;
-            }
-
-            // Try DexScreener as a fallback
+            // Fetch price from DexScreener
             const dexScreenerPrice = await this.fetchDexScreenerPrice(tokenMint);
             if (dexScreenerPrice) {
                 try {
@@ -131,19 +132,7 @@ class TokenPriceService {
                 return dexScreenerPrice;
             }
 
-            // Fall back to Raydium pools
-            const raydiumPrice = await this.fetchRaydiumPrice(tokenMint);
-            if (raydiumPrice) {
-                try {
-                    await this.redis.set(`price:${tokenMint}`, JSON.stringify(raydiumPrice), 'EX', this.CACHE_TTL);
-                    await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: raydiumPrice }));
-                } catch (error) {
-                    console.error(`[${new Date().toISOString()}] ❌ Redis cache write error for ${tokenMint}: ${error.message}`);
-                    this.priceCache.set(`price:${tokenMint}`, raydiumPrice);
-                }
-                return raydiumPrice;
-            }
-
+            // Return null if no price is found
             return null;
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${tokenMint}: ${error.message}`);
@@ -151,118 +140,51 @@ class TokenPriceService {
         }
     }
 
-    async fetchJupiterPrice(tokenMint) {
-        try {
-            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=${tokenMint}`);
-            if (!response.ok) return null;
-            
-            const data = await response.json();
-            if (data.data && data.data[tokenMint]) {
-                const price = data.data[tokenMint].price;
+    async fetchDexScreenerPrice(tokenMint, maxRetries = 3, retryDelay = 1000) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const response = await fetch(`${this.DEXSCREENER_API}/${tokenMint}`, {
+                    timeout: 5000,
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'wallet-monitor-backend/1.0'
+                    }
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                if (!data.pairs || data.pairs.length === 0) {
+                    console.log(`[${new Date().toISOString()}] 🔍 No pairs found for ${tokenMint} on DexScreener`);
+                    return null;
+                }
+
+                // Find the most liquid pair (highest liquidity in USD)
+                const bestPair = data.pairs.reduce((best, pair) => {
+                    const liquidity = Number(pair.liquidity?.usd || 0);
+                    return liquidity > (best.liquidity?.usd || 0) ? pair : best;
+                }, data.pairs[0]);
+
+                if (!bestPair.priceUsd || !bestPair.priceNative) {
+                    console.log(`[${new Date().toISOString()}] 🔍 No valid price data in DexScreener response for ${tokenMint}`);
+                    return null;
+                }
+
                 return {
-                    priceInSOL: price / data.data['So11111111111111111111111111111111111111112']?.price || 0,
-                    priceInUSD: price,
-                    source: 'jupiter',
+                    priceInSOL: parseFloat(bestPair.priceNative),
+                    priceInUSD: parseFloat(bestPair.priceUsd),
+                    source: 'dexscreener',
                     timestamp: Date.now()
                 };
-            }
-            return null;
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Jupiter API error: ${error.message}`);
-            return null;
-        }
-    }
-
-    async fetchDexScreenerPrice(tokenMint) {
-        try {
-            const response = await fetch(`${this.DEXSCREENER_API}/${tokenMint}`);
-            if (!response.ok) {
-                console.error(`[${new Date().toISOString()}] ❌ DexScreener API returned ${response.status}`);
-                return null;
-            }
-
-            const data = await response.json();
-            if (!data.pairs || data.pairs.length === 0) {
-                console.log(`[${new Date().toISOString()}] 🔍 No pairs found for ${tokenMint} on DexScreener`);
-                return null;
-            }
-
-            // Find the most liquid pair (highest liquidity in USD)
-            const bestPair = data.pairs.reduce((best, pair) => {
-                const liquidity = Number(pair.liquidity?.usd || 0);
-                return liquidity > (best.liquidity?.usd || 0) ? pair : best;
-            }, data.pairs[0]);
-
-            if (!bestPair.priceUsd || !bestPair.priceNative) {
-                console.log(`[${new Date().toISOString()}] 🔍 No valid price data in DexScreener response for ${tokenMint}`);
-                return null;
-            }
-
-            return {
-                priceInSOL: parseFloat(bestPair.priceNative), // Price in SOL
-                priceInUSD: parseFloat(bestPair.priceUsd),
-                source: 'dexscreener',
-                timestamp: Date.now()
-            };
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ DexScreener API error for ${tokenMint}: ${error.message}`);
-            return null;
-        }
-    }
-
-    async fetchRaydiumPrice(tokenMint) {
-        try {
-            const filters = [
-                { dataSize: 752 },
-                { memcmp: { offset: 400, bytes: tokenMint } }
-            ];
-            
-            const poolAccounts = await this.connection.getProgramAccounts(
-                this.RAYDIUM_V4,
-                { filters }
-            );
-
-            if (poolAccounts.length === 0) {
-                const altFilters = [
-                    { dataSize: 752 },
-                    { memcmp: { offset: 432, bytes: tokenMint } }
-                ];
-                const altPools = await this.connection.getProgramAccounts(
-                    this.RAYDIUM_V4,
-                    { filters: altFilters }
-                );
-                if (altPools.length > 0) {
-                    poolAccounts.push(...altPools);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ DexScreener API attempt ${attempt}/${maxRetries} failed for ${tokenMint}: ${error.message}`);
+                if (attempt === maxRetries) {
+                    console.error(`[${new Date().toISOString()}] 🛑 Max retries reached for DexScreener API`);
+                    return null;
                 }
+                await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
             }
-
-            if (poolAccounts.length === 0) return null;
-
-            const poolData = poolAccounts[0].account.data;
-            const baseVault = new PublicKey(poolData.slice(64, 96));
-            const quoteVault = new PublicKey(poolData.slice(96, 128));
-            
-            const [baseBalance, quoteBalance] = await Promise.all([
-                this.connection.getTokenAccountBalance(baseVault),
-                this.connection.getTokenAccountBalance(quoteVault)
-            ]);
-
-            const baseAmount = parseFloat(baseBalance.value.uiAmount || 0);
-            const quoteAmount = parseFloat(quoteBalance.value.uiAmount || 0);
-
-            if (baseAmount === 0) return null;
-
-            const priceInSOL = quoteAmount / baseAmount;
-
-            return {
-                priceInSOL,
-                priceInUSD: priceInSOL * (await this.getSOLPrice()),
-                source: 'raydium',
-                timestamp: Date.now()
-            };
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Raydium price fetch error: ${error.message}`);
-            return null;
         }
     }
 
@@ -279,10 +201,17 @@ class TokenPriceService {
                 return typeof cached === 'string' ? parseFloat(cached) : cached;
             }
 
-            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=So11111111111111111111111111111111111111112`);
+            // Fetch SOL price from DexScreener
+            const response = await fetch(`${this.DEXSCREENER_API}/So11111111111111111111111111111111111111112`, {
+                timeout: 5000,
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'wallet-monitor-backend/1.0'
+                }
+            });
             const data = await response.json();
-            const solPrice = data.data['So11111111111111111111111111111111111111112']?.price || 150;
-            
+            const solPrice = data.pairs && data.pairs[0]?.priceUsd ? parseFloat(data.pairs[0].priceUsd) : 150;
+
             try {
                 await this.redis.set('price:SOL', solPrice.toString(), 'EX', 60);
             } catch (error) {
@@ -298,7 +227,7 @@ class TokenPriceService {
 
     async batchUpdatePrices(tokenMints) {
         const prices = new Map();
-        const batchSize = 100;
+        const batchSize = 50; // Reduced batch size to avoid rate limits
         for (let i = 0; i < tokenMints.length; i += batchSize) {
             const batch = tokenMints.slice(i, i + batchSize);
             const batchPrices = await Promise.all(
@@ -310,6 +239,10 @@ class TokenPriceService {
                     prices.set(mint, batchPrices[index]);
                 }
             });
+            // Add delay between batches to respect rate limits
+            if (i + batchSize < tokenMints.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
         }
         
         return prices;
@@ -331,8 +264,8 @@ class TokenPriceService {
 
             let totalBalance = 0;
             for (const account of tokenAccounts.value) {
-                const balance = account.account.data.parsed.info.tokenAmount.uiAmount;
-                totalBalance += balance || 0;
+                const balance = account.account.data.parsed.info.tokenAmount.uiAmount || 0;
+                totalBalance += balance;
             }
 
             return totalBalance;
@@ -386,54 +319,66 @@ class TokenPriceService {
         
         try {
             await this.markTokenActive(tokenData.mint);
+            enrichedData.currentPrice = await this.getTokenPrice(tokenData.mint);
+            
+            enrichedData.wallets = await Promise.all(
+                tokenData.wallets.map(async (wallet) => {
+                    try {
+                        const pnlData = await this.calculateUnrealizedPnL(
+                            wallet.address,
+                            tokenData.mint,
+                            wallet.solSpent,
+                            wallet.tokensBought
+                        );
+                        
+                        return {
+                            ...wallet,
+                            currentBalance: +pnlData.currentBalance.toFixed(6),
+                            currentValueSOL: +pnlData.currentValueSOL.toFixed(6),
+                            unrealizedPnL: +pnlData.unrealizedPnL.toFixed(6),
+                            totalPnL: +(wallet.realizedPnL + pnlData.unrealizedPnL).toFixed(6),
+                            percentChange: +pnlData.percentChange.toFixed(2),
+                            remainingTokens: +pnlData.currentBalance.toFixed(6)
+                        };
+                    } catch (error) {
+                        console.error(`[${new Date().toISOString()}] ❌ Error calculating PnL for wallet ${wallet.address}, token ${tokenData.mint}: ${error.message}`);
+                        return {
+                            ...wallet,
+                            currentBalance: 0,
+                            currentValueSOL: 0,
+                            unrealizedPnL: -wallet.solSpent,
+                            totalPnL: wallet.realizedPnL - wallet.solSpent,
+                            percentChange: -100,
+                            remainingTokens: 0
+                        };
+                    }
+                })
+            );
+            
+            enrichedData.summary = {
+                ...enrichedData.summary,
+                totalUnrealizedPnL: +enrichedData.wallets.reduce(
+                    (sum, w) => sum + (w.unrealizedPnL || 0), 0
+                ).toFixed(6),
+                totalPnL: +(
+                    enrichedData.summary.totalRealizedPnL + 
+                    enrichedData.wallets.reduce((sum, w) => sum + (w.unrealizedPnL || 0), 0)
+                ).toFixed(6),
+                totalCurrentValueSOL: +enrichedData.wallets.reduce(
+                    (sum, w) => sum + (w.currentValueSOL || 0), 0
+                ).toFixed(6),
+                totalRemainingTokens: +enrichedData.wallets.reduce(
+                    (sum, w) => sum + (w.remainingTokens || 0), 0
+                ).toFixed(6),
+                avgEntryPrice: enrichedData.summary.totalSpentSOL / 
+                    (enrichedData.summary.totalBuys > 0 ? enrichedData.summary.totalBuys : 1)
+            };
+            
+            return enrichedData;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error marking token ${tokenData.mint} active: ${error.message}`);
+            console.error(`[${new Date().toISOString()}] ❌ Error enriching token ${tokenData.mint}: ${error.message}`);
+            return enrichedData;
         }
-        
-        enrichedData.currentPrice = await this.getTokenPrice(tokenData.mint);
-        
-        enrichedData.wallets = await Promise.all(
-            tokenData.wallets.map(async (wallet) => {
-                const pnlData = await this.calculateUnrealizedPnL(
-                    wallet.address,
-                    tokenData.mint,
-                    wallet.solSpent,
-                    wallet.tokensBought
-                );
-                
-                return {
-                    ...wallet,
-                    currentBalance: pnlData.currentBalance,
-                    currentValueSOL: pnlData.currentValueSOL,
-                    unrealizedPnL: pnlData.unrealizedPnL,
-                    totalPnL: wallet.pnlSol + pnlData.unrealizedPnL,
-                    percentChange: pnlData.percentChange,
-                    remainingTokens: pnlData.currentBalance
-                };
-            })
-        );
-        
-        const totalUnrealizedPnL = enrichedData.wallets.reduce(
-            (sum, w) => sum + (w.unrealizedPnL || 0), 0
-        );
-        const totalCurrentValue = enrichedData.wallets.reduce(
-            (sum, w) => sum + (w.currentValueSOL || 0), 0
-        );
-        const totalRemainingTokens = enrichedData.wallets.reduce(
-            (sum, w) => sum + (w.remainingTokens || 0), 0
-        );
-        
-        enrichedData.summary = {
-            ...enrichedData.summary,
-            totalUnrealizedPnL,
-            totalPnL: enrichedData.summary.netSOL + totalUnrealizedPnL,
-            totalCurrentValueSOL: totalCurrentValue,
-            totalRemainingTokens,
-            avgEntryPrice: enrichedData.summary.totalSpentSOL / 
-                (enrichedData.summary.totalBuys > 0 ? enrichedData.summary.totalBuys : 1)
-        };
-        
-        return enrichedData;
     }
 
     async shutdown() {
