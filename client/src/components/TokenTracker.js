@@ -56,21 +56,25 @@ function TokenTracker({ groupId, timeframe = '24' }) {
   const fetchTokenPrices = async (mints) => {
     setPriceLoading(true);
     try {
-      // Example using Jupiter Price API
-      const response = await fetch(
-        `https://price.jup.ag/v4/price?ids=${mints.join(',')}`
-      );
+      // Use local API endpoint instead of Jupiter
+      const response = await fetch(`/api/tokens/price/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mints })
+      });
       
-      if (response.ok) {
-        const data = await response.json();
-        const prices = {};
-        
-        Object.entries(data.data || {}).forEach(([mint, priceData]) => {
-          prices[mint] = priceData.price || null;
-        });
-        
-        setTokenPrices(prices);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch token prices: ${response.statusText}`);
       }
+      
+      const data = await response.json();
+      const prices = {};
+      
+      Object.entries(data.data || {}).forEach(([mint, priceData]) => {
+        prices[mint] = priceData?.priceNative || null;
+      });
+      
+      setTokenPrices(prices);
     } catch (e) {
       console.error('Error fetching token prices:', e);
     } finally {

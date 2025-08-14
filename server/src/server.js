@@ -871,7 +871,32 @@ app.get('/api/tokens/:mint/price', async (req, res) => {
     });
   }
 });
-
+app.post('/api/tokens/price/batch', async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!Array.isArray(mints) || mints.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Mints array is required' 
+      });
+    }
+    
+    const priceData = await dexScreener.getMultipleTokenData(mints);
+    
+    res.json({
+      success: true,
+      data: Object.fromEntries(priceData)
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching batch token prices:`, error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch batch token prices',
+      message: error.message 
+    });
+  }
+});
 // Endpoint to clear price cache
 app.post('/api/tokens/clear-price-cache', async (req, res) => {
   try {
