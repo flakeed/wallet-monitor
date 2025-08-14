@@ -7,7 +7,8 @@ const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
-
+const DexScreenerService = require('./services/dexScreenerService');
+const dexScreener = new DexScreenerService();
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -631,22 +632,26 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
-// Исправленный endpoint в вашем основном файле сервера
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    // ИСПРАВЛЕНО: НЕ парсим как число, оставляем как строку UUID
-    const groupId = req.query.groupId || null;
+    const groupId = req.query.groupId || null; // UUID string
+    const includePrices = req.query.prices !== 'false'; // Include prices by default
     
-    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
+    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}, prices=${includePrices}`);
     
+    // Get aggregated data from database
     const rows = await db.getTokenWalletAggregates(hours, groupId);
     
-    console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
+    console.log(`[${new Date().toISOString()}] 📊 Found ${rows.length} wallet-token combinations`);
 
     const byToken = new Map();
+    const tokenMints = new Set();
+    
+    // Process database rows
     for (const row of rows) {
+      tokenMints.add(row.mint);
+      
       if (!byToken.has(row.mint)) {
         byToken.set(row.mint, {
           mint: row.mint,
@@ -660,11 +665,28 @@ app.get('/api/tokens/tracker', async (req, res) => {
             totalSells: 0,
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
+            totalTokensBought: 0,
+            totalTokensSold: 0,
+            totalTokensRemaining: 0,
+            avgBuyPrice: 0,
+            avgSellPrice: 0,
           },
         });
       }
+      
       const token = byToken.get(row.mint);
-      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+      
+      // Calculate per-wallet statistics
+      const tokensBought = Number(row.tokens_bought) || 0;
+      const tokensSold = Number(row.tokens_sold) || 0;
+      const tokensRemaining = tokensBought - tokensSold;
+      const solSpent = Number(row.sol_spent) || 0;
+      const solReceived = Number(row.sol_received) || 0;
+      const realizedPnl = solReceived - solSpent;
+      
+      // Calculate average prices for this wallet
+      const avgBuyPrice = tokensBought > 0 ? solSpent / tokensBought : 0;
+      const avgSellPrice = tokensSold > 0 ? solReceived / tokensSold : 0;
       
       token.wallets.push({
         address: row.wallet_address,
@@ -673,36 +695,216 @@ app.get('/api/tokens/tracker', async (req, res) => {
         groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        tokensBought: Number(row.tokens_bought) || 0,
-        tokensSold: Number(row.tokens_sold) || 0,
-        pnlSol: +pnlSol.toFixed(6),
+        solSpent: solSpent,
+        solReceived: solReceived,
+        tokensBought: tokensBought,
+        tokensSold: tokensSold,
+        tokensRemaining: tokensRemaining,
+        realizedPnl: +realizedPnl.toFixed(6),
+        unrealizedPnl: 0, // Will be calculated with current price
+        totalPnl: +realizedPnl.toFixed(6), // Will be updated with unrealized
+        avgBuyPrice: avgBuyPrice,
+        avgSellPrice: avgSellPrice,
         lastActivity: row.last_activity,
+        hasPosition: tokensRemaining > 0
       });
       
+      // Update token summary
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalSpentSOL += solSpent;
+      token.summary.totalReceivedSOL += solReceived;
+      token.summary.totalTokensBought += tokensBought;
+      token.summary.totalTokensSold += tokensSold;
     }
 
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-      },
-    }));
+    // Fetch current prices from DexScreener
+    let tokenPrices = new Map();
+    let solPrice = 0;
+    
+    if (includePrices && tokenMints.size > 0) {
+      console.log(`[${new Date().toISOString()}] 💰 Fetching prices for ${tokenMints.size} tokens from DexScreener`);
+      
+      try {
+        // Fetch token prices in parallel with SOL price
+        const [pricesResult, solPriceResult] = await Promise.all([
+          dexScreener.getMultipleTokenData(Array.from(tokenMints)),
+          dexScreener.getSolPrice()
+        ]);
+        
+        tokenPrices = pricesResult;
+        solPrice = solPriceResult;
+        
+        console.log(`[${new Date().toISOString()}] ✅ Fetched prices for ${tokenPrices.size} tokens, SOL price: $${solPrice}`);
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] ⚠️ Price fetch error (non-fatal):`, error.message);
+      }
+    }
 
-    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+    // Calculate final statistics with prices
+    const result = Array.from(byToken.values()).map((t) => {
+      const totalTokensRemaining = t.summary.totalTokensBought - t.summary.totalTokensSold;
+      const avgBuyPrice = t.summary.totalTokensBought > 0 
+        ? t.summary.totalSpentSOL / t.summary.totalTokensBought 
+        : 0;
+      const avgSellPrice = t.summary.totalTokensSold > 0 
+        ? t.summary.totalReceivedSOL / t.summary.totalTokensSold 
+        : 0;
+      
+      // Get current price data from DexScreener
+      const priceData = tokenPrices.get(t.mint);
+      const currentPriceInSol = priceData?.priceNative || 0;
+      const currentPriceUsd = priceData?.priceUsd || 0;
+      
+      // Calculate unrealized PnL for the token
+      let totalUnrealizedPnl = 0;
+      
+      // Update wallet-level unrealized PnL
+      t.wallets = t.wallets.map(wallet => {
+        if (wallet.tokensRemaining > 0 && currentPriceInSol > 0) {
+          const currentValue = wallet.tokensRemaining * currentPriceInSol;
+          const costBasis = wallet.avgBuyPrice * wallet.tokensRemaining;
+          const unrealizedPnl = currentValue - costBasis;
+          
+          totalUnrealizedPnl += unrealizedPnl;
+          
+          return {
+            ...wallet,
+            unrealizedPnl: +unrealizedPnl.toFixed(6),
+            totalPnl: +(wallet.realizedPnl + unrealizedPnl).toFixed(6),
+            currentValue: +currentValue.toFixed(6),
+            costBasis: +costBasis.toFixed(6)
+          };
+        }
+        return wallet;
+      });
+      
+      // Sort wallets by total PnL
+      t.wallets.sort((a, b) => b.totalPnl - a.totalPnl);
+      
+      return {
+        ...t,
+        summary: {
+          ...t.summary,
+          netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+          totalTokensRemaining: totalTokensRemaining,
+          avgBuyPrice: avgBuyPrice,
+          avgSellPrice: avgSellPrice,
+          hasRemainingTokens: totalTokensRemaining > 0,
+          unrealizedPnl: +totalUnrealizedPnl.toFixed(6),
+          totalPnl: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL + totalUnrealizedPnl).toFixed(6),
+          walletsHolding: t.wallets.filter(w => w.tokensRemaining > 0).length,
+          walletsExited: t.wallets.filter(w => w.tokensSold > 0 && w.tokensRemaining <= 0).length
+        },
+        priceData: priceData ? {
+          priceUsd: currentPriceUsd,
+          priceSol: currentPriceInSol,
+          liquidity: priceData.liquidity?.usd || 0,
+          volume24h: priceData.volume24h || 0,
+          priceChange24h: priceData.priceChange24h || 0,
+          marketCap: priceData.marketCap || 0,
+          fdv: priceData.fdv || 0,
+          dexScreenerUrl: priceData.url || `https://dexscreener.com/solana/${t.mint}`,
+          lastUpdated: priceData.lastUpdated
+        } : null,
+        solPrice: solPrice
+      };
+    });
 
-    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
-    res.json(result);
+    // Sort by total PnL (realized + unrealized)
+    result.sort((a, b) => Math.abs(b.summary.totalPnl) - Math.abs(a.summary.totalPnl));
+
+    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens with price data`);
+    
+    res.json({
+      success: true,
+      data: result,
+      meta: {
+        totalTokens: result.length,
+        tokensWithPrices: result.filter(t => t.priceData).length,
+        tokensWithPositions: result.filter(t => t.summary.hasRemainingTokens).length,
+        solPrice: solPrice,
+        timestamp: new Date().toISOString()
+      }
+    });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
-    res.status(500).json({ error: 'Failed to build token tracker' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to build token tracker',
+      message: error.message 
+    });
+  }
+});
+
+app.get('/api/tokens/:mint/price', async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length !== 44) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid token mint address' 
+      });
+    }
+    
+    const priceData = await dexScreener.getTokenData(mint);
+    
+    if (!priceData) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Token price not found' 
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: priceData
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching token price:`, error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch token price',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint to clear price cache
+app.post('/api/tokens/clear-price-cache', async (req, res) => {
+  try {
+    await dexScreener.clearCache();
+    res.json({
+      success: true,
+      message: 'Price cache cleared successfully'
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error clearing price cache:`, error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to clear price cache',
+      message: error.message 
+    });
+  }
+});
+
+// Endpoint to get DexScreener cache statistics
+app.get('/api/tokens/cache-stats', async (req, res) => {
+  try {
+    const stats = await dexScreener.getCacheStats();
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting cache stats:`, error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get cache statistics',
+      message: error.message 
+    });
   }
 });
 

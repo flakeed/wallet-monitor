@@ -1,162 +1,271 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+
 import TokenCard from './TokenCard';
 
-function TokenTracker({ groupId, transactions, timeframe }) {
+function TokenTracker({ groupId, timeframe = '24' }) {
   const [items, setItems] = useState([]);
-  const [hours, setHours] = useState(timeframe || '24');
+  const [hours, setHours] = useState(timeframe);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [tokenPrices, setTokenPrices] = useState({});
+  const [priceLoading, setPriceLoading] = useState(false);
 
-  // Функция для агрегации данных о токенах из транзакций
-  const aggregateTokens = (transactions, hours, groupId) => {
-    const byToken = new Map();
-
-    // Фильтруем транзакции по времени и groupId
-    const now = new Date();
-    const filteredTransactions = transactions.filter((tx) => {
-      const txTime = new Date(tx.time);
-      const hoursDiff = (now - txTime) / (1000 * 60 * 60);
-      const matchesTimeframe = hoursDiff <= parseInt(hours);
-      const matchesGroup = !groupId || tx.wallet.group_id === groupId;
-      return matchesTimeframe && matchesGroup;
-    });
-
-    // Агрегируем данные по токенам
-    filteredTransactions.forEach((tx) => {
-      const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
-      if (!tokens || tokens.length === 0) return;
-
-      tokens.forEach((token) => {
-        if (!byToken.has(token.mint)) {
-          byToken.set(token.mint, {
-            mint: token.mint,
-            symbol: token.symbol || 'Unknown',
-            name: token.name || 'Unknown Token',
-            decimals: token.decimals || 6,
-            wallets: [],
-            summary: {
-              uniqueWallets: new Set(),
-              totalBuys: 0,
-              totalSells: 0,
-              totalSpentSOL: 0,
-              totalReceivedSOL: 0,
-              netSOL: 0,
-            },
-          });
-        }
-
-        const tokenData = byToken.get(token.mint);
-        const walletAddress = tx.wallet.address;
-        const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
-
-        // Обновляем статистику кошелька
-        if (!wallet) {
-          tokenData.wallets.push({
-            address: walletAddress,
-            name: tx.wallet.name || null,
-            groupId: tx.wallet.group_id,
-            groupName: tx.wallet.group_name,
-            txBuys: tx.transactionType === 'buy' ? 1 : 0,
-            txSells: tx.transactionType === 'sell' ? 1 : 0,
-            solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
-            solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
-            tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
-            tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
-            pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
-                    (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
-            lastActivity: tx.time,
-          });
-          tokenData.summary.uniqueWallets.add(walletAddress);
-        } else {
-          wallet.txBuys += tx.transactionType === 'buy' ? 1 : 0;
-          wallet.txSells += tx.transactionType === 'sell' ? 1 : 0;
-          wallet.solSpent += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-          wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
-          wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
-          wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
-          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
-          wallet.lastActivity = tx.time > wallet.lastActivity ? tx.time : wallet.lastActivity;
-        }
-
-        // Обновляем summary
-        tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
-        tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
-        tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-        tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
-      });
-    });
-
-    // Формируем итоговый массив токенов
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        uniqueWallets: t.summary.uniqueWallets.size,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-      },
-    }));
-
-    // Сортируем по абсолютному значению netSOL
-    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
-
-    return result;
-  };
-
-  // Обновляем items при изменении transactions, hours или groupId
-  useEffect(() => {
+  // Fetch token data from API
+  const fetchTokenData = useCallback(async () => {
     setLoading(true);
+    setError(null);
+    
     try {
-      const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
-      console.log('Aggregated tokens:', aggregatedTokens);
-      setItems(aggregatedTokens);
-      setError(null);
+      const params = new URLSearchParams();
+      params.append('hours', hours);
+      if (groupId) params.append('groupId', groupId);
+      
+      const response = await fetch(`/api/tokens/tracker?${params}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch token data: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Fetched token data:', data);
+      setItems(data);
+      
+      // Fetch prices for tokens with remaining balances
+      const mintsWithBalance = data
+        .filter(token => token.summary.totalTokensRemaining > 0)
+        .map(token => token.mint);
+      
+      if (mintsWithBalance.length > 0) {
+        fetchTokenPrices(mintsWithBalance);
+      }
     } catch (e) {
+      console.error('Error fetching token data:', e);
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [transactions, hours, groupId]);
+  }, [hours, groupId]);
 
-  // Синхронизируем hours с timeframe из пропсов
+  // Fetch current token prices (you'll need to implement this based on your price API)
+  const fetchTokenPrices = async (mints) => {
+    setPriceLoading(true);
+    try {
+      // Example using Jupiter Price API
+      const response = await fetch(
+        `https://price.jup.ag/v4/price?ids=${mints.join(',')}`
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        const prices = {};
+        
+        Object.entries(data.data || {}).forEach(([mint, priceData]) => {
+          prices[mint] = priceData.price || null;
+        });
+        
+        setTokenPrices(prices);
+      }
+    } catch (e) {
+      console.error('Error fetching token prices:', e);
+    } finally {
+      setPriceLoading(false);
+    }
+  };
+
+  // Calculate unrealized PnL for each token
+  const calculateUnrealizedPnL = (token, currentPrice) => {
+    if (!currentPrice || token.summary.totalTokensRemaining <= 0) {
+      return 0;
+    }
+    
+    // Current value of remaining tokens
+    const currentValue = currentPrice * token.summary.totalTokensRemaining;
+    
+    // Average cost basis for remaining tokens
+    const avgCostBasis = token.summary.avgBuyPrice * token.summary.totalTokensRemaining;
+    
+    // Unrealized PnL in SOL (assuming price is in SOL terms)
+    return currentValue - avgCostBasis;
+  };
+
+  // Enhanced items with unrealized PnL
+  const enhancedItems = items.map(token => {
+    const currentPrice = tokenPrices[token.mint];
+    const unrealizedPnl = calculateUnrealizedPnL(token, currentPrice);
+    
+    // Enhance wallets with unrealized PnL
+    const enhancedWallets = token.wallets.map(wallet => {
+      const walletUnrealizedPnl = currentPrice && wallet.tokensRemaining > 0
+        ? (currentPrice * wallet.tokensRemaining) - (wallet.avgBuyPrice * wallet.tokensRemaining)
+        : 0;
+      
+      return {
+        ...wallet,
+        unrealizedPnl: walletUnrealizedPnl,
+        totalPnl: wallet.pnlSol + walletUnrealizedPnl,
+      };
+    });
+    
+    return {
+      ...token,
+      wallets: enhancedWallets,
+      currentPrice,
+      summary: {
+        ...token.summary,
+        unrealizedPnl,
+        totalPnl: token.summary.netSOL + unrealizedPnl,
+      },
+    };
+  });
+
+  // Load data on mount and when dependencies change
+  useEffect(() => {
+    fetchTokenData();
+  }, [fetchTokenData]);
+
+  // Update hours when timeframe prop changes
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);
 
+  // Open GMGN chart
   const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
       console.warn('No mint address available for chart');
       return;
     }
     const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
-    window.location.href = gmgnUrl;
+    window.open(gmgnUrl, '_blank');
   };
+
+  // Summary statistics
+  const totals = enhancedItems.reduce((acc, token) => {
+    acc.totalSpentSOL += token.summary.totalSpentSOL;
+    acc.totalReceivedSOL += token.summary.totalReceivedSOL;
+    acc.realizedPnL += token.summary.netSOL;
+    acc.unrealizedPnL += token.summary.unrealizedPnl || 0;
+    acc.totalPnL += token.summary.totalPnl || token.summary.netSOL;
+    acc.uniqueTokens += 1;
+    acc.tokensWithBalance += token.summary.totalTokensRemaining > 0 ? 1 : 0;
+    return acc;
+  }, {
+    totalSpentSOL: 0,
+    totalReceivedSOL: 0,
+    realizedPnL: 0,
+    unrealizedPnL: 0,
+    totalPnL: 0,
+    uniqueTokens: 0,
+    tokensWithBalance: 0,
+  });
 
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
-        <select
-          value={hours}
-          onChange={(e) => setHours(e.target.value)}
-          className="text-sm border border-gray-300 rounded px-2 py-1"
-        >
-          <option value="1">Last 1 hour</option>
-          <option value="6">Last 6 hours</option>
-          <option value="24">Last 24 hours</option>
-        </select>
-      </div>
-      {loading ? (
-        <div className="text-gray-500">Loading...</div>
-      ) : error ? (
-        <div className="text-red-600">{error}</div>
-      ) : items.length === 0 ? (
-        <div className="text-gray-500">No token data for selected group/timeframe</div>
-      ) : (
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
         <div>
-          {items.map((token) => (
-            <div key={token.mint} className="mb-4">
-              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
+          <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
+          <p className="text-sm text-gray-500 mt-1">
+            Track token performance across all monitored wallets
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <select
+            value={hours}
+            onChange={(e) => setHours(e.target.value)}
+            className="text-sm border border-gray-300 rounded px-3 py-1.5"
+          >
+            <option value="1">Last 1 hour</option>
+            <option value="6">Last 6 hours</option>
+            <option value="24">Last 24 hours</option>
+            <option value="48">Last 48 hours</option>
+            <option value="168">Last 7 days</option>
+          </select>
+          <button
+            onClick={fetchTokenData}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition"
+            disabled={loading}
+          >
+            {loading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
+      {/* Summary Statistics */}
+      {enhancedItems.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg">
+          <div>
+            <div className="text-xs text-gray-600 uppercase tracking-wider">Total Spent</div>
+            <div className="text-lg font-bold text-red-600">
+              -{totals.totalSpentSOL.toFixed(4)} SOL
             </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-600 uppercase tracking-wider">Total Received</div>
+            <div className="text-lg font-bold text-green-600">
+              +{totals.totalReceivedSOL.toFixed(4)} SOL
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-600 uppercase tracking-wider">Realized PnL</div>
+            <div className={`text-lg font-bold ${totals.realizedPnL >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {totals.realizedPnL >= 0 ? '+' : ''}{totals.realizedPnL.toFixed(4)} SOL
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-600 uppercase tracking-wider">
+              Unrealized PnL
+              {priceLoading && <span className="ml-1 text-gray-400">(loading...)</span>}
+            </div>
+            <div className={`text-lg font-bold ${totals.unrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {totals.unrealizedPnL !== 0 ? (
+                <>
+                  {totals.unrealizedPnL >= 0 ? '+' : ''}{totals.unrealizedPnL.toFixed(4)} SOL
+                </>
+              ) : (
+                <span className="text-gray-400">-</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Total PnL Summary */}
+      {enhancedItems.length > 0 && totals.unrealizedPnL !== 0 && (
+        <div className="mb-6 p-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg">
+          <div className="flex justify-between items-center">
+            <div>
+              <div className="text-sm text-gray-600">Total PnL (Realized + Unrealized)</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {totals.uniqueTokens} tokens · {totals.tokensWithBalance} with remaining balance
+              </div>
+            </div>
+            <div className={`text-2xl font-bold ${totals.totalPnL >= 0 ? 'text-green-800' : 'text-red-800'}`}>
+              {totals.totalPnL >= 0 ? '+' : ''}{totals.totalPnL.toFixed(4)} SOL
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      {loading ? (
+        <div className="flex justify-center items-center py-12">
+          <div className="text-gray-500">Loading token data...</div>
+        </div>
+      ) : error ? (
+        <div className="text-red-600 p-4 bg-red-50 rounded-lg">{error}</div>
+      ) : enhancedItems.length === 0 ? (
+        <div className="text-gray-500 text-center py-12">
+          No token data available for selected timeframe
+          {groupId && ' and group'}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {enhancedItems.map((token) => (
+            <TokenCard
+              key={token.mint}
+              token={token}
+              currentPrice={token.currentPrice}
+              onOpenChart={() => openGmgnChart(token.mint)}
+            />
           ))}
         </div>
       )}
