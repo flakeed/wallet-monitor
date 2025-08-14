@@ -665,7 +665,9 @@ app.get('/api/tokens/tracker', async (req, res) => {
         });
       }
       const token = byToken.get(row.mint);
-      const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
+      
+      // Calculate realized PNL only from sell transactions (sol_received - sol_spent for sells)
+      const realizedPNL = (row.tx_sells > 0) ? (Number(row.sol_received || 0) - Number(row.sol_spent || 0)) : 0;
       const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
       
       // Validate currentBalance to ensure it's non-negative
