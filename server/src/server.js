@@ -153,6 +153,30 @@ app.get('/api/wallets', async (req, res) => {
   }
 });
 
+app.get('/api/wallets/bulk-template', (req, res) => {
+  const template = `# Bulk Wallet Import Template (up to 10,000 wallets)
+# Format: address,name (name is optional)
+# One wallet per line
+# Lines starting with # are ignored
+# Maximum 10,000 wallets per import
+
+# Example wallets (replace with real addresses):
+9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Main Trading Wallet
+53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Backup Wallet
+Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
+7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Environment
+
+# Tips for large imports:
+# - Remove duplicate addresses before importing
+# - Use meaningful names for easier tracking
+# - Consider grouping wallets by strategy or purpose
+# - Monitor import progress in the UI`;
+
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Disposition', 'attachment; filename="bulk-wallet-import-10k.txt"');
+  res.send(template);
+});
+
 app.post('/api/wallets', async (req, res) => {
   try {
     const { address, name, groupId } = req.body;
@@ -418,9 +442,12 @@ app.post('/api/wallets/bulk', async (req, res) => {
       return res.status(400).json({ error: 'At least one wallet is required' });
     }
 
-    if (wallets.length > 1000) {
-      return res.status(400).json({ error: 'Maximum 1000 wallets allowed per bulk import' });
+    // Увеличиваем лимит до 10,000
+    if (wallets.length > 10000) {
+      return res.status(400).json({ error: 'Maximum 10,000 wallets allowed per bulk import' });
     }
+
+    console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets`);
 
     const results = {
       total: wallets.length,
@@ -428,8 +455,11 @@ app.post('/api/wallets/bulk', async (req, res) => {
       failed: 0,
       errors: [],
       successfulWallets: [],
+      skipped: 0
     };
 
+    // Предварительная валидация всех адресов
+    console.log(`[${new Date().toISOString()}] 🔍 Pre-validating ${wallets.length} wallet addresses...`);
     for (const wallet of wallets) {
       if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
         results.failed++;
@@ -438,105 +468,120 @@ app.post('/api/wallets/bulk', async (req, res) => {
           name: wallet.name || null,
           error: 'Invalid Solana wallet address format',
         });
-        continue;
       }
     }
 
-    const batchSize = 400;
-    for (let i = 0; i < wallets.length; i += batchSize) {
-      const batch = wallets.slice(i, i + batchSize);
-      await Promise.all(
-        batch.map(async (wallet) => {
-          const hasError = results.errors.some((error) => error.address === wallet.address);
-          if (hasError) return;
+    // Фильтруем только валидные кошельки
+    const validWallets = wallets.filter(wallet => {
+      return wallet.address && 
+             wallet.address.length === 44 && 
+             /^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address);
+    });
 
-          try {
-            const addedWallet = await solanaWebSocketService.addWallet(wallet.address, wallet.name || null, groupId);
-            results.successful++;
-            results.successfulWallets.push({
+    console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation, ${results.failed} failed`);
+
+    if (validWallets.length === 0) {
+      return res.json({
+        success: false,
+        message: 'No valid wallets to import',
+        results
+      });
+    }
+
+    // Обрабатываем пакетами по 200 кошельков для оптимальной производительности
+    const batchSize = 200;
+    const totalBatches = Math.ceil(validWallets.length / batchSize);
+    
+    console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${batchSize} wallets each...`);
+
+    for (let i = 0; i < validWallets.length; i += batchSize) {
+      const currentBatch = i / batchSize + 1;
+      const batch = validWallets.slice(i, i + batchSize);
+      
+      console.log(`[${new Date().toISOString()}] 📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} wallets)`);
+
+      // Используем Promise.allSettled для обработки всех кошельков в пакете
+      const batchPromises = batch.map(async (wallet) => {
+        try {
+          const addedWallet = await solanaWebSocketService.addWallet(
+            wallet.address, 
+            wallet.name || null, 
+            groupId
+          );
+          
+          return {
+            success: true,
+            wallet: {
               address: wallet.address,
               name: wallet.name || null,
               id: addedWallet.id,
               groupId: addedWallet.group_id,
-            });
-          } catch (error) {
+            }
+          };
+        } catch (error) {
+          return {
+            success: false,
+            wallet: wallet,
+            error: error.message
+          };
+        }
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      // Обрабатываем результаты пакета
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          const { success, wallet, error } = result.value;
+          
+          if (success) {
+            results.successful++;
+            results.successfulWallets.push(wallet);
+          } else {
             results.failed++;
             results.errors.push({
               address: wallet.address,
               name: wallet.name || null,
-              error: error.message,
+              error: error
             });
           }
-        })
-      );
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+        } else {
+          // Promise был отклонен
+          const wallet = batch[index];
+          results.failed++;
+          results.errors.push({
+            address: wallet.address,
+            name: wallet.name || null,
+            error: `Promise rejected: ${result.reason?.message || 'Unknown error'}`
+          });
+        }
+      });
 
-    res.json({
-      success: true,
-      message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed`,
-      results,
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in bulk wallet import:`, error);
-    res.status(500).json({ error: 'Failed to import wallets' });
-  }
-});
+      // Прогресс лог
+      console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Progress: ${results.successful} successful, ${results.failed} failed`);
 
-app.get('/api/wallets/bulk-template', (req, res) => {
-  const template = `# Bulk Wallet Import Template
-# Format: address,name (name is optional)
-# One wallet per line
-# Lines starting with # are ignored
-# Maximum 1000 wallets
-
-# Example wallets (replace with real addresses):
-9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Wallet 1
-53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Important Trader
-Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
-7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Wallet`;
-
-  res.setHeader('Content-Type', 'text/plain');
-  res.setHeader('Content-Disposition', 'attachment; filename="wallet-import-template.txt"');
-  res.send(template);
-});
-
-
-app.post('/api/wallets/validate', (req, res) => {
-  try {
-    const { wallets } = req.body;
-
-    if (!wallets || !Array.isArray(wallets)) {
-      return res.status(400).json({ error: 'Wallets array is required' });
-    }
-
-    const validation = {
-      total: wallets.length,
-      valid: 0,
-      invalid: 0,
-      errors: [],
-    };
-
-    for (const wallet of wallets) {
-      if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
-        validation.invalid++;
-        validation.errors.push({
-          address: wallet.address || 'missing',
-          name: wallet.name || null,
-          error: 'Invalid Solana wallet address format',
-        });
-      } else {
-        validation.valid++;
+      // Небольшая пауза между пакетами для предотвращения перегрузки БД
+      if (i + batchSize < validWallets.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
 
+    // Финальная статистика
+    const totalProcessed = results.successful + results.failed;
+    console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed: ${results.successful}/${totalProcessed} successful`);
+
     res.json({
-      success: true,
-      validation,
+      success: results.successful > 0,
+      message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
+      results
     });
+
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error validating wallets:`, error);
-    res.status(500).json({ error: 'Failed to validate wallets' });
+    console.error(`[${new Date().toISOString()}] ❌ Error in bulk wallet import:`, error);
+    res.status(500).json({ 
+      error: 'Failed to import wallets',
+      details: error.message 
+    });
   }
 });
 
@@ -686,6 +731,89 @@ app.post('/api/groups', async (req, res) => {
     }
   }
 });
+
+app.post('/api/wallets/validate-bulk', (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'Text content is required' });
+    }
+
+    const lines = text.trim().split('\n');
+    const validation = {
+      totalLines: lines.length,
+      validWallets: 0,
+      invalidWallets: 0,
+      duplicates: 0,
+      comments: 0,
+      emptyLines: 0,
+      errors: [],
+      duplicateAddresses: []
+    };
+
+    const seenAddresses = new Set();
+
+    for (let i = 0; i < lines.length; i++) {
+      const lineNum = i + 1;
+      const line = lines[i].trim();
+      
+      if (!line) {
+        validation.emptyLines++;
+        continue;
+      }
+      
+      if (line.startsWith('#')) {
+        validation.comments++;
+        continue;
+      }
+
+      let address, name;
+      if (line.includes(',') || line.includes('\t')) {
+        const parts = line.split(/[,\t]/).map(p => p.trim());
+        address = parts[0];
+        name = parts[1] || null;
+      } else {
+        address = line;
+        name = null;
+      }
+
+      if (!address) {
+        validation.invalidWallets++;
+        validation.errors.push(`Line ${lineNum}: Empty address`);
+        continue;
+      }
+
+      if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+        validation.invalidWallets++;
+        validation.errors.push(`Line ${lineNum}: Invalid address format`);
+        continue;
+      }
+
+      if (seenAddresses.has(address)) {
+        validation.duplicates++;
+        validation.duplicateAddresses.push(address);
+        continue;
+      }
+
+      seenAddresses.add(address);
+      validation.validWallets++;
+    }
+
+    validation.canImport = validation.validWallets > 0 && validation.validWallets <= 10000;
+    validation.warningMessage = validation.validWallets > 10000 ? 
+      'Too many wallets. Maximum 10,000 allowed per import.' : null;
+
+    res.json({
+      success: true,
+      validation
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error validating bulk text:`, error);
+    res.status(500).json({ error: 'Failed to validate bulk text' });
+  }
+});
+
 
 app.post('/api/groups/switch', async (req, res) => {
   try {

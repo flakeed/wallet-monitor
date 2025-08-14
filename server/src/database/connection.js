@@ -96,6 +96,27 @@ class Database {
         }
     }
 
+    async addWalletsBatch(wallets) {
+        const query = `
+          INSERT INTO wallets (address, name, group_id) 
+          VALUES ${wallets.map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`).join(', ')}
+          ON CONFLICT (address) DO NOTHING
+          RETURNING id, address, name, group_id, created_at
+        `;
+        
+        const values = [];
+        wallets.forEach(wallet => {
+          values.push(wallet.address, wallet.name, wallet.groupId);
+        });
+      
+        try {
+          const result = await this.pool.query(query, values);
+          return result.rows;
+        } catch (error) {
+          throw new Error(`Batch insert failed: ${error.message}`);
+        }
+      }
+
     async removeWallet(address) {
         const query = `
             DELETE FROM wallets 

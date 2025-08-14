@@ -1,205 +1,210 @@
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- ===== Оптимизации для PostgreSQL при массовом импорте =====
 
-CREATE TABLE IF NOT EXISTS groups (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+-- 1. Увеличение лимитов для массовых операций
+-- Добавьте эти настройки в postgresql.conf или выполните как SQL команды:
 
-CREATE TABLE IF NOT EXISTS wallets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    address VARCHAR(44) UNIQUE NOT NULL,
-    name VARCHAR(255),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+-- Увеличиваем рабочую память для сложных запросов
+SET work_mem = '256MB';
 
--- Migration to add group_id if not exists
-DO $$
+-- Увеличиваем память для обслуживания (для создания индексов)
+SET maintenance_work_mem = '1GB';
+
+-- Увеличиваем размер буфера для массовых вставок
+SET shared_buffers = '512MB';
+
+-- Отключаем автокоммит для батчевых операций (только для сессии импорта)
+SET autocommit = off;
+
+-- 2. Оптимизированные индексы для быстрого поиска дубликатов
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_address_unique 
+ON wallets(address) 
+WHERE is_active = true;
+
+-- Индекс для быстрого поиска по группам
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_group_active 
+ON wallets(group_id, is_active) 
+WHERE is_active = true;
+
+-- 3. Функция для массового добавления кошельков с оптимизацией
+CREATE OR REPLACE FUNCTION bulk_insert_wallets(
+    wallet_data jsonb[],
+    default_group_id UUID DEFAULT NULL
+) 
+RETURNS TABLE(
+    inserted_count INTEGER,
+    duplicate_count INTEGER,
+    error_count INTEGER,
+    inserted_wallets jsonb
+) 
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    result_data jsonb := '[]'::jsonb;
+    inserted_cnt INTEGER := 0;
+    duplicate_cnt INTEGER := 0;
+    error_cnt INTEGER := 0;
+    wallet_record jsonb;
+    new_wallet_id UUID;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wallets' AND column_name = 'group_id') THEN
-        ALTER TABLE wallets ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
-    END IF;
-END $$;
+    -- Создаем временную таблицу для пакетной обработки
+    CREATE TEMP TABLE temp_wallet_batch (
+        address VARCHAR(44),
+        name VARCHAR(255),
+        group_id UUID
+    ) ON COMMIT DROP;
 
-CREATE TABLE IF NOT EXISTS transactions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID NOT NULL,
-    signature VARCHAR(88) UNIQUE NOT NULL,
-    block_time TIMESTAMP WITH TIME ZONE NOT NULL,
-    sol_spent DECIMAL(20, 9) DEFAULT 0, 
-    sol_received DECIMAL(20, 9) DEFAULT 0,
-    transaction_type VARCHAR(20) DEFAULT 'buy',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
-);
+    -- Заполняем временную таблицу данными
+    FOR i IN 1..array_length(wallet_data, 1) LOOP
+        BEGIN
+            wallet_record := wallet_data[i];
+            
+            INSERT INTO temp_wallet_batch (address, name, group_id)
+            VALUES (
+                wallet_record->>'address',
+                NULLIF(wallet_record->>'name', ''),
+                COALESCE((wallet_record->>'groupId')::UUID, default_group_id)
+            );
+        EXCEPTION 
+            WHEN OTHERS THEN
+                error_cnt := error_cnt + 1;
+        END;
+    END LOOP;
 
-CREATE TABLE IF NOT EXISTS tokens (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    mint VARCHAR(44) UNIQUE NOT NULL,
-    symbol VARCHAR(20),
-    name VARCHAR(255),
-    decimals INTEGER DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+    -- Массовая вставка с обработкой дубликатов
+    WITH inserted_wallets AS (
+        INSERT INTO wallets (address, name, group_id)
+        SELECT DISTINCT t.address, t.name, t.group_id
+        FROM temp_wallet_batch t
+        LEFT JOIN wallets w ON w.address = t.address
+        WHERE w.address IS NULL
+        RETURNING id, address, name, group_id, created_at
+    )
+    SELECT 
+        COUNT(*)::INTEGER,
+        jsonb_agg(
+            jsonb_build_object(
+                'id', id,
+                'address', address,
+                'name', name,
+                'group_id', group_id,
+                'created_at', created_at
+            )
+        )
+    INTO inserted_cnt, result_data
+    FROM inserted_wallets;
 
-CREATE TABLE IF NOT EXISTS token_operations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    transaction_id UUID NOT NULL,
-    token_id UUID NOT NULL,
-    amount DECIMAL(30, 18) NOT NULL, 
-    operation_type VARCHAR(10) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (transaction_id) REFERENCES transactions (id) ON DELETE CASCADE,
-    FOREIGN KEY (token_id) REFERENCES tokens (id) ON DELETE CASCADE
-);
+    -- Подсчитываем дубликаты
+    SELECT COUNT(*)::INTEGER INTO duplicate_cnt
+    FROM temp_wallet_batch t
+    INNER JOIN wallets w ON w.address = t.address;
 
-CREATE TABLE IF NOT EXISTS wallet_stats (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    wallet_id UUID UNIQUE NOT NULL,
-    total_spent_sol DECIMAL(20, 9) DEFAULT 0,
-    total_received_sol DECIMAL(20, 9) DEFAULT 0,
-    total_buy_transactions INTEGER DEFAULT 0,
-    total_sell_transactions INTEGER DEFAULT 0,
-    unique_tokens_bought INTEGER DEFAULT 0,
-    unique_tokens_sold INTEGER DEFAULT 0,
-    last_transaction_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (wallet_id) REFERENCES wallets (id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS monitoring_stats (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    processed_signatures INTEGER DEFAULT 0,
-    total_wallets_monitored INTEGER DEFAULT 0,
-    last_scan_duration INTEGER,
-    errors_count INTEGER DEFAULT 0,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
-CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
-CREATE INDEX IF NOT EXISTS idx_wallets_is_active ON wallets(is_active);
-CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time DESC);
-CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature);
-CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(transaction_type);
-CREATE INDEX IF NOT EXISTS idx_token_operations_transaction_id ON token_operations(transaction_id);
-CREATE INDEX IF NOT EXISTS idx_token_operations_token_id ON token_operations(token_id);
-CREATE INDEX IF NOT EXISTS idx_token_operations_type ON token_operations(operation_type);
-CREATE INDEX IF NOT EXISTS idx_tokens_mint ON tokens(mint);
-CREATE INDEX IF NOT EXISTS idx_tokens_symbol ON tokens(symbol);
-CREATE INDEX IF NOT EXISTS idx_wallet_stats_wallet_id ON wallet_stats(wallet_id);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_wallet_time ON transactions(wallet_id, block_time DESC);
-CREATE INDEX IF NOT EXISTS idx_token_operations_token_amount ON token_operations(token_id, amount DESC);
-CREATE INDEX IF NOT EXISTS idx_transactions_type_time ON transactions(transaction_type, block_time DESC);
-
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
-    RETURN NEW;
+    RETURN QUERY SELECT inserted_cnt, duplicate_cnt, error_cnt, result_data;
 END;
-$$ language 'plpgsql';
+$$;
 
-CREATE TRIGGER update_groups_updated_at BEFORE UPDATE ON groups FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_wallets_updated_at BEFORE UPDATE ON wallets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_tokens_updated_at BEFORE UPDATE ON tokens FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER update_wallet_stats_updated_at BEFORE UPDATE ON wallet_stats FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+-- 4. Функция для получения статистики импорта
+CREATE OR REPLACE FUNCTION get_bulk_import_stats()
+RETURNS TABLE(
+    total_wallets BIGINT,
+    active_wallets BIGINT,
+    groups_count BIGINT,
+    avg_wallets_per_group NUMERIC,
+    last_import_time TIMESTAMP WITH TIME ZONE
+)
+LANGUAGE SQL
+STABLE
+AS $$
+    SELECT 
+        COUNT(*) as total_wallets,
+        COUNT(*) FILTER (WHERE is_active = true) as active_wallets,
+        COUNT(DISTINCT group_id) FILTER (WHERE group_id IS NOT NULL) as groups_count,
+        ROUND(AVG(group_wallet_count), 2) as avg_wallets_per_group,
+        MAX(created_at) as last_import_time
+    FROM wallets w
+    LEFT JOIN (
+        SELECT group_id, COUNT(*) as group_wallet_count
+        FROM wallets 
+        WHERE group_id IS NOT NULL 
+        GROUP BY group_id
+    ) g ON w.group_id = g.group_id;
+$$;
 
-CREATE OR REPLACE VIEW wallet_overview AS
-SELECT 
-    w.id,
-    w.address,
-    w.name,
-    w.group_id,
-    g.name as group_name,
-    w.is_active,
-    w.created_at,
-    COALESCE(ws.total_spent_sol, 0) as total_spent_sol,
-    COALESCE(ws.total_received_sol, 0) as total_received_sol,
-    COALESCE(ws.total_buy_transactions, 0) as total_buy_transactions,
-    COALESCE(ws.total_sell_transactions, 0) as total_sell_transactions,
-    COALESCE(ws.unique_tokens_bought, 0) as unique_tokens_bought,
-    COALESCE(ws.unique_tokens_sold, 0) as unique_tokens_sold,
-    ws.last_transaction_at
-FROM wallets w
-LEFT JOIN groups g ON w.group_id = g.id
-LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id
-WHERE w.is_active = TRUE;
-
-CREATE OR REPLACE VIEW recent_transactions_detailed AS
-SELECT 
-    t.id,
-    t.signature,
-    t.block_time,
-    t.transaction_type,
-    t.sol_spent,
-    t.sol_received,
-    w.address as wallet_address,
-    w.name as wallet_name,
-    w.group_id,
-    g.name as group_name,
-    tk.mint,
-    tk.symbol,
-    tk.name as token_name,
-    to_.amount as token_amount,
-    to_.operation_type,
-    tk.decimals
-FROM transactions t
-JOIN wallets w ON t.wallet_id = w.id
-LEFT JOIN groups g ON w.group_id = g.id
-LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-LEFT JOIN tokens tk ON to_.token_id = tk.id
-WHERE t.block_time >= NOW() - INTERVAL '24 hours'
-ORDER BY t.block_time DESC;
-
-DO $$
+-- 5. Процедура очистки и оптимизации после массового импорта
+CREATE OR REPLACE FUNCTION optimize_after_bulk_import()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
 BEGIN
-    -- Ensure uuid-ossp extension
-    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    -- Обновляем статистику таблиц для оптимизатора запросов
+    ANALYZE wallets;
+    ANALYZE groups;
+    ANALYZE transactions;
+    ANALYZE tokens;
+    
+    -- Очищаем неактивные записи старше 30 дней
+    DELETE FROM wallets 
+    WHERE is_active = false 
+    AND updated_at < NOW() - INTERVAL '30 days';
+    
+    -- Обновляем счетчики кошельков в группах
+    UPDATE groups 
+    SET updated_at = CURRENT_TIMESTAMP
+    FROM (
+        SELECT group_id, COUNT(*) as wallet_count
+        FROM wallets 
+        WHERE is_active = true AND group_id IS NOT NULL
+        GROUP BY group_id
+    ) counts
+    WHERE groups.id = counts.group_id;
+    
+    RAISE NOTICE 'Database optimization completed at %', NOW();
+END;
+$$;
 
-    -- Convert groups.id to UUID if it's INTEGER
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'groups' AND column_name = 'id' AND data_type = 'integer'
-    ) THEN
-        -- Update wallet_groups
-        ALTER TABLE wallet_groups ADD COLUMN IF NOT EXISTS new_group_id UUID;
-        UPDATE wallet_groups wg
-        SET new_group_id = g.new_id
-        FROM groups g
-        WHERE g.id = wg.group_id;
-        ALTER TABLE wallet_groups DROP CONSTRAINT wallet_groups_group_id_fkey;
-        ALTER TABLE wallet_groups DROP COLUMN group_id;
-        ALTER TABLE wallet_groups RENAME COLUMN new_group_id TO group_id;
+-- 6. Индексы для улучшения производительности массовых операций
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_created_at_desc 
+ON wallets(created_at DESC);
 
-        -- Update groups
-        ALTER TABLE groups ADD COLUMN IF NOT EXISTS new_id UUID DEFAULT uuid_generate_v4();
-        ALTER TABLE groups DROP CONSTRAINT groups_pkey;
-        ALTER TABLE groups DROP COLUMN id;
-        ALTER TABLE groups RENAME COLUMN new_id TO id;
-        ALTER TABLE groups ADD PRIMARY KEY (id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_wallet_group 
+ON transactions(wallet_id) 
+INCLUDE (block_time, transaction_type);
 
-        -- Add foreign key back to wallet_groups
-        ALTER TABLE wallet_groups
-        ADD CONSTRAINT wallet_groups_group_id_fkey
-        FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE;
-    END IF;
+-- 7. Настройка автовакуума для интенсивных вставок
+ALTER TABLE wallets SET (
+    autovacuum_vacuum_threshold = 1000,
+    autovacuum_analyze_threshold = 500,
+    autovacuum_vacuum_scale_factor = 0.1,
+    autovacuum_analyze_scale_factor = 0.05
+);
 
-    -- Add group_id to wallets if not exists
-    IF NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_name = 'wallets' AND column_name = 'group_id'
-    ) THEN
-        ALTER TABLE wallets ADD COLUMN group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
-    END IF;
-END $$;
+-- 8. Партиционирование для больших объемов (опционально)
+-- Если ожидается более 100,000 кошельков, можно использовать партиционирование
+
+-- Создаем партиционированную таблицу для транзакций по времени
+-- CREATE TABLE transactions_partitioned (
+--     LIKE transactions INCLUDING ALL
+-- ) PARTITION BY RANGE (block_time);
+
+-- CREATE TABLE transactions_y2024 PARTITION OF transactions_partitioned
+-- FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+
+-- CREATE TABLE transactions_y2025 PARTITION OF transactions_partitioned
+-- FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
+
+-- 9. Мониторинг производительности массовых операций
+CREATE OR REPLACE VIEW bulk_import_monitoring AS
+SELECT 
+    schemaname,
+    tablename,
+    n_tup_ins as inserts_count,
+    n_tup_upd as updates_count,
+    n_tup_del as deletes_count,
+    n_live_tup as live_tuples,
+    n_dead_tup as dead_tuples,
+    last_vacuum,
+    last_autovacuum,
+    last_analyze,
+    last_autoanalyze
+FROM pg_stat_user_tables 
+WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
+ORDER BY n_tup_ins DESC;

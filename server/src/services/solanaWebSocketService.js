@@ -291,6 +291,46 @@ class SolanaWebSocketService {
         }, this.reconnectInterval);
     }
 
+    async addWalletsBatch(wallets) {
+        const addedWallets = [];
+        const errors = [];
+      
+        try {
+          // Используем пакетное добавление в БД
+          const dbWallets = wallets.map(w => ({
+            address: w.address,
+            name: w.name,
+            groupId: w.groupId
+          }));
+      
+          const insertedWallets = await this.db.addWalletsBatch(dbWallets);
+          
+          // Обновляем кэш мониторинга
+          for (const wallet of insertedWallets) {
+            if (!this.groupId || wallet.group_id === this.groupId) {
+              this.monitoredWallets.set(wallet.address, {
+                id: wallet.id,
+                address: wallet.address,
+                name: wallet.name,
+                group_id: wallet.group_id,
+                publicKey: new PublicKey(wallet.address)
+              });
+              addedWallets.push(wallet);
+            }
+          }
+      
+          // Перезапускаем WebSocket если нужно
+          if (addedWallets.length > 0 && this.isConnected) {
+            console.log(`[${new Date().toISOString()}] 🔄 Restarting WebSocket with ${this.monitoredWallets.size} wallets`);
+            await this.restart();
+          }
+      
+          return { addedWallets, errors };
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Batch wallet add error:`, error);
+          throw error;
+        }
+      }
 
     getStatus() {
         const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([walletAddress, subData]) => ({
