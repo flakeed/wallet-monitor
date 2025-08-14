@@ -38,9 +38,21 @@ class Database {
                     try {
                         await client.query(statement);
                     } catch (err) {
+                        // Ignore errors (e.g., table already exists)
                     }
                 }
-                console.log('✅ Database schema initialized');
+                // Add prices table if not exists
+                await client.query(`
+                    CREATE TABLE IF NOT EXISTS prices (
+                        id SERIAL PRIMARY KEY,
+                        mint VARCHAR(44) NOT NULL,
+                        price NUMERIC NOT NULL,
+                        source VARCHAR(50) NOT NULL,
+                        fetched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        CONSTRAINT unique_mint_price UNIQUE (mint, fetched_at)
+                    );
+                `);
+                console.log('✅ Database schema initialized with prices table');
             } finally {
                 client.release();
             }
@@ -115,7 +127,7 @@ class Database {
         } catch (error) {
           throw new Error(`Batch insert failed: ${error.message}`);
         }
-      }
+    }
 
     async removeWallet(address) {
         const query = `
@@ -199,22 +211,25 @@ class Database {
                 sol_spent, sol_received
             ) 
             VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (signature, wallet_id) DO UPDATE
+            SET block_time = EXCLUDED.block_time,
+                transaction_type = EXCLUDED.transaction_type,
+                sol_spent = EXCLUDED.sol_spent,
+                sol_received = EXCLUDED.sol_received
             RETURNING id, signature, transaction_type
         `;
         try {
             const result = await this.pool.query(query, [
-                walletId, 
-                signature, 
-                blockTime, 
+                walletId,
+                signature,
+                blockTime,
                 transactionType,
                 transactionType === 'buy' ? solAmount : 0,
                 transactionType === 'sell' ? solAmount : 0,
             ]);
             return result.rows[0];
         } catch (error) {
-            if (error.code === '23505') {
-                return null; 
-            }
+            console.error('❌ Error adding transaction:', error);
             throw error;
         }
     }
@@ -430,12 +445,17 @@ class Database {
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
-                MAX(t.block_time) as last_activity
+                MAX(t.block_time) as last_activity,
+                p.price as last_known_price,
+                p.fetched_at as price_fetched_at
             FROM tokens tk
             JOIN token_operations to_ ON tk.id = to_.token_id
             JOIN transactions t ON to_.transaction_id = t.id
             JOIN wallets w ON t.wallet_id = w.id
             LEFT JOIN groups g ON w.group_id = g.id
+            LEFT JOIN prices p ON tk.mint = p.mint AND p.fetched_at = (
+                SELECT fetched_at FROM prices p2 WHERE p2.mint = tk.mint ORDER BY fetched_at DESC LIMIT 1
+            )
             WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
         `;
         const params = [];
@@ -444,7 +464,7 @@ class Database {
             params.push(groupId);
         }
         query += `
-            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name
+            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name, p.price, p.fetched_at
             ORDER BY tk.mint, wallet_id
         `;
         const result = await this.pool.query(query, params);
@@ -564,6 +584,32 @@ class Database {
             processedSignatures, totalWallets, scanDuration, errorsCount
         ]);
         return result.rows[0];
+    }
+
+    async upsertPrice(mint, price, source) {
+        const query = `
+            INSERT INTO prices (mint, price, source)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (mint) DO UPDATE
+            SET price = EXCLUDED.price,
+                source = EXCLUDED.source,
+                fetched_at = CURRENT_TIMESTAMP
+            RETURNING id, mint, price, fetched_at
+        `;
+        const result = await this.pool.query(query, [mint, price, source]);
+        return result.rows[0];
+    }
+
+    async getLatestPrice(mint) {
+        const query = `
+            SELECT price, fetched_at
+            FROM prices
+            WHERE mint = $1
+            ORDER BY fetched_at DESC
+            LIMIT 1
+        `;
+        const result = await this.pool.query(query, [mint]);
+        return result.rows[0] || null;
     }
 
     async withTransaction(callback) {

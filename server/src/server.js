@@ -67,22 +67,6 @@ const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
 const sseClients = new Set();
 
-// Mock function to fetch token price (replace with real API like Jupiter or Birdeye)
-async function fetchTokenPrice(mint) {
-  try {
-    // Example using Jupiter API (replace with your preferred API)
-    const response = await axios.get(`https://price.jup.ag/v4/price?ids=${mint}`);
-    const priceData = response.data.data[mint];
-    if (!priceData || !priceData.price) {
-      console.warn(`[${new Date().toISOString()}] No price data for mint ${mint}, using fallback price`);
-      return 0.01; // Fallback price
-    }
-    return priceData.price; // Price in SOL
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] Error fetching price for mint ${mint}:`, error.message);
-    return 0.01; // Fallback price
-  }
-}
 
 const startWebSocketService = async () => {
   let retries = 0;
@@ -634,114 +618,149 @@ app.get('/api/stats/tokens', async (req, res) => {
 
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
-    const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null;
-    
-    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
-    
-    const rows = await db.getTokenWalletAggregates(hours, groupId);
-    
-    console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
+      const hours = parseInt(req.query.hours) || 24;
+      const groupId = req.query.groupId || null;
+      
+      console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
+      
+      const rows = await db.getTokenWalletAggregates(hours, groupId);
+      
+      console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
 
-    const byToken = new Map();
-    for (const row of rows) {
-      if (!byToken.has(row.mint)) {
-        byToken.set(row.mint, {
-          mint: row.mint,
-          symbol: row.symbol,
-          name: row.name,
-          decimals: row.decimals,
-          wallets: [],
+      async function fetchTokenPrice(mint) {
+          const cacheKey = `price:${mint}`;
+          const cachedPrice = await redis.get(cacheKey);
+          if (cachedPrice) {
+              console.log(`[${new Date().toISOString()}] 📈 Cache hit for mint ${mint}: ${cachedPrice}`);
+              return Number(cachedPrice);
+          }
+
+          const dbPrice = await db.getLatestPrice(mint);
+          if (dbPrice && (new Date() - new Date(dbPrice.fetched_at)) < 3600000) { // Use if < 1 hour old
+              await redis.set(cacheKey, dbPrice.price, 'EX', 3600);
+              return dbPrice.price;
+          }
+
+          const apis = [
+              {
+                  name: 'Birdeye',
+                  url: `https://public-api.birdeye.so/public/price?address=${mint}`,
+                  headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || 'your-birdeye-api-key' },
+                  getPrice: (data) => data.data?.value || null,
+              },
+              {
+                  name: 'CoinGecko',
+                  url: `https://api.coingecko.com/api/v3/coins/solana/contract/${mint}`,
+                  headers: {},
+                  getPrice: (data) => data.market_data?.current_price?.sol || null,
+              },
+          ];
+
+          for (const api of apis) {
+              try {
+                  const response = await axios.get(api.url, { headers: api.headers, timeout: 5000 });
+                  const price = api.getPrice(response.data);
+                  if (price !== null && !isNaN(price)) {
+                      await db.upsertPrice(mint, price, api.name);
+                      await redis.set(cacheKey, price, 'EX', 3600);
+                      console.log(`[${new Date().toISOString()}] 📈 Fetched price from ${api.name} for mint ${mint}: ${price}`);
+                      return price;
+                  }
+              } catch (error) {
+                  console.warn(`[${new Date().toISOString()}] ⚠️ ${api.name} API failed for mint ${mint}: ${error.message}`);
+              }
+          }
+
+          console.warn(`[${new Date().toISOString()}] ⚠️ All price APIs failed for mint ${mint}, using fallback price`);
+          const fallbackPrice = 0.000001; // Conservative fallback for low-value tokens
+          await db.upsertPrice(mint, fallbackPrice, 'fallback');
+          await redis.set(cacheKey, fallbackPrice, 'EX', 3600);
+          return fallbackPrice;
+      }
+
+      const byToken = new Map();
+      for (const row of rows) {
+          if (!byToken.has(row.mint)) {
+              byToken.set(row.mint, {
+                  mint: row.mint,
+                  symbol: row.symbol || 'UNKNOWN',
+                  name: row.name || 'Unknown Token',
+                  decimals: row.decimals || 6,
+                  wallets: [],
+                  summary: {
+                      uniqueWallets: 0,
+                      totalBuys: 0,
+                      totalSells: 0,
+                      totalSpentSOL: 0,
+                      totalReceivedSOL: 0,
+                      realizedPNL: 0,
+                      unrealizedPNL: 0,
+                      currentBalance: 0,
+                  },
+              });
+          }
+          const token = byToken.get(row.mint);
+
+          const tokensBought = Number(row.tokens_bought || 0);
+          const tokensSold = Number(row.tokens_sold || 0);
+          const currentBalance = tokensBought - tokensSold;
+          const solSpent = Number(row.sol_spent || 0);
+          const avgBuyPrice = tokensBought > 0 ? solSpent / tokensBought : 0;
+          const currentPrice = await fetchTokenPrice(row.mint) || row.last_known_price || 0.000001;
+
+          const solReceived = Number(row.sol_received || 0);
+          const solSpentOnSoldTokens = tokensSold * avgBuyPrice;
+          const realizedPNL = solReceived - solSpentOnSoldTokens;
+
+          const currentValue = currentBalance * currentPrice;
+          const costBasisHeldTokens = currentBalance * avgBuyPrice;
+          const unrealizedPNL = currentValue - costBasisHeldTokens;
+
+          token.wallets.push({
+              address: row.wallet_address,
+              name: row.wallet_name || null,
+              groupId: row.group_id || null,
+              groupName: row.group_name || null,
+              txBuys: Number(row.tx_buys) || 0,
+              txSells: Number(row.tx_sells) || 0,
+              solSpent: +solSpent.toFixed(6),
+              solReceived: +solReceived.toFixed(6),
+              tokensBought: +tokensBought.toFixed(6),
+              tokensSold: +tokensSold.toFixed(6),
+              realizedPNL: +realizedPNL.toFixed(6),
+              unrealizedPNL: +unrealizedPNL.toFixed(6),
+              currentBalance: +currentBalance.toFixed(6),
+              lastActivity: row.last_activity,
+          });
+
+          token.summary.uniqueWallets += 1;
+          token.summary.totalBuys += Number(row.tx_buys) || 0;
+          token.summary.totalSells += Number(row.tx_sells) || 0;
+          token.summary.totalSpentSOL += solSpent;
+          token.summary.totalReceivedSOL += solReceived;
+          token.summary.currentBalance += currentBalance;
+          token.summary.realizedPNL += realizedPNL;
+          token.summary.unrealizedPNL += unrealizedPNL;
+      }
+
+      const result = Array.from(byToken.values()).map((t) => ({
+          ...t,
           summary: {
-            uniqueWallets: 0,
-            totalBuys: 0,
-            totalSells: 0,
-            totalSpentSOL: 0, // Total SOL spent on buying tokens
-            totalReceivedSOL: 0, // Total SOL received from selling tokens
-            realizedPNL: 0, // Profit/loss from completed buy-sell cycles
-            unrealizedPNL: 0, // Profit/loss from current holdings
-            currentBalance: 0, // Total tokens held (bought - sold)
+              ...t.summary,
+              netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+              realizedPNL: +t.summary.realizedPNL.toFixed(6),
+              unrealizedPNL: +t.summary.unrealizedPNL.toFixed(6),
+              currentBalance: +t.summary.currentBalance.toFixed(6),
           },
-        });
-      }
-      const token = byToken.get(row.mint);
+      }));
 
-      // Calculate current balance (tokens bought minus tokens sold)
-      const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
+      result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
 
-      // Fetch current token price with fallback
-      let currentPrice;
-      try {
-        const response = await axios.get(`https://public-api.birdeye.so/public/price?address=${row.mint}`, {
-          headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || 'your-birdeye-api-key' },
-        });
-        currentPrice = response.data.data?.value || 0.01; // Fallback price if API fails
-      } catch (error) {
-        console.warn(`[${new Date().toISOString()}] ⚠️ Error fetching price for mint ${row.mint}: ${error.message}`);
-        currentPrice = 0.01; // Fallback price
-      }
-
-      // Calculate average buy price (cost basis) for tokens still held
-      const tokensBought = Number(row.tokens_bought || 0);
-      const solSpent = Number(row.sol_spent || 0);
-      const avgBuyPrice = tokensBought > 0 ? solSpent / tokensBought : 0;
-
-      // Realized PNL: SOL received from sells minus SOL spent on sold tokens
-      const tokensSold = Number(row.tokens_sold || 0);
-      const solReceived = Number(row.sol_received || 0);
-      const solSpentOnSoldTokens = tokensSold * avgBuyPrice; // Cost basis for sold tokens
-      const realizedPNL = solReceived - solSpentOnSoldTokens;
-
-      // Unrealized PNL: Current value of held tokens minus cost basis of held tokens
-      const currentValue = currentBalance * currentPrice;
-      const costBasisHeldTokens = currentBalance * avgBuyPrice;
-      const unrealizedPNL = currentValue - costBasisHeldTokens;
-
-      token.wallets.push({
-        address: row.wallet_address,
-        name: row.wallet_name,
-        groupId: row.group_id,
-        groupName: row.group_name,
-        txBuys: Number(row.tx_buys) || 0,
-        txSells: Number(row.tx_sells) || 0,
-        solSpent: solSpent, // Total SOL spent on buying this token
-        solReceived: solReceived, // Total SOL received from selling this token
-        tokensBought: tokensBought,
-        tokensSold: tokensSold,
-        realizedPNL: +realizedPNL.toFixed(6),
-        unrealizedPNL: +unrealizedPNL.toFixed(6),
-        currentBalance: +currentBalance.toFixed(6),
-        lastActivity: row.last_activity,
-      });
-
-      token.summary.uniqueWallets += 1;
-      token.summary.totalBuys += Number(row.tx_buys) || 0;
-      token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += solSpent;
-      token.summary.totalReceivedSOL += solReceived;
-      token.summary.currentBalance += currentBalance;
-      token.summary.realizedPNL += realizedPNL;
-      token.summary.unrealizedPNL += unrealizedPNL;
-    }
-
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-        realizedPNL: +t.summary.realizedPNL.toFixed(6),
-        unrealizedPNL: +t.summary.unrealizedPNL.toFixed(6),
-        currentBalance: +t.summary.currentBalance.toFixed(6),
-      },
-    }));
-
-    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
-
-    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
-    res.json(result);
+      console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
+      res.json(result);
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
-    res.status(500).json({ error: 'Failed to build token tracker' });
+      console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
+      res.status(500).json({ error: 'Failed to build token tracker', details: error.message });
   }
 });
 
