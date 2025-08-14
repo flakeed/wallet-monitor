@@ -9,7 +9,7 @@ const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const https = require('https');
 const fs = require('fs');
-const axios = require('axios');
+
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -665,26 +665,11 @@ app.get('/api/tokens/tracker', async (req, res) => {
         });
       }
       const token = byToken.get(row.mint);
-      
-      // Calculate realized PNL only from sell transactions (sol_received - sol_spent for sells)
-      const realizedPNL = (row.tx_sells > 0) ? (Number(row.sol_received || 0) - Number(row.sol_spent || 0)) : 0;
+      const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
       const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
-      
-      // Validate currentBalance to ensure it's non-negative
-      const validatedBalance = Math.max(currentBalance, 0);
-      
       const currentPrice = await fetchTokenPrice(row.mint);
-      // Validate currentPrice to ensure it's positive and reasonable
-      const validatedPrice = currentPrice > 0 ? Math.min(Math.max(currentPrice, 0.00001), 1000) : 0.00001; // Range: 0.00001 to 1000 SOL
+      const unrealizedPNL = currentBalance * currentPrice - Number(row.sol_spent || 0);
       
-      // Cost basis is the spent SOL for this wallet's holdings
-      const costBasis = Number(row.sol_spent || 0);
-      // Current market value of held tokens
-      const currentMarketValue = validatedBalance * validatedPrice;
-      // Unrealized PNL, capped to a realistic range
-      const unrealizedPNL = currentMarketValue - costBasis;
-      const cappedUnrealizedPNL = Math.min(Math.max(unrealizedPNL, -costBasis * 2), costBasis * 100); // Limit loss to 2x spent, gain to 100x spent
-
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
@@ -697,8 +682,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
         realizedPNL: +realizedPNL.toFixed(6),
-        unrealizedPNL: +cappedUnrealizedPNL.toFixed(6),
-        currentBalance: +validatedBalance.toFixed(6),
+        unrealizedPNL: +unrealizedPNL.toFixed(6),
+        currentBalance: +currentBalance.toFixed(6),
         lastActivity: row.last_activity,
       });
       
@@ -707,9 +692,9 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.totalSells += Number(row.tx_sells) || 0;
       token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
       token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
-      token.summary.currentBalance += validatedBalance;
+      token.summary.currentBalance += currentBalance;
       token.summary.realizedPNL += realizedPNL;
-      token.summary.unrealizedPNL += cappedUnrealizedPNL;
+      token.summary.unrealizedPNL += unrealizedPNL;
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
