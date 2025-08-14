@@ -63,7 +63,10 @@ function WalletPill({ wallet, tokenMint }) {
           Unrealized: {wallet.unrealizedPNL > 0 ? '+' : ''}{wallet.unrealizedPNL.toFixed(4)} SOL
         </div>
         <div className="text-[9px] text-gray-400">
-          Spent: {wallet.solSpent.toFixed(4)} SOL · Balance: {wallet.currentBalance.toFixed(4)} tokens
+          Spent: {wallet.solSpent.toFixed(4)} SOL
+        </div>
+        <div className="text-[9px] text-gray-400">
+        Balance: {wallet.currentBalance.toFixed(4)} tokens
         </div>
       </div>
     </div>
