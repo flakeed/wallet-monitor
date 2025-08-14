@@ -162,24 +162,23 @@ async function fetchTokenMetadata(mint, connection) {
 
 async function fetchOnChainMetadata(mint, connection) {
     try {
-        const metaplex = new Metaplex(connection);
-        const mintPubkey = new PublicKey(mint);
-        const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
-        console.log(`metadataAccount ${mint}`,metadataAccount)
-        if (metadataAccount && metadataAccount.data) {
-            return {
-                address: mint,
-                symbol: metadataAccount.data.symbol || 'Unknown',
-                name: metadataAccount.data.name || 'Unknown Token',
-                decimals: metadataAccount.mint.decimals || 0,
-            };
-        }
-        console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
+      const metaplex = new Metaplex(connection);
+      const mintPubkey = new PublicKey(mint);
+      const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
+      if (metadataAccount) {
+        return {
+          address: mint,
+          symbol: metadataAccount.symbol || 'Unknown',
+          name: metadataAccount.name || 'Unknown Token',
+          decimals: metadataAccount.mint.decimals || 0,
+        };
+      }
+      console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
     } catch (e) {
-        console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
+      console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
     }
     return null;
-}
+  }
 
 function normalizeImageUrl(imageUrl) {
     if (!imageUrl) return null;
