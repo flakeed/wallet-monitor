@@ -7,112 +7,39 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const aggregateTokens = (transactions, hours, groupId) => {
-    const byToken = new Map();
-
-    const now = new Date();
-    const filteredTransactions = transactions.filter((tx) => {
-      const txTime = new Date(tx.time);
-      const hoursDiff = (now - txTime) / (1000 * 60 * 60);
-      const matchesTimeframe = hoursDiff <= parseInt(hours);
-      const matchesGroup = !groupId || tx.wallet.group_id === groupId;
-      return matchesTimeframe && matchesGroup;
-    });
-
-    filteredTransactions.forEach((tx) => {
-      const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
-      if (!tokens || tokens.length === 0) return;
-
-      tokens.forEach((token) => {
-        if (!byToken.has(token.mint)) {
-          byToken.set(token.mint, {
-            mint: token.mint,
-            symbol: token.symbol || 'Unknown',
-            name: token.name || 'Unknown Token',
-            decimals: token.decimals || 6,
-            currentPrice: 0, // Will be updated by backend
-            wallets: [],
-            summary: {
-              uniqueWallets: new Set(),
-              totalBuys: 0,
-              totalSells: 0,
-              totalBought: 0,
-              totalSpentSOL: 0,
-              totalReceivedSOL: 0,
-              realizedPNL: 0,
-              unrealizedPNL: 0,
-              netSOL: 0,
-            },
-          });
-        }
-
-        const tokenData = byToken.get(token.mint);
-        const walletAddress = tx.wallet.address;
-        const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
-
-        if (!wallet) {
-          tokenData.wallets.push({
-            address: walletAddress,
-            name: tx.wallet.name || null,
-            groupId: tx.wallet.group_id,
-            groupName: tx.wallet.group_name,
-            txBuys: tx.transactionType === 'buy' ? 1 : 0,
-            txSells: tx.transactionType === 'sell' ? 1 : 0,
-            solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
-            solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
-            tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
-            tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
-            tokenBalance: tx.transactionType === 'buy' ? token.amount || 0 : -(token.amount || 0),
-            realizedPNL: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
-                         (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
-            unrealizedPNL: 0, // Will be calculated by backend
-            lastActivity: tx.time,
-          });
-          tokenData.summary.uniqueWallets.add(walletAddress);
-        } else {
-          wallet.txBuys += tx.transactionType === 'buy' ? 1 : 0;
-          wallet.txSells += tx.transactionType === 'sell' ? 1 : 0;
-          wallet.solSpent += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-          wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
-          wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
-          wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
-          wallet.tokenBalance += tx.transactionType === 'buy' ? token.amount || 0 : -(token.amount || 0);
-          wallet.realizedPNL = wallet.solReceived - wallet.solSpent;
-          wallet.lastActivity = tx.time > wallet.lastActivity ? tx.time : wallet.lastActivity;
-        }
-
-        tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
-        tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
-        tokenData.summary.totalBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
-        tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-        tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
-        tokenData.summary.realizedPNL += (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
-                                       (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0);
-      });
-    });
-
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        uniqueWallets: t.summary.uniqueWallets.size,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-        realizedPNL: +t.summary.realizedPNL.toFixed(6),
-        unrealizedPNL: 0, // Will be updated by backend
-      },
-    }));
-
-    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
-
-    return result;
-  };
-
   useEffect(() => {
     setLoading(true);
     try {
-      const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
-      console.log('Aggregated tokens:', aggregatedTokens);
-      setItems(aggregatedTokens);
+      // Фильтруем транзакции по времени и группе, если это нужно
+      const now = new Date();
+      const filteredTransactions = transactions.filter((tx) => {
+        const txTime = new Date(tx.time);
+        const hoursDiff = (now - txTime) / (1000 * 60 * 60);
+        const matchesTimeframe = hoursDiff <= parseInt(hours);
+        const matchesGroup = !groupId || tx.wallet.group_id === groupId;
+        return matchesTimeframe && matchesGroup;
+      });
+
+      // Предполагаем, что transactions уже агрегированы бэкендом
+      const processedItems = filteredTransactions.map(token => ({
+        ...token,
+        summary: {
+          ...token.summary,
+          netSOL: +token.summary.netSOL.toFixed(6),
+          realizedPNL: +token.summary.realizedPNL.toFixed(6),
+          unrealizedPNL: +token.summary.unrealizedPNL.toFixed(6), // Используем значение от бэкенда
+          totalSpentSOL: +token.summary.totalSpentSOL.toFixed(6), // Используем totalSpentSOL вместо totalBought
+        },
+        wallets: token.wallets.map(w => ({
+          ...w,
+          realizedPNL: +w.realizedPNL.toFixed(6),
+          unrealizedPNL: +w.unrealizedPNL.toFixed(6), // Используем значение от бэкенда
+          solSpent: +w.solSpent.toFixed(6),
+        })),
+      }));
+
+      console.log('Processed tokens from backend:', processedItems);
+      setItems(processedItems);
       setError(null);
     } catch (e) {
       setError(e.message);
