@@ -3,19 +3,15 @@ import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+  const realizedPnlColor = token.summary.realizedPNL > 0 ? 'text-green-700' : token.summary.realizedPNL < 0 ? 'text-red-700' : 'text-gray-700';
+  const unrealizedPnlColor = token.summary.unrealizedPNL > 0 ? 'text-green-600' : token.summary.unrealizedPNL < 0 ? 'text-red-600' : 'text-gray-600';
 
-  // Function to copy text to clipboard
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
-      .then(() => {
-        console.log('Address copied to clipboard:', text);
-      })
-      .catch((err) => {
-        console.error('Failed to copy address:', err);
-      });
+      .then(() => console.log('Address copied to clipboard:', text))
+      .catch((err) => console.error('Failed to copy address:', err));
   };
 
-  // Function to open chart in new window
   const openGmgnChartInNewWindow = () => {
     if (!token.mint) {
       console.warn('No mint address available for chart');
@@ -26,7 +22,9 @@ function TokenCard({ token, onOpenChart }) {
   };
 
   return (
-    <div className="border rounded-lg p-4 bg-gray-50">
+    <div className="border rounded-lg p-4 bg-gray-50ස
+
+ystem: gray-50">
       <div className="flex items-center justify-between mb-3">
         <div className="min-w-0">
           <div className="flex items-center space-x-2">
@@ -52,8 +50,15 @@ function TokenCard({ token, onOpenChart }) {
           </div>
         </div>
         <div className="text-right">
-          <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
-          <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+          <div className={`text-base font-bold ${realizedPnlColor}`}>
+            Realized: {token.summary.realizedPNL > 0 ? '+' : ''}{token.summary.realizedPNL.toFixed(4)} SOL
+          </div>
+          <div className={`text-sm ${unrealizedPnlColor}`}>
+            Unrealized: {token.summary.unrealizedPNL > 0 ? '+' : ''}{token.summary.unrealizedPNL.toFixed(4)} SOL
+          </div>
+          <div className="text-xs text-gray-500">
+            Spent: {token.summary.totalSpentSOL.toFixed(4)} SOL · {token.summary.uniqueWallets} wallets
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

@@ -178,7 +178,7 @@ async function fetchOnChainMetadata(mint, connection) {
       console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
     }
     return null;
-  }
+}
 
 function normalizeImageUrl(imageUrl) {
     if (!imageUrl) return null;
