@@ -656,20 +656,47 @@ app.get('/api/tokens/tracker', async (req, res) => {
             uniqueWallets: 0,
             totalBuys: 0,
             totalSells: 0,
-            totalSpentSOL: 0,
-            totalReceivedSOL: 0,
-            realizedPNL: 0,
-            unrealizedPNL: 0,
-            currentBalance: 0,
+            totalSpentSOL: 0, // Total SOL spent on buying tokens
+            totalReceivedSOL: 0, // Total SOL received from selling tokens
+            realizedPNL: 0, // Profit/loss from completed buy-sell cycles
+            unrealizedPNL: 0, // Profit/loss from current holdings
+            currentBalance: 0, // Total tokens held (bought - sold)
           },
         });
       }
       const token = byToken.get(row.mint);
-      const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
+
+      // Calculate current balance (tokens bought minus tokens sold)
       const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
-      const currentPrice = await fetchTokenPrice(row.mint);
-      const unrealizedPNL = currentBalance * currentPrice - Number(row.sol_spent || 0);
-      
+
+      // Fetch current token price with fallback
+      let currentPrice;
+      try {
+        const response = await axios.get(`https://public-api.birdeye.so/public/price?address=${row.mint}`, {
+          headers: { 'X-API-KEY': process.env.BIRDEYE_API_KEY || 'your-birdeye-api-key' },
+        });
+        currentPrice = response.data.data?.value || 0.01; // Fallback price if API fails
+      } catch (error) {
+        console.warn(`[${new Date().toISOString()}] ⚠️ Error fetching price for mint ${row.mint}: ${error.message}`);
+        currentPrice = 0.01; // Fallback price
+      }
+
+      // Calculate average buy price (cost basis) for tokens still held
+      const tokensBought = Number(row.tokens_bought || 0);
+      const solSpent = Number(row.sol_spent || 0);
+      const avgBuyPrice = tokensBought > 0 ? solSpent / tokensBought : 0;
+
+      // Realized PNL: SOL received from sells minus SOL spent on sold tokens
+      const tokensSold = Number(row.tokens_sold || 0);
+      const solReceived = Number(row.sol_received || 0);
+      const solSpentOnSoldTokens = tokensSold * avgBuyPrice; // Cost basis for sold tokens
+      const realizedPNL = solReceived - solSpentOnSoldTokens;
+
+      // Unrealized PNL: Current value of held tokens minus cost basis of held tokens
+      const currentValue = currentBalance * currentPrice;
+      const costBasisHeldTokens = currentBalance * avgBuyPrice;
+      const unrealizedPNL = currentValue - costBasisHeldTokens;
+
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
@@ -677,21 +704,21 @@ app.get('/api/tokens/tracker', async (req, res) => {
         groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        tokensBought: Number(row.tokens_bought) || 0,
-        tokensSold: Number(row.tokens_sold) || 0,
+        solSpent: solSpent, // Total SOL spent on buying this token
+        solReceived: solReceived, // Total SOL received from selling this token
+        tokensBought: tokensBought,
+        tokensSold: tokensSold,
         realizedPNL: +realizedPNL.toFixed(6),
         unrealizedPNL: +unrealizedPNL.toFixed(6),
         currentBalance: +currentBalance.toFixed(6),
         lastActivity: row.last_activity,
       });
-      
+
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalSpentSOL += solSpent;
+      token.summary.totalReceivedSOL += solReceived;
       token.summary.currentBalance += currentBalance;
       token.summary.realizedPNL += realizedPNL;
       token.summary.unrealizedPNL += unrealizedPNL;
