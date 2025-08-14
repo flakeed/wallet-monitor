@@ -96,7 +96,6 @@ setTimeout(startWebSocketService, 2000);
 // New function to fetch token price from an external API (simplified example)
 async function fetchTokenPrice(mint) {
   try {
-    // This is a placeholder - you would need to integrate with a real price API like Jupiter or Orca
     const response = await fetch(`https://api.jup.ag/price/v1/tokens/${mint}`);
     const data = await response.json();
     return data.price || 0;
@@ -633,15 +632,12 @@ app.get('/api/tokens/tracker', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const groupId = req.query.groupId || null;
     
-    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
-    
     const rows = await db.getTokenWalletAggregates(hours, groupId);
     const connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
     
     const byToken = new Map();
     for (const row of rows) {
       if (!byToken.has(row.mint)) {
-        // Fetch current price for unrealized PNL calculation
         const price = await fetchTokenPrice(row.mint);
         const tokenInfo = await fetchTokenMetadata(row.mint, connection);
         
@@ -667,7 +663,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
       const token = byToken.get(row.mint);
       const netTokens = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
       const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
-      const unrealizedPNL = netTokens * token.currentPrice;
+      const averageBuyPrice = token.summary.totalSpentSOL / (token.summary.totalBought || 1); // Избежать деления на 0
+      const unrealizedPNL = netTokens * (token.currentPrice - averageBuyPrice);
       
       token.wallets.push({
         address: row.wallet_address,
@@ -707,8 +704,6 @@ app.get('/api/tokens/tracker', async (req, res) => {
     }));
 
     result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
-
-    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
     res.json(result);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
