@@ -21,26 +21,33 @@ function TokenTracker({ groupId, timeframe = '24' }) {
       }
   
       const responseData = await response.json();
-      console.log('Fetched token data:', responseData); // Line 48
+      console.log('Fetched token data:', responseData);
   
-      // Early validation of responseData
-      if (!responseData.success || !Array.isArray(responseData.data)) {
-        throw new Error('Invalid API response format: expected an array in data property');
+      // Validate response structure
+      if (!responseData || typeof responseData !== 'object') {
+        throw new Error('Invalid API response: response is not an object');
+      }
+  
+      if (!responseData.success) {
+        throw new Error(`API error: ${responseData.message || 'Request failed'}`);
+      }
+  
+      if (!Array.isArray(responseData.data)) {
+        console.error('Invalid API response: data is not an array', responseData.data);
+        throw new Error('Invalid API response: data is not an array');
       }
   
       const data = responseData.data;
       setItems(data);
   
-      // Ensure data is an array before filtering
-      const mintsWithBalance = Array.isArray(data)
-      ? data.filter(token => token?.summary?.totalTokensRemaining > 0)
-      : [];
+      // Fetch prices for tokens with remaining balance
+      const mintsWithBalance = data.filter(token => token?.summary?.totalTokensRemaining > 0);
       if (mintsWithBalance.length > 0) {
         try {
           const priceResponse = await fetch(`/api/tokens/price/batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mints: mintsWithBalance }),
+            body: JSON.stringify({ mints: mintsWithBalance.map(token => token.mint) }),
           });
           if (!priceResponse.ok) {
             throw new Error(`Failed to fetch token prices: ${priceResponse.statusText}`);
@@ -56,12 +63,13 @@ function TokenTracker({ groupId, timeframe = '24' }) {
         }
       }
     } catch (e) {
-      console.error('Error fetching token data:', e); // Line 60
+      console.error('Error fetching token data:', e);
       setError(e.message);
+      setItems([]); // Ensure items is always an array
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hours]);
   
   useEffect(() => {
     fetchTokenData();
@@ -84,35 +92,44 @@ function TokenTracker({ groupId, timeframe = '24' }) {
   };
 
 console.log('Items before mapping:', items); // Add for debugging
-const enhancedItems = items.map(token => {
+const enhancedItems = Array.isArray(items) ? items.map(token => {
+  // Validate token structure
+  if (!token || !token.mint || !token.wallets || !token.summary) {
+    console.warn('Invalid token data:', token);
+    return null;
+  }
+
   const currentPrice = tokenPrices[token.mint];
   const unrealizedPnl = calculateUnrealizedPnL(token, currentPrice);
-    
-    // Enhance wallets with unrealized PnL
-    const enhancedWallets = token.wallets.map(wallet => {
-      const walletUnrealizedPnl = currentPrice && wallet.tokensRemaining > 0
-        ? (currentPrice * wallet.tokensRemaining) - (wallet.avgBuyPrice * wallet.tokensRemaining)
-        : 0;
-      
-      return {
-        ...wallet,
-        unrealizedPnl: walletUnrealizedPnl,
-        totalPnl: wallet.pnlSol + walletUnrealizedPnl,
-      };
-    });
-    
-    return {
-      ...token,
-      wallets: enhancedWallets,
-      currentPrice,
-      summary: {
-        ...token.summary,
-        unrealizedPnl,
-        totalPnl: token.summary.netSOL + unrealizedPnl,
-      },
-    };
-  });
 
+  // Enhance wallets with unrealized PnL
+  const enhancedWallets = Array.isArray(token.wallets) ? token.wallets.map(wallet => {
+    if (!wallet || typeof wallet !== 'object') {
+      console.warn('Invalid wallet data:', wallet);
+      return null;
+    }
+    const walletUnrealizedPnl = currentPrice && wallet.tokensRemaining > 0
+      ? (currentPrice * wallet.tokensRemaining) - (wallet.avgBuyPrice * wallet.tokensRemaining)
+      : 0;
+
+    return {
+      ...wallet,
+      unrealizedPnl: walletUnrealizedPnl,
+      totalPnl: wallet.pnlSol + walletUnrealizedPnl,
+    };
+  }).filter(wallet => wallet !== null) : [];
+
+  return {
+    ...token,
+    wallets: enhancedWallets,
+    currentPrice,
+    summary: {
+      ...token.summary,
+      unrealizedPnl,
+      totalPnl: token.summary.netSOL + unrealizedPnl,
+    },
+  };
+}).filter(token => token !== null) : [];
 
 
 

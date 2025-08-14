@@ -635,29 +635,32 @@ app.get('/api/stats/tokens', async (req, res) => {
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null; // UUID string
-    const includePrices = req.query.prices !== 'false'; // Include prices by default
-    
+    const groupId = req.query.groupId || null;
+    const includePrices = req.query.prices !== 'false';
+
     console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}, prices=${includePrices}`);
-    
-    // Get aggregated data from database
+
     const rows = await db.getTokenWalletAggregates(hours, groupId);
-    
+
     console.log(`[${new Date().toISOString()}] 📊 Found ${rows.length} wallet-token combinations`);
 
     const byToken = new Map();
     const tokenMints = new Set();
-    
-    // Process database rows
+
     for (const row of rows) {
+      if (!row.mint) {
+        console.warn(`[${new Date().toISOString()}] Skipping invalid row without mint:`, row);
+        continue;
+      }
+
       tokenMints.add(row.mint);
-      
+
       if (!byToken.has(row.mint)) {
         byToken.set(row.mint, {
           mint: row.mint,
-          symbol: row.symbol,
-          name: row.name,
-          decimals: row.decimals,
+          symbol: row.symbol || 'Unknown',
+          name: row.name || 'Unknown Token',
+          decimals: row.decimals || 6,
           wallets: [],
           summary: {
             uniqueWallets: 0,
@@ -673,26 +676,24 @@ app.get('/api/tokens/tracker', async (req, res) => {
           },
         });
       }
-      
+
       const token = byToken.get(row.mint);
-      
-      // Calculate per-wallet statistics
+
       const tokensBought = Number(row.tokens_bought) || 0;
       const tokensSold = Number(row.tokens_sold) || 0;
       const tokensRemaining = tokensBought - tokensSold;
       const solSpent = Number(row.sol_spent) || 0;
       const solReceived = Number(row.sol_received) || 0;
       const realizedPnl = solReceived - solSpent;
-      
-      // Calculate average prices for this wallet
+
       const avgBuyPrice = tokensBought > 0 ? solSpent / tokensBought : 0;
       const avgSellPrice = tokensSold > 0 ? solReceived / tokensSold : 0;
-      
+
       token.wallets.push({
-        address: row.wallet_address,
-        name: row.wallet_name,
-        groupId: row.group_id,
-        groupName: row.group_name,
+        address: row.wallet_address || 'Unknown',
+        name: row.wallet_name || null,
+        groupId: row.group_id || null,
+        groupName: row.group_name || null,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
         solSpent: solSpent,
@@ -701,15 +702,14 @@ app.get('/api/tokens/tracker', async (req, res) => {
         tokensSold: tokensSold,
         tokensRemaining: tokensRemaining,
         realizedPnl: +realizedPnl.toFixed(6),
-        unrealizedPnl: 0, // Will be calculated with current price
-        totalPnl: +realizedPnl.toFixed(6), // Will be updated with unrealized
+        unrealizedPnl: 0,
+        totalPnl: +realizedPnl.toFixed(6),
         avgBuyPrice: avgBuyPrice,
         avgSellPrice: avgSellPrice,
-        lastActivity: row.last_activity,
-        hasPosition: tokensRemaining > 0
+        lastActivity: row.last_activity || null,
+        hasPosition: tokensRemaining > 0,
       });
-      
-      // Update token summary
+
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
@@ -719,70 +719,63 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.totalTokensSold += tokensSold;
     }
 
-    // Fetch current prices from DexScreener
     let tokenPrices = new Map();
     let solPrice = 0;
-    
+
     if (includePrices && tokenMints.size > 0) {
       console.log(`[${new Date().toISOString()}] 💰 Fetching prices for ${tokenMints.size} tokens from DexScreener`);
-      
+
       try {
-        // Fetch token prices in parallel with SOL price
         const [pricesResult, solPriceResult] = await Promise.all([
           dexScreener.getMultipleTokenData(Array.from(tokenMints)),
-          dexScreener.getSolPrice()
+          dexScreener.getSolPrice(),
         ]);
-        
+
         tokenPrices = pricesResult;
         solPrice = solPriceResult;
-        
+
         console.log(`[${new Date().toISOString()}] ✅ Fetched prices for ${tokenPrices.size} tokens, SOL price: $${solPrice}`);
       } catch (error) {
         console.error(`[${new Date().toISOString()}] ⚠️ Price fetch error (non-fatal):`, error.message);
       }
     }
 
-    // Calculate final statistics with prices
     const result = Array.from(byToken.values()).map((t) => {
       const totalTokensRemaining = t.summary.totalTokensBought - t.summary.totalTokensSold;
-      const avgBuyPrice = t.summary.totalTokensBought > 0 
-        ? t.summary.totalSpentSOL / t.summary.totalTokensBought 
+      const avgBuyPrice = t.summary.totalTokensBought > 0
+        ? t.summary.totalSpentSOL / t.summary.totalTokensBought
         : 0;
-      const avgSellPrice = t.summary.totalTokensSold > 0 
-        ? t.summary.totalReceivedSOL / t.summary.totalTokensSold 
+      const avgSellPrice = t.summary.totalTokensSold > 0
+        ? t.summary.totalReceivedSOL / t.summary.totalTokensSold
         : 0;
-      
-      // Get current price data from DexScreener
+
       const priceData = tokenPrices.get(t.mint);
       const currentPriceInSol = priceData?.priceNative || 0;
       const currentPriceUsd = priceData?.priceUsd || 0;
-      
-      // Calculate unrealized PnL for the token
+
       let totalUnrealizedPnl = 0;
-      
-      // Update wallet-level unrealized PnL
+
       t.wallets = t.wallets.map(wallet => {
         if (wallet.tokensRemaining > 0 && currentPriceInSol > 0) {
           const currentValue = wallet.tokensRemaining * currentPriceInSol;
           const costBasis = wallet.avgBuyPrice * wallet.tokensRemaining;
           const unrealizedPnl = currentValue - costBasis;
-          
+
           totalUnrealizedPnl += unrealizedPnl;
-          
+
           return {
             ...wallet,
             unrealizedPnl: +unrealizedPnl.toFixed(6),
             totalPnl: +(wallet.realizedPnl + unrealizedPnl).toFixed(6),
             currentValue: +currentValue.toFixed(6),
-            costBasis: +costBasis.toFixed(6)
+            costBasis: +costBasis.toFixed(6),
           };
         }
         return wallet;
       });
-      
-      // Sort wallets by total PnL
+
       t.wallets.sort((a, b) => b.totalPnl - a.totalPnl);
-      
+
       return {
         ...t,
         summary: {
@@ -795,7 +788,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
           unrealizedPnl: +totalUnrealizedPnl.toFixed(6),
           totalPnl: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL + totalUnrealizedPnl).toFixed(6),
           walletsHolding: t.wallets.filter(w => w.tokensRemaining > 0).length,
-          walletsExited: t.wallets.filter(w => w.tokensSold > 0 && w.tokensRemaining <= 0).length
+          walletsExited: t.wallets.filter(w => w.tokensSold > 0 && w.tokensRemaining <= 0).length,
         },
         priceData: priceData ? {
           priceUsd: currentPriceUsd,
@@ -806,17 +799,16 @@ app.get('/api/tokens/tracker', async (req, res) => {
           marketCap: priceData.marketCap || 0,
           fdv: priceData.fdv || 0,
           dexScreenerUrl: priceData.url || `https://dexscreener.com/solana/${t.mint}`,
-          lastUpdated: priceData.lastUpdated
+          lastUpdated: priceData.lastUpdated,
         } : null,
-        solPrice: solPrice
+        solPrice: solPrice,
       };
     });
 
-    // Sort by total PnL (realized + unrealized)
     result.sort((a, b) => Math.abs(b.summary.totalPnl) - Math.abs(a.summary.totalPnl));
 
     console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens with price data`);
-    
+
     res.json({
       success: true,
       data: result,
@@ -825,15 +817,16 @@ app.get('/api/tokens/tracker', async (req, res) => {
         tokensWithPrices: result.filter(t => t.priceData).length,
         tokensWithPositions: result.filter(t => t.summary.hasRemainingTokens).length,
         solPrice: solPrice,
-        timestamp: new Date().toISOString()
-      }
+        timestamp: new Date().toISOString(),
+      },
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
       error: 'Failed to build token tracker',
-      message: error.message 
+      message: error.message,
+      data: [], // Ensure data is always an array
     });
   }
 });
