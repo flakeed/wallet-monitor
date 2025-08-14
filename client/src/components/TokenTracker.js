@@ -32,11 +32,9 @@ function TokenTracker({ groupId, timeframe = '24' }) {
       setItems(data);
   
       // Ensure data is an array before filtering
-      const mintsWithBalance = Array.isArray(data)
-        ? data
-            .filter(token => token?.summary?.totalTokensRemaining > 0)
-            .map(token => token.mint)
-        : [];
+      const mintsWithBalance =Array.isArray(r)
+      ? r.filter(token => token?.summary?.totalTokensRemaining > 0)
+      : [];
   
       if (mintsWithBalance.length > 0) {
         try {
