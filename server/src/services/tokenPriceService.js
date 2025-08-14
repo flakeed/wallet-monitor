@@ -9,21 +9,55 @@ class TokenPriceService {
             confirmTransactionInitialTimeout: 60000,
             wsEndpoint: process.env.SOLANA_WS_URL
         });
-        
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-        this.redisPubSub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379'); // Separate client for Pub/Sub
+
+        // Configure Redis with retry strategy
+        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212', {
+            maxRetriesPerRequest: 5,
+            retryStrategy: (times) => Math.min(times * 500, 2000), // Retry every 0.5s, up to 2s
+            reconnectOnError: (err) => {
+                console.error(`[${new Date().toISOString()}] ❌ Redis connection error: ${err.message}`);
+                return true; // Attempt to reconnect
+            }
+        });
+
+        this.redisPubSub = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212', {
+            maxRetriesPerRequest: 5,
+            retryStrategy: (times) => Math.min(times * 500, 2000),
+            reconnectOnError: (err) => {
+                console.error(`[${new Date().toISOString()}] ❌ Redis Pub/Sub connection error: ${err.message}`);
+                return true;
+            }
+        });
+
+        // In-memory fallback cache
         this.priceCache = new Map();
+        this.activeTokensCache = new Set();
         this.CACHE_TTL = 30; // 30 seconds cache for prices
         this.RAYDIUM_V4 = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
         this.JUPITER_PRICE_API = 'https://price.jup.ag/v4/price';
         this.DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/tokens';
-        
+
+        // Handle Redis errors
+        this.redis.on('error', (err) => {
+            console.error(`[${new Date().toISOString()}] ❌ Redis error: ${err.message}`);
+        });
+        this.redisPubSub.on('error', (err) => {
+            console.error(`[${new Date().toISOString()}] ❌ Redis Pub/Sub error: ${err.message}`);
+        });
+
+        // Log successful Redis connection
+        this.redis.on('connect', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
+        });
+        this.redisPubSub.on('connect', () => {
+            console.log(`[${new Date().toISOString()}] ✅ Connected to Redis Pub/Sub`);
+        });
+
         // Start periodic price updates
         this.startPriceUpdater();
     }
 
     async startPriceUpdater() {
-        // Update prices every 10 seconds for active tokens
         setInterval(async () => {
             try {
                 const activeTokens = await this.getActiveTokens();
@@ -31,57 +65,88 @@ class TokenPriceService {
                     await this.batchUpdatePrices(activeTokens);
                 }
             } catch (error) {
-                console.error(`[${new Date().toISOString()}] ❌ Error updating prices:`, error);
+                console.error(`[${new Date().toISOString()}] ❌ Error updating prices: ${error.message}`);
             }
         }, 10000);
     }
 
     async getActiveTokens() {
-        // Get list of active tokens from Redis
-        const keys = await this.redis.keys('active_token:*');
-        return keys.map(key => key.replace('active_token:', ''));
+        try {
+            const keys = await this.redis.keys('active_token:*');
+            const tokens = keys.map(key => key.replace('active_token:', ''));
+            return tokens.length > 0 ? tokens : Array.from(this.activeTokensCache);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Failed to get active tokens from Redis, using in-memory cache: ${error.message}`);
+            return Array.from(this.activeTokensCache);
+        }
     }
 
     async markTokenActive(tokenMint) {
-        // Mark token as active for 5 minutes
-        await this.redis.set(`active_token:${tokenMint}`, '1', 'EX', 300);
+        try {
+            await this.redis.set(`active_token:${tokenMint}`, '1', 'EX', 300);
+            this.activeTokensCache.add(tokenMint);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Failed to mark token ${tokenMint} as active in Redis, using in-memory cache: ${error.message}`);
+            this.activeTokensCache.add(tokenMint);
+        }
     }
 
     async getTokenPrice(tokenMint) {
         try {
-            // Check cache
-            const cached = await this.redis.get(`price:${tokenMint}`);
+            // Check cache (Redis first, then in-memory)
+            let cached;
+            try {
+                cached = await this.redis.get(`price:${tokenMint}`);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Redis cache read error for ${tokenMint}: ${error.message}`);
+                cached = this.priceCache.get(`price:${tokenMint}`);
+            }
             if (cached) {
-                return JSON.parse(cached);
+                return typeof cached === 'string' ? JSON.parse(cached) : cached;
             }
 
             // Try Jupiter API first
             const jupiterPrice = await this.fetchJupiterPrice(tokenMint);
             if (jupiterPrice) {
-                await this.redis.set(`price:${tokenMint}`, JSON.stringify(jupiterPrice), 'EX', this.CACHE_TTL);
-                await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: jupiterPrice }));
+                try {
+                    await this.redis.set(`price:${tokenMint}`, JSON.stringify(jupiterPrice), 'EX', this.CACHE_TTL);
+                    await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: jupiterPrice }));
+                } catch (error) {
+                    console.error(`[${new Date().toISOString()}] ❌ Redis cache write error for ${tokenMint}: ${error.message}`);
+                    this.priceCache.set(`price:${tokenMint}`, jupiterPrice);
+                }
                 return jupiterPrice;
             }
 
             // Try DexScreener as a fallback
             const dexScreenerPrice = await this.fetchDexScreenerPrice(tokenMint);
             if (dexScreenerPrice) {
-                await this.redis.set(`price:${tokenMint}`, JSON.stringify(dexScreenerPrice), 'EX', this.CACHE_TTL);
-                await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: dexScreenerPrice }));
+                try {
+                    await this.redis.set(`price:${tokenMint}`, JSON.stringify(dexScreenerPrice), 'EX', this.CACHE_TTL);
+                    await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: dexScreenerPrice }));
+                } catch (error) {
+                    console.error(`[${new Date().toISOString()}] ❌ Redis cache write error for ${tokenMint}: ${error.message}`);
+                    this.priceCache.set(`price:${tokenMint}`, dexScreenerPrice);
+                }
                 return dexScreenerPrice;
             }
 
             // Fall back to Raydium pools
             const raydiumPrice = await this.fetchRaydiumPrice(tokenMint);
             if (raydiumPrice) {
-                await this.redis.set(`price:${tokenMint}`, JSON.stringify(raydiumPrice), 'EX', this.CACHE_TTL);
-                await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: raydiumPrice }));
+                try {
+                    await this.redis.set(`price:${tokenMint}`, JSON.stringify(raydiumPrice), 'EX', this.CACHE_TTL);
+                    await this.redisPubSub.publish('price_updates', JSON.stringify({ [tokenMint]: raydiumPrice }));
+                } catch (error) {
+                    console.error(`[${new Date().toISOString()}] ❌ Redis cache write error for ${tokenMint}: ${error.message}`);
+                    this.priceCache.set(`price:${tokenMint}`, raydiumPrice);
+                }
                 return raydiumPrice;
             }
 
             return null;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${tokenMint}:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${tokenMint}: ${error.message}`);
             return null;
         }
     }
@@ -103,7 +168,7 @@ class TokenPriceService {
             }
             return null;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Jupiter API error:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ Jupiter API error: ${error.message}`);
             return null;
         }
     }
@@ -140,14 +205,13 @@ class TokenPriceService {
                 timestamp: Date.now()
             };
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ DexScreener API error for ${tokenMint}:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ DexScreener API error for ${tokenMint}: ${error.message}`);
             return null;
         }
     }
 
     async fetchRaydiumPrice(tokenMint) {
         try {
-            // Get Raydium pool accounts for the token
             const filters = [
                 { dataSize: 752 },
                 { memcmp: { offset: 400, bytes: tokenMint } }
@@ -159,7 +223,6 @@ class TokenPriceService {
             );
 
             if (poolAccounts.length === 0) {
-                // Try finding pool where token is quote
                 const altFilters = [
                     { dataSize: 752 },
                     { memcmp: { offset: 432, bytes: tokenMint } }
@@ -175,14 +238,10 @@ class TokenPriceService {
 
             if (poolAccounts.length === 0) return null;
 
-            // Take the first found pool
             const poolData = poolAccounts[0].account.data;
-            
-            // Parse pool data (simplified)
             const baseVault = new PublicKey(poolData.slice(64, 96));
             const quoteVault = new PublicKey(poolData.slice(96, 128));
             
-            // Get balances
             const [baseBalance, quoteBalance] = await Promise.all([
                 this.connection.getTokenAccountBalance(baseVault),
                 this.connection.getTokenAccountBalance(quoteVault)
@@ -193,7 +252,6 @@ class TokenPriceService {
 
             if (baseAmount === 0) return null;
 
-            // Calculate price in SOL (assuming quote is SOL)
             const priceInSOL = quoteAmount / baseAmount;
 
             return {
@@ -203,34 +261,43 @@ class TokenPriceService {
                 timestamp: Date.now()
             };
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Raydium price fetch error:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ Raydium price fetch error: ${error.message}`);
             return null;
         }
     }
 
     async getSOLPrice() {
         try {
-            const cached = await this.redis.get('price:SOL');
+            let cached;
+            try {
+                cached = await this.redis.get('price:SOL');
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Redis cache read error for SOL price: ${error.message}`);
+                cached = this.priceCache.get('price:SOL');
+            }
             if (cached) {
-                return parseFloat(cached);
+                return typeof cached === 'string' ? parseFloat(cached) : cached;
             }
 
             const response = await fetch(`${this.JUPITER_PRICE_API}?ids=So11111111111111111111111111111111111111112`);
             const data = await response.json();
             const solPrice = data.data['So11111111111111111111111111111111111111112']?.price || 150;
             
-            await this.redis.set('price:SOL', solPrice.toString(), 'EX', 60);
+            try {
+                await this.redis.set('price:SOL', solPrice.toString(), 'EX', 60);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Redis cache write error for SOL price: ${error.message}`);
+                this.priceCache.set('price:SOL', solPrice);
+            }
             return solPrice;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price: ${error.message}`);
             return 150; // Fallback price
         }
     }
 
     async batchUpdatePrices(tokenMints) {
         const prices = new Map();
-        
-        // Process in batches of 100 tokens
         const batchSize = 100;
         for (let i = 0; i < tokenMints.length; i += batchSize) {
             const batch = tokenMints.slice(i, i + batchSize);
@@ -253,7 +320,6 @@ class TokenPriceService {
             const walletPubkey = new PublicKey(walletAddress);
             const mintPubkey = new PublicKey(tokenMint);
             
-            // Get all token accounts for the wallet
             const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
                 walletPubkey,
                 { mint: mintPubkey }
@@ -263,7 +329,6 @@ class TokenPriceService {
                 return 0;
             }
 
-            // Sum balances across all accounts
             let totalBalance = 0;
             for (const account of tokenAccounts.value) {
                 const balance = account.account.data.parsed.info.tokenAmount.uiAmount;
@@ -272,17 +337,14 @@ class TokenPriceService {
 
             return totalBalance;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error getting token balance:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ Error getting token balance: ${error.message}`);
             return 0;
         }
     }
 
     async calculateUnrealizedPnL(walletAddress, tokenMint, spent, bought) {
         try {
-            // Get current token balance
             const currentBalance = await this.getTokenBalance(walletAddress, tokenMint);
-            
-            // Get current price
             const priceData = await this.getTokenPrice(tokenMint);
             if (!priceData) {
                 return {
@@ -294,10 +356,7 @@ class TokenPriceService {
                 };
             }
 
-            // Calculate current value
             const currentValueSOL = currentBalance * priceData.priceInSOL;
-            
-            // Calculate unrealized PnL
             const unrealizedPnL = currentValueSOL - spent;
             const percentChange = spent > 0 ? ((unrealizedPnL / spent) * 100) : 0;
 
@@ -311,7 +370,7 @@ class TokenPriceService {
                 priceTimestamp: priceData.timestamp
             };
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error calculating unrealized PnL:`, error);
+            console.error(`[${new Date().toISOString()}] ❌ Error calculating unrealized PnL for ${tokenMint}: ${error.message}`);
             return {
                 currentBalance: 0,
                 currentValueSOL: 0,
@@ -325,14 +384,14 @@ class TokenPriceService {
     async enrichTokenDataWithPnL(tokenData) {
         const enrichedData = { ...tokenData };
         
-        // Mark token as active for price tracking
-        await this.markTokenActive(tokenData.mint);
+        try {
+            await this.markTokenActive(tokenData.mint);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error marking token ${tokenData.mint} active: ${error.message}`);
+        }
         
-        // Get token price
-        const priceData = await this.getTokenPrice(tokenData.mint);
-        enrichedData.currentPrice = priceData;
+        enrichedData.currentPrice = await this.getTokenPrice(tokenData.mint);
         
-        // Enrich wallet data
         enrichedData.wallets = await Promise.all(
             tokenData.wallets.map(async (wallet) => {
                 const pnlData = await this.calculateUnrealizedPnL(
@@ -354,7 +413,6 @@ class TokenPriceService {
             })
         );
         
-        // Update summary stats
         const totalUnrealizedPnL = enrichedData.wallets.reduce(
             (sum, w) => sum + (w.unrealizedPnL || 0), 0
         );
@@ -379,8 +437,12 @@ class TokenPriceService {
     }
 
     async shutdown() {
-        await this.redis.quit();
-        await this.redisPubSub.quit();
+        try {
+            await this.redis.quit();
+            await this.redisPubSub.quit();
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error shutting down Redis connections: ${error.message}`);
+        }
     }
 }
 
