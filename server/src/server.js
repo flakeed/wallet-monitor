@@ -69,8 +69,19 @@ const sseClients = new Set();
 
 // Mock function to fetch token price (replace with real API like Jupiter or Birdeye)
 async function fetchTokenPrice(mint) {
-  // Placeholder: Return mock price in SOL
-  return 0.01; // Replace with actual API call, e.g., axios.get('https://api.jup.ag/price/v1')
+  try {
+    // Example using Jupiter API (replace with your preferred API)
+    const response = await axios.get(`https://price.jup.ag/v4/price?ids=${mint}`);
+    const priceData = response.data.data[mint];
+    if (!priceData || !priceData.price) {
+      console.warn(`[${new Date().toISOString()}] No price data for mint ${mint}, using fallback price`);
+      return 0.01; // Fallback price
+    }
+    return priceData.price; // Price in SOL
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error fetching price for mint ${mint}:`, error.message);
+    return 0.01; // Fallback price
+  }
 }
 
 const startWebSocketService = async () => {
