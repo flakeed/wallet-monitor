@@ -11,34 +11,44 @@ function TokenTracker({ groupId, timeframe = '24' }) {
   const [priceLoading, setPriceLoading] = useState(false);
 
   // Fetch token data from API
-const fetchTokenData = useCallback(async () => {
+  const fetchTokenData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
     try {
-      const response = await fetch(`/api/tokens/tracker?hours=24`);
+      const params = new URLSearchParams();
+      params.append('hours', hours);
+      if (groupId) params.append('groupId', groupId);
+      
+      const response = await fetch(`/api/tokens/tracker?${params}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
       
-      const data = await response.json();
-      console.log('Fetched token data:', data); // Line 48
-      setItems(data); // This is wrong; causes errors
+      const responseData = await response.json();
+      console.log('Fetched token data:', responseData);
+      
+      if (!responseData.success || !Array.isArray(responseData.data)) {
+        throw new Error('Invalid API response format: expected an array in data property');
+      }
+      
+      const data = responseData.data;
+      setItems(data);
       
       const mintsWithBalance = data
-        .filter(token => token.summary.totalTokensRemaining > 0) // Line 53: Error here
+        .filter(token => token.summary.totalTokensRemaining > 0)
         .map(token => token.mint);
       
       if (mintsWithBalance.length > 0) {
         fetchTokenPrices(mintsWithBalance);
       }
     } catch (e) {
-      console.error('Error fetching token data:', e); // Line 60
+      console.error('Error fetching token data:', e);
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hours, groupId]);
 
   const fetchTokenPrices = async (mints) => {
     setPriceLoading(true);
@@ -68,9 +78,19 @@ const fetchTokenData = useCallback(async () => {
     }
   };
 
+  const debounceFetch = useCallback(() => {
+    let timeout;
+    return () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => fetchTokenData(), 1000);
+    };
+  }, [fetchTokenData]);
+  
   useEffect(() => {
-    fetchTokenData();
-  }, [fetchTokenData]); // Line 141
+    if (items.length === 0) {
+      debounceFetch()();
+    }
+  }, [debounceFetch, items.length]);
 
   // Calculate unrealized PnL for each token
   const calculateUnrealizedPnL = (token, currentPrice) => {
@@ -88,10 +108,10 @@ const fetchTokenData = useCallback(async () => {
     return currentValue - avgCostBasis;
   };
 
-  // Enhanced items with unrealized PnL
-  const enhancedItems = items.map(token => {
-    const currentPrice = tokenPrices[token.mint];
-    const unrealizedPnl = calculateUnrealizedPnL(token, currentPrice);
+console.log('Items before mapping:', items); // Add for debugging
+const enhancedItems = items.map(token => {
+  const currentPrice = tokenPrices[token.mint];
+  const unrealizedPnl = calculateUnrealizedPnL(token, currentPrice);
     
     // Enhance wallets with unrealized PnL
     const enhancedWallets = token.wallets.map(wallet => {
