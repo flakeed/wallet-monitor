@@ -2,8 +2,9 @@ import React from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
   const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-  const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
-  const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
+  const totalPnLColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+  const realizedColor = wallet.realizedPnL > 0 ? 'text-green-700' : wallet.realizedPnL < 0 ? 'text-red-700' : 'text-gray-700';
+  const unrealizedColor = wallet.unrealizedPnL > 0 ? 'text-green-700' : wallet.unrealizedPnL < 0 ? 'text-red-700' : 'text-gray-700';
 
   // Function to open token chart with wallet as maker in GMGN
   const openGmgnTokenWithMaker = () => {
@@ -17,7 +18,9 @@ function WalletPill({ wallet, tokenMint }) {
 
   // Function to copy wallet address to clipboard
   const copyToClipboard = () => {
-    navigator.clipboard.writeText(wallet.address);
+    navigator.clipboard.writeText(wallet.address)
+      .then(() => console.log('Address copied to clipboard:', wallet.address))
+      .catch((err) => console.error('Failed to copy address:', err));
   };
 
   return (
@@ -54,11 +57,26 @@ function WalletPill({ wallet, tokenMint }) {
             </svg>
           </button>
         </div>
-        <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+        <div className="text-[10px] text-gray-500">
+          {wallet.txBuys} buys · {wallet.txSells} sells · {wallet.held.toFixed(2)} held
+        </div>
       </div>
-      <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
+      <div className="text-right ml-2 text-[10px]">
+        <div className={`font-semibold ${totalPnLColor}`}>
+          Total PnL: {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL
+        </div>
+        <div className={`text-gray-500 ${realizedColor}`}>
+          Realized: {wallet.realizedPnL > 0 ? '+' : ''}{wallet.realizedPnL.toFixed(4)} SOL
+        </div>
+        <div className={`text-gray-500 ${unrealizedColor}`}>
+          Unrealized: {wallet.unrealizedPnL > 0 ? '+' : ''}{wallet.unrealizedPnL.toFixed(4)} SOL
+        </div>
+        <div className="text-gray-400">
+          Spent: {wallet.solSpent.toFixed(4)} · Recv: {wallet.solReceived.toFixed(4)}
+        </div>
+        <div className="text-gray-400">
+          Avg Cost: {wallet.avgCost.toFixed(6)} SOL · Current: {wallet.currentPrice.toFixed(6)} SOL
+        </div>
       </div>
     </div>
   );

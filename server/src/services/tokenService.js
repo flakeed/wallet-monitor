@@ -8,13 +8,11 @@ let tokenMap = new Map();
 const requestQueue = [];
 let isProcessingQueue = false;
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
-
 redis.on('connect', () => {
-    console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
+  console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
 });
 redis.on('error', (err) => {
-    console.error(`[${new Date().toISOString()}] ❌ Redis connection error:`, err.message);
+  console.error(`[${new Date().toISOString()}] ❌ Redis connection error:`, err.message);
 });
 
 const promiseStore = new Map();
@@ -23,254 +21,331 @@ const TOKEN_CACHE_TTL = 24 * 60 * 60;
 const PROMISE_TTL = 60;
 
 (async () => {
-    try {
-        const tokens = await new TokenListProvider().resolve();
-        const tokenList = tokens.filterByChainId(101).getList();
-        console.log(`[${new Date().toISOString()}] ✅ Loaded ${tokenList.length} tokens from registry`);
+  try {
+    const tokens = await new TokenListProvider().resolve();
+    const tokenList = tokens.filterByChainId(101).getList();
+    console.log(`[${new Date().toISOString()}] ✅ Loaded ${tokenList.length} tokens from registry`);
 
-        const pipeline = redis.pipeline();
-        for (const token of tokenList) {
-            pipeline.set(
-                `token:${token.address}`,
-                JSON.stringify(token),
-                'EX',
-                TOKEN_CACHE_TTL
-            );
-        }
-        await pipeline.exec();
-        console.log(`[${new Date().toISOString()}] ✅ Stored ${tokenList.length} tokens in Redis`);
-
-        await redis.del('metadata:queue');
-        console.log(`[${new Date().toISOString()}] ✅ Cleared stale metadata queue`);
-    } catch (e) {
-        console.error(`[${new Date().toISOString()}] Failed to load token registry:`, e.message);
+    const pipeline = redis.pipeline();
+    for (const token of tokenList) {
+      pipeline.set(
+        `token:${token.address}`,
+        JSON.stringify(token),
+        'EX',
+        TOKEN_CACHE_TTL
+      );
     }
+    await pipeline.exec();
+    console.log(`[${new Date().toISOString()}] ✅ Stored ${tokenList.length} tokens in Redis`);
+
+    await redis.del('metadata:queue');
+    console.log(`[${new Date().toISOString()}] ✅ Cleared stale metadata queue`);
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] Failed to load token registry:`, e.message);
+  }
 })();
 
+async function getTokenPrice(mint, decimals) {
+  const cacheKey = `price:${mint}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return parseFloat(cached);
+
+  try {
+    const url = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${mint}&amount=1000000000&slippageBps=50`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch price');
+    const data = await res.json();
+    const outAmount = Number(data.outAmount);
+    const outTokens = outAmount / Math.pow(10, decimals);
+    const price = 1 / outTokens; // SOL per token
+    await redis.set(cacheKey, price, 'EX', 60);
+    return price;
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting price for ${mint}:`, e.message);
+    return 0;
+  }
+}
+
+async function getCurrentBalance(connection, address, mint) {
+  try {
+    const owner = new PublicKey(address);
+    const tokenMint = new PublicKey(mint);
+    const ata = getAssociatedTokenAddressSync(tokenMint, owner);
+    const balance = await connection.getTokenAccountBalance(ata);
+    return balance.value.uiAmount;
+  } catch (e) {
+    return 0;
+  }
+}
+
 async function processQueue() {
-    if (isProcessingQueue) return;
-    isProcessingQueue = true;
+  if (isProcessingQueue) return;
+  isProcessingQueue = true;
 
-    while (true) {
-        const requestData = await redis.lpop('metadata:queue', 400);
-        if (!requestData || requestData.length === 0) break;
+  while (true) {
+    const requestData = await redis.lpop('metadata:queue', 400);
+    if (!requestData || requestData.length === 0) break;
 
-        const requests = requestData.map((data) => {
-            try {
-                return JSON.parse(data);
-            } catch (e) {
-                console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, e.message);
-                return null;
-            }
-        }).filter((req) => req !== null);
+    const requests = requestData.map((data) => {
+      try {
+        return JSON.parse(data);
+      } catch (e) {
+        console.error(`[${new Date().toISOString()}] ❌ Invalid queue entry:`, e.message);
+        return null;
+      }
+    }).filter((req) => req !== null);
 
-        await Promise.all(
-            requests.map(async (request) => {
-                const { requestId, mint, connection: rpcEndpoint } = request;
-                const connection = new Connection(rpcEndpoint, 'confirmed');
-                console.log(`[${new Date().toISOString()}] Processing metadata request ${requestId} for mint ${mint}`);
+    await Promise.all(
+      requests.map(async (request) => {
+        const { requestId, mint, connection: rpcEndpoint } = request;
+        const connection = new Connection(rpcEndpoint, 'confirmed');
+        console.log(`[${new Date().toISOString()}] Processing metadata request ${requestId} for mint ${mint}`);
 
-                try {
-                    const result = await processTokenMetadataRequest(mint, connection);
-                    const promise = promiseStore.get(requestId);
-                    if (promise) {
-                        promise.resolve(result);
-                    } else {
-                        console.warn(`[${new Date().toISOString()}] No promise found for request ${requestId}`);
-                    }
-                } catch (error) {
-                    console.error(`[${new Date().toISOString()}] Error processing metadata request ${requestId} for mint ${mint}:`, error.message);
-                    const promise = promiseStore.get(requestId);
-                    if (promise) {
-                        promise.reject(error);
-                    }
-                }
+        try {
+          const result = await processTokenMetadataRequest(mint, connection);
+          const promise = promiseStore.get(requestId);
+          if (promise) {
+            promise.resolve(result);
+          } else {
+            console.warn(`[${new Date().toISOString()}] No promise found for request ${requestId}`);
+          }
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] Error processing metadata request ${requestId} for mint ${mint}:`, error.message);
+          const promise = promiseStore.get(requestId);
+          if (promise) {
+            promise.reject(error);
+          }
+        }
 
-                promiseStore.delete(requestId);
-            })
-        );
-        await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY));
-    }
+        promiseStore.delete(requestId);
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, REQUEST_DELAY));
+  }
 
-    isProcessingQueue = false;
-    const queueLength = await redis.llen('metadata:queue');
-    if (queueLength > 0) {
-        setImmediate(processQueue);
-    }
+  isProcessingQueue = false;
+  const queueLength = await redis.llen('metadata:queue');
+  if (queueLength > 0) {
+    setImmediate(processQueue);
+  }
 }
 
 async function processTokenMetadataRequest(mint, connection) {
-    const cachedToken = await redis.get(`token:${mint}`);
-    if (cachedToken) {
-        console.log(`[${new Date().toISOString()}] Using Redis cached metadata for mint ${mint}`);
-        return JSON.parse(cachedToken);
-    }
+  const cachedToken = await redis.get(`token:${mint}`);
+  if (cachedToken) {
+    console.log(`[${new Date().toISOString()}] Using Redis cached metadata for mint ${mint}`);
+    return JSON.parse(cachedToken);
+  }
 
-    try {
-        console.log(`[${new Date().toISOString()}] Fetching on-chain metadata for mint: ${mint}`);
-        const onChainData = await fetchOnChainMetadata(mint, connection);
-        const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
-        await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
-        return data;
-    } catch (e) {
-        console.error(`[${new Date().toISOString()}] Error fetching metadata for mint ${mint}:`, e.message);
-        const data = { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
-        await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
-        return data;
-    }
+  try {
+    console.log(`[${new Date().toISOString()}] Fetching on-chain metadata for mint: ${mint}`);
+    const onChainData = await fetchOnChainMetadata(mint, connection);
+    const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
+    await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
+    return data;
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] Error fetching metadata for mint ${mint}:`, e.message);
+    const data = { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
+    await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
+    return data;
+  }
 }
 
 async function fetchTokenMetadata(mint, connection) {
-    const cachedToken = await redis.get(`token:${mint}`);
-    if (cachedToken) {
-        console.log(`[${new Date().toISOString()}] ⚡ Fast cache hit for mint ${mint}`);
-        return JSON.parse(cachedToken);
-    }
+  const cachedToken = await redis.get(`token:${mint}`);
+  if (cachedToken) {
+    console.log(`[${new Date().toISOString()}] ⚡ Fast cache hit for mint ${mint}`);
+    return JSON.parse(cachedToken);
+  }
 
-    return new Promise((resolve, reject) => {
-        const requestId = uuidv4();
-        console.log(`[${new Date().toISOString()}] Enqueued metadata request ${requestId} for mint ${mint}`);
+  return new Promise((resolve, reject) => {
+    const requestId = uuidv4();
+    console.log(`[${new Date().toISOString()}] Enqueued metadata request ${requestId} for mint ${mint}`);
 
-        promiseStore.set(requestId, { resolve, reject });
+    promiseStore.set(requestId, { resolve, reject });
 
-        redis.lpush('metadata:queue', JSON.stringify({
-            requestId,
-            mint,
-            connection: connection.rpcEndpoint,
-        }), (err) => {
-            if (err) {
-                console.error(`[${new Date().toISOString()}] Error enqueuing request ${requestId}:`, err.message);
-                promiseStore.delete(requestId);
-                reject(err);
-                return;
-            }
+    redis.lpush('metadata:queue', JSON.stringify({
+      requestId,
+      mint,
+      connection: connection.rpcEndpoint,
+    }), (err) => {
+      if (err) {
+        console.error(`[${new Date().toISOString()}] Error enqueuing request ${requestId}:`, err.message);
+        promiseStore.delete(requestId);
+        reject(err);
+        return;
+      }
 
-            if (!isProcessingQueue) {
-                setImmediate(processQueue);
-            }
-        });
-
-        setTimeout(() => {
-            if (promiseStore.has(requestId)) {
-                console.warn(`[${new Date().toISOString()}] Cleaning up stale promise for request ${requestId}`);
-                promiseStore.delete(requestId);
-                reject(new Error(`Request ${requestId} timed out`));
-            }
-        }, PROMISE_TTL * 1000);
+      if (!isProcessingQueue) {
+        setImmediate(processQueue);
+      }
     });
+
+    setTimeout(() => {
+      if (promiseStore.has(requestId)) {
+        console.warn(`[${new Date().toISOString()}] Cleaning up stale promise for request ${requestId}`);
+        promiseStore.delete(requestId);
+        reject(new Error(`Request ${requestId} timed out`));
+      }
+    }, PROMISE_TTL * 1000);
+  });
 }
 
 async function fetchOnChainMetadata(mint, connection) {
-    try {
-      const metaplex = new Metaplex(connection);
-      const mintPubkey = new PublicKey(mint);
-      const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
-      if (metadataAccount) {
-        return {
-          address: mint,
-          symbol: metadataAccount.symbol || 'Unknown',
-          name: metadataAccount.name || 'Unknown Token',
-          decimals: metadataAccount.mint.decimals || 0,
-        };
-      }
-      console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
-    } catch (e) {
-      console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
+  try {
+    const metaplex = new Metaplex(connection);
+    const mintPubkey = new PublicKey(mint);
+    const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
+    if (metadataAccount) {
+      return {
+        address: mint,
+        symbol: metadataAccount.symbol || 'Unknown',
+        name: metadataAccount.name || 'Unknown Token',
+        decimals: metadataAccount.mint.decimals || 0,
+      };
     }
-    return null;
+    console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
   }
+  return null;
+}
 
 function normalizeImageUrl(imageUrl) {
-    if (!imageUrl) return null;
-    if (imageUrl.startsWith('ipfs://')) {
-        return imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
-    }
-    return imageUrl;
+  if (!imageUrl) return null;
+  if (imageUrl.startsWith('ipfs://')) {
+    return imageUrl.replace('ipfs://', 'https://ipfs.io/ipfs/');
+  }
+  return imageUrl;
 }
 
 async function getPurchasesTransactions(walletAddress, connection) {
-    const pubkey = new PublicKey(walletAddress);
-    const signatures = await connection.getSignaturesForAddress(pubkey, { limit: 20 });
-    const purchasesTxs = [];
-    const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
+  const pubkey = new PublicKey(walletAddress);
+  const signatures = await connection.getSignaturesForAddress(pubkey, { limit: 20 });
+  const purchasesTxs = [];
+  const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-    for (const sig of signatures) {
-        try {
-            if (!sig.signature || !sig.blockTime) {
-                console.warn(`[${new Date().toISOString()}] Skipping invalid signature: ${sig.signature || 'unknown'} - missing blockTime`);
-                continue;
-            }
+  for (const sig of signatures) {
+    try {
+      if (!sig.signature || !sig.blockTime) {
+        console.warn(`[${new Date().toISOString()}] Skipping invalid signature: ${sig.signature || 'unknown'} - missing blockTime`);
+        continue;
+      }
 
-            const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
-            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
-                console.warn(`[${new Date().toISOString()}] Skipping transaction ${sig.signature} - invalid or missing metadata`);
-                continue;
-            }
+      const tx = await connection.getParsedTransaction(sig.signature, { maxSupportedTransactionVersion: 0 });
+      if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
+        console.warn(`[${new Date().toISOString()}] Skipping transaction ${sig.signature} - invalid or missing metadata`);
+        continue;
+      }
 
-            const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
-            if (solChange >= 0) continue;
+      const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
+      if (solChange >= 0) continue;
 
-            const tokenChangesRaw = [];
-            (tx.meta.postTokenBalances || []).forEach((post, i) => {
-                const pre = tx.meta.preTokenBalances?.find((p) => p.mint === post.mint && p.accountIndex === post.accountIndex);
-                if (!pre) return;
-                const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
-                const uiChange = Number(post.uiTokenAmount.uiAmount) - Number(pre.uiTokenAmount.uiAmount);
-                if (uiChange <= 0 || post.mint === WRAPPED_SOL_MINT) return;
-                tokenChangesRaw.push({
-                    mint: post.mint,
-                    rawChange,
-                    uiChange,
-                    decimals: post.uiTokenAmount.decimals,
-                });
-            });
+      const tokenChangesRaw = [];
+      (tx.meta.postTokenBalances || []).forEach((post, i) => {
+        const pre = tx.meta.preTokenBalances?.find((p) => p.mint === post.mint && p.accountIndex === post.accountIndex);
+        if (!pre) return;
+        const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
+        const uiChange = Number(post.uiTokenAmount.uiAmount) - Number(pre.uiTokenAmount.uiAmount);
+        if (uiChange <= 0 || post.mint === WRAPPED_SOL_MINT) return;
+        tokenChangesRaw.push({
+          mint: post.mint,
+          rawChange,
+          uiChange,
+          decimals: post.uiTokenAmount.decimals,
+        });
+      });
 
-            if (tokenChangesRaw.length === 0) continue;
+      if (tokenChangesRaw.length === 0) continue;
 
-            const tokensBought = [];
-            const mints = tokenChangesRaw.map((t) => t.mint);
-            const tokenInfos = await this.batchFetchTokenMetadata(mints);
-            for (const t of tokenChangesRaw) {
-                const tokenInfo = tokenInfos.get(t.mint) || {
-                    mint: t.mint,
-                    symbol: 'Unknown',
-                    name: 'Unknown Token',
-                    decimals: t.decimals,
-                };
-                tokensBought.push({
-                    mint: t.mint,
-                    symbol: tokenInfo.symbol,
-                    name: tokenInfo.name,
-                    amount: t.uiChange,
-                    decimals: tokenInfo.decimals,
-                });
-            }
+      const tokensBought = [];
+      const mints = tokenChangesRaw.map((t) => t.mint);
+      const tokenInfos = await batchFetchTokenMetadata(mints);
+      for (const t of tokenChangesRaw) {
+        const tokenInfo = tokenInfos.get(t.mint) || {
+          mint: t.mint,
+          symbol: 'Unknown',
+          name: 'Unknown Token',
+          decimals: t.decimals,
+        };
+        tokensBought.push({
+          mint: t.mint,
+          symbol: tokenInfo.symbol,
+          name: tokenInfo.name,
+          amount: t.uiChange,
+          decimals: tokenInfo.decimals,
+        });
+      }
 
-            if (tokensBought.length === 0) {
-                console.warn(`[${new Date().toISOString()}] Skipping transaction ${sig.signature} - no valid tokens bought`);
-                continue;
-            }
+      if (tokensBought.length === 0) {
+        console.warn(`[${new Date().toISOString()}] Skipping transaction ${sig.signature} - no valid tokens bought`);
+        continue;
+      }
 
-            const spentSOL = +(-solChange).toFixed(6);
+      const spentSOL = +(-solChange).toFixed(6);
 
-            purchasesTxs.push({
-                signature: sig.signature,
-                time: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : null,
-                spentSOL,
-                tokensBought,
-            });
-        } catch (e) {
-            console.error(`[${new Date().toISOString()}] Error fetching tx ${sig.signature || 'unknown'}:`, e.message);
-        }
-        await new Promise((res) => setTimeout(res, 100));
+      purchasesTxs.push({
+        signature: sig.signature,
+        time: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : null,
+        spentSOL,
+        tokensBought,
+      });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Error fetching tx ${sig.signature || 'unknown'}:`, e.message);
     }
-    return purchasesTxs;
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  return purchasesTxs;
+}
+
+async function batchFetchTokenMetadata(mints) {
+  const tokenInfos = new Map();
+  const uncachedMints = [];
+  const pipeline = redis.pipeline();
+
+  for (const mint of mints) {
+    pipeline.get(`token:${mint}`);
+  }
+  const results = await pipeline.exec();
+
+  results.forEach(([err, cachedToken], index) => {
+    if (!err && cachedToken) {
+      tokenInfos.set(mints[index], JSON.parse(cachedToken));
+    } else {
+      uncachedMints.push(mints[index]);
+    }
+  });
+
+  if (uncachedMints.length > 0) {
+    const batchSize = 10;
+    for (let i = 0; i < uncachedMints.length; i += batchSize) {
+      const batch = uncachedMints.slice(i, i + batchSize);
+      const batchResults = await Promise.all(
+        batch.map(async (mint) => {
+          const tokenInfo = await fetchTokenMetadata(mint, connection);
+          return { mint, tokenInfo };
+        })
+      );
+      const pipeline = redis.pipeline();
+      batchResults.forEach(({ mint, tokenInfo }) => {
+        if (tokenInfo) {
+          tokenInfos.set(mint, tokenInfo);
+          pipeline.set(`token:${mint}`, JSON.stringify(tokenInfo), 'EX', 24 * 60 * 60);
+        }
+      });
+      await pipeline.exec();
+    }
+  }
+
+  return tokenInfos;
 }
 
 module.exports = {
-    fetchOnChainMetadata,
-    normalizeImageUrl,
-    fetchTokenMetadata,
-    getPurchasesTransactions,
-    redis,
+  fetchOnChainMetadata,
+  normalizeImageUrl,
+  fetchTokenMetadata,
+  getPurchasesTransactions,
+  redis,
+  getTokenPrice,
+  getCurrentBalance,
 };
