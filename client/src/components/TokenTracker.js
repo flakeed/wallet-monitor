@@ -25,8 +25,15 @@ function TokenTracker({ groupId, timeframe = '24' }) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
       
-      const data = await response.json();
-      console.log('Fetched token data:', data);
+      const responseData = await response.json();
+      console.log('Fetched token data:', responseData);
+      
+      // Check if response has data property and it's an array
+      if (!responseData.success || !Array.isArray(responseData.data)) {
+        throw new Error('Invalid API response format: expected an array in data property');
+      }
+      
+      const data = responseData.data; // Extract the data array
       setItems(data);
       
       // Fetch prices for tokens with remaining balances
