@@ -2,14 +2,16 @@ import React, { useState, useEffect, useCallback } from 'react';
 
 import TokenCard from './TokenCard';
 
-function TokenCard({ token, onOpenChart, currentPrice }) {
+function TokenTracker({ groupId, timeframe = '24' }) {
   const [items, setItems] = useState([]);
+  const [hours, setHours] = useState(timeframe);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tokenPrices, setTokenPrices] = useState({});
   const [priceLoading, setPriceLoading] = useState(false);
 
-  const fetchTokenData = useCallback(async () => {
+  // Fetch token data from API
+const fetchTokenData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -68,7 +70,7 @@ function TokenCard({ token, onOpenChart, currentPrice }) {
 
   useEffect(() => {
     fetchTokenData();
-  }, [fetchTokenData]);
+  }, [fetchTokenData]); // Line 141
 
   // Calculate unrealized PnL for each token
   const calculateUnrealizedPnL = (token, currentPrice) => {
