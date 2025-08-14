@@ -198,27 +198,242 @@ function App() {
     }
   };
 
-  const addWalletsBulk = async (wallets, groupId) => {
+  const checkServerHealth = async () => {
     try {
-      const response = await fetch(`${API_BASE}/wallets/bulk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          wallets, 
-          groupId
-        }),
+      const response = await fetch('/api/monitoring/status', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        }
       });
-
-      const data = await response.json();
-
+      
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to import wallets');
+        throw new Error(`Server health check failed: ${response.status}`);
       }
+      
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('Server health check failed:', error);
+      return null;
+    }
+  };
 
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message, results: data.results };
-    } catch (err) {
-      throw new Error(err.message);
+  // const addWalletsBulk = async (wallets, groupId) => {
+  //   try {
+  //     const response = await fetch(`${API_BASE}/wallets/bulk`, {
+  //       method: 'POST',
+  //       headers: { 'Content-Type': 'application/json' },
+  //       body: JSON.stringify({ 
+  //         wallets, 
+  //         groupId
+  //       }),
+  //     });
+
+  //     const data = await response.json();
+
+  //     if (!response.ok) {
+  //       throw new Error(data.error || 'Failed to import wallets');
+  //     }
+
+  //     setRefreshKey((prev) => prev + 1);
+  //     return { success: true, message: data.message, results: data.results };
+  //   } catch (err) {
+  //     throw new Error(err.message);
+  //   }
+  // };
+
+  const handleAddWalletsBulk = async (wallets, groupId, progressCallback) => {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 2000;
+    
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    
+    const sendChunkWithRetry = async (chunk, chunkIndex, totalChunks, attempt = 1) => {
+      try {
+        console.log(`Sending chunk ${chunkIndex + 1}/${totalChunks} (attempt ${attempt})`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 минуты timeout
+        
+        const response = await fetch('/api/wallets/bulk', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            wallets: chunk, 
+            groupId 
+          }),
+          signal: controller.signal
+        });
+  
+        clearTimeout(timeoutId);
+  
+        // Детальная проверка ответа
+        console.log(`Response status: ${response.status}`);
+        console.log(`Response headers:`, Object.fromEntries(response.headers.entries()));
+  
+        const contentType = response.headers.get('Content-Type');
+        
+        if (!response.ok) {
+          let errorMessage = `HTTP ${response.status}`;
+          
+          try {
+            if (contentType && contentType.includes('application/json')) {
+              const errorData = await response.json();
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } else {
+              const errorText = await response.text();
+              console.error('Non-JSON error response:', errorText.substring(0, 500));
+              
+              // Проверяем, не является ли это HTML страницей с ошибкой
+              if (errorText.includes('<!DOCTYPE') || errorText.includes('<html')) {
+                errorMessage = 'Server returned HTML error page instead of JSON. Check server logs.';
+              } else {
+                errorMessage = errorText.substring(0, 200);
+              }
+            }
+          } catch (parseError) {
+            console.error('Error parsing error response:', parseError);
+            errorMessage = `HTTP ${response.status} - Could not parse error response`;
+          }
+          
+          throw new Error(errorMessage);
+        }
+  
+        // Проверяем, что ответ действительно JSON
+        if (!contentType || !contentType.includes('application/json')) {
+          const responseText = await response.text();
+          console.error('Unexpected response format:', responseText.substring(0, 200));
+          throw new Error(`Expected JSON response but got: ${contentType}`);
+        }
+  
+        const result = await response.json();
+        
+        if (!result.success && !result.results) {
+          throw new Error(result.error || 'Unknown server error');
+        }
+  
+        return result;
+  
+      } catch (error) {
+        console.error(`Chunk ${chunkIndex + 1} attempt ${attempt} failed:`, error.message);
+        
+        if (error.name === 'AbortError') {
+          throw new Error('Request timeout - chunk took too long to process');
+        }
+        
+        if (attempt < MAX_RETRIES && (
+          error.message.includes('fetch') || 
+          error.message.includes('network') ||
+          error.message.includes('timeout') ||
+          error.message.includes('TIMEOUT')
+        )) {
+          console.log(`Retrying chunk ${chunkIndex + 1} in ${RETRY_DELAY}ms...`);
+          await sleep(RETRY_DELAY * attempt);
+          return sendChunkWithRetry(chunk, chunkIndex, totalChunks, attempt + 1);
+        }
+        
+        throw error;
+      }
+    };
+  
+    try {
+      // Адаптивный размер чанка в зависимости от количества кошельков
+      let CHUNK_SIZE;
+      if (wallets.length > 5000) {
+        CHUNK_SIZE = 200;
+      } else if (wallets.length > 2000) {
+        CHUNK_SIZE = 300;
+      } else if (wallets.length > 1000) {
+        CHUNK_SIZE = 400;
+      } else {
+        CHUNK_SIZE = 500;
+      }
+  
+      const chunks = [];
+      for (let i = 0; i < wallets.length; i += CHUNK_SIZE) {
+        chunks.push(wallets.slice(i, i + CHUNK_SIZE));
+      }
+  
+      console.log(`Processing ${wallets.length} wallets in ${chunks.length} chunks (${CHUNK_SIZE} wallets per chunk)`);
+  
+      let totalResults = {
+        total: wallets.length,
+        successful: 0,
+        failed: 0,
+        errors: [],
+        successfulWallets: []
+      };
+  
+      // Обрабатываем чанки последовательно
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk = chunks[chunkIndex];
+        
+        if (progressCallback) {
+          progressCallback({
+            current: chunkIndex * CHUNK_SIZE,
+            total: wallets.length,
+            batch: chunkIndex + 1
+          });
+        }
+  
+        try {
+          const chunkResult = await sendChunkWithRetry(chunk, chunkIndex, chunks.length);
+          
+          // Объединяем результаты
+          totalResults.successful += chunkResult.results.successful || 0;
+          totalResults.failed += chunkResult.results.failed || 0;
+          
+          if (chunkResult.results.errors) {
+            totalResults.errors.push(...chunkResult.results.errors);
+          }
+          
+          if (chunkResult.results.successfulWallets) {
+            totalResults.successfulWallets.push(...chunkResult.results.successfulWallets);
+          }
+  
+          console.log(`Chunk ${chunkIndex + 1}/${chunks.length} completed: +${chunkResult.results.successful} successful, +${chunkResult.results.failed} failed`);
+  
+        } catch (chunkError) {
+          console.error(`Chunk ${chunkIndex + 1} failed completely:`, chunkError.message);
+          
+          // Помечаем все кошельки в чанке как неудачные
+          totalResults.failed += chunk.length;
+          totalResults.errors.push({
+            address: `chunk_${chunkIndex + 1}`,
+            error: `Entire chunk failed: ${chunkError.message}`,
+            walletCount: chunk.length
+          });
+        }
+  
+        // Пауза между чанками
+        if (chunkIndex < chunks.length - 1) {
+          await sleep(200);
+        }
+      }
+  
+      if (progressCallback) {
+        progressCallback({
+          current: wallets.length,
+          total: wallets.length,
+          batch: chunks.length
+        });
+      }
+  
+      const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
+      console.log(`Bulk import completed: ${totalResults.successful}/${totalResults.total} successful (${successRate}%)`);
+  
+      return {
+        success: totalResults.successful > 0,
+        message: `Bulk import completed: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
+        results: totalResults
+      };
+  
+    } catch (error) {
+      console.error('Bulk import failed:', error);
+      throw new Error(`Bulk import failed: ${error.message}`);
     }
   };
 
@@ -390,7 +605,7 @@ function App() {
             </div>
           )}
         </div>
-        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={addWalletsBulk} onCreateGroup={createGroup} groups={groups} />
+        <WalletManager onAddWallet={addWallet} onAddWalletsBulk={handleAddWalletsBulk} onCreateGroup={createGroup} groups={groups} />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
           <WalletList

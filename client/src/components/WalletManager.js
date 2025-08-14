@@ -32,7 +32,22 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
+    console.log('Checking server health before bulk import...');
+    const serverHealth = await checkServerHealth();
+    
+    if (!serverHealth) {
+      setBulkResults({
+        type: 'error',
+        message: 'Server health check failed. Please try again later.'
+      });
+      return;
+    }
+  
+    setBulkLoading(true);
+    setShowProgress(true);
+    setBulkResults(null);
+    setImportProgress({ current: 0, total: wallets.length, batch: 0 });
+      
     if (!address.trim()) {
       setMessage({ type: 'error', text: 'Wallet address is required' });
       return;
@@ -45,19 +60,37 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
 
     setLoading(true);
     setMessage(null);
-
     try {
       const result = await onAddWallet(address, name, groupId || null);
       if (result.success) {
         setMessage({ type: 'success', text: result.message });
+        setImportProgress(progress);
         setAddress('');
         setName('');
         setGroupId('');
       }
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      console.error('Bulk import failed:', error);
+      
+      // Более детальное сообщение об ошибке
+      let errorMessage = error.message;
+      if (error.message.includes('HTML') || error.message.includes('DOCTYPE')) {
+        errorMessage = 'Server returned an error page. This usually means the request was too large or took too long. Try importing fewer wallets at once.';
+      } else if (error.message.includes('timeout')) {
+        errorMessage = 'Request timed out. Try importing fewer wallets at once.';
+      } else if (error.message.includes('JSON')) {
+        errorMessage = 'Server response format error. Check server logs and try again.';
+      }
+      
+      setBulkResults({
+        type: 'error',
+        message: `Bulk import failed: ${errorMessage}`
+      });
     } finally {
       setLoading(false);
+      setBulkLoading(false);
+    setShowProgress(false);
+    setImportProgress({ current: 0, total: 0, batch: 0 });
     }
   };
 
@@ -142,18 +175,18 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
 
   const handleBulkSubmit = async (e) => {
     e.preventDefault();
-
+  
     if (!bulkText.trim()) {
       setBulkResults({ type: 'error', message: 'Please enter wallet addresses' });
       return;
     }
-
+  
     const { wallets, errors: parseErrors } = parseBulkInput(bulkText);
-
-    if (parseErrors.length > 0) {
+  
+    if (parseErrors.length > 0 && wallets.length === 0) {
       setBulkResults({
-        type: 'warning',
-        message: `Found ${parseErrors.length} parsing errors. Check the format below.`,
+        type: 'error',
+        message: `Found ${parseErrors.length} parsing errors and no valid wallets.`,
         details: {
           total: parseErrors.length,
           successful: 0,
@@ -161,47 +194,57 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
           errors: parseErrors.map(err => ({ address: 'parse_error', error: err }))
         }
       });
-      if (wallets.length === 0) return;
+      return;
     }
-
+  
     if (wallets.length === 0) {
       setBulkResults({
         type: 'error',
-        message: 'No valid wallet addresses found. Make sure addresses are 44 characters long.'
+        message: 'No valid wallet addresses found.'
       });
       return;
     }
-
+  
     if (wallets.length > 10000) {
       setBulkResults({
         type: 'error',
-        message: 'Maximum 10,000 wallets allowed per bulk import. Please split your list.'
+        message: 'Maximum 10,000 wallets allowed per bulk import.'
       });
       return;
     }
-
+  
     setBulkLoading(true);
     setShowProgress(true);
     setBulkResults(null);
     setImportProgress({ current: 0, total: wallets.length, batch: 0 });
-
+  
     try {
-      const result = await onAddWalletsBulk(wallets, groupId || null, (progress) => {
+      console.log(`Starting bulk import of ${wallets.length} wallets...`);
+      
+      const result = await handleAddWalletsBulk(wallets, groupId || null, (progress) => {
         setImportProgress(progress);
       });
-
+  
+      // Объединяем ошибки парсинга с ошибками импорта
+      if (parseErrors.length > 0) {
+        result.results.errors.unshift(...parseErrors.map(err => ({ address: 'parse_error', error: err })));
+        result.results.failed += parseErrors.length;
+      }
+  
       setBulkResults({
         type: result.results.failed > 0 ? 'warning' : 'success',
         message: result.message,
         details: result.results
       });
-
+  
       if (result.results.successful > 0) {
         setBulkText('');
         setGroupId('');
         setBulkValidation(null);
       }
+  
     } catch (error) {
+      console.error('Bulk import failed:', error);
       setBulkResults({
         type: 'error',
         message: `Bulk import failed: ${error.message}`

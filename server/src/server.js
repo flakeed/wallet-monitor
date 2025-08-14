@@ -14,6 +14,31 @@ const port = process.env.PORT || 5001;
 const https = require('https');
 const fs = require('fs');
 
+app.use(express.json({ 
+  limit: '50mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
+app.use(express.urlencoded({ 
+  limit: '50mb', 
+  extended: true,
+  parameterLimit: 50000
+}));
+
+app.use('/api/wallets/bulk', (req, res, next) => {
+  console.log(`[${new Date().toISOString()}] 📥 Bulk import request received`);
+  console.log(`- Content-Length: ${req.get('Content-Length')}`);
+  console.log(`- Content-Type: ${req.get('Content-Type')}`);
+  
+  // Устанавливаем увеличенные таймауты именно для этого endpoint
+  req.setTimeout(600000); // 10 минут
+  res.setTimeout(600000); // 10 минут
+  
+  next();
+});
+
+
 // Load SSL certificates
 const sslOptions = {
   key: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/privkey.pem'),
@@ -33,6 +58,12 @@ app.use(
   })
 );
 app.use(express.json());
+
+app.use((req, res, next) => {
+  req.setTimeout(300000); // 5 минут
+  res.setTimeout(300000); // 5 минут
+  next();
+});
 
 const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
@@ -431,54 +462,77 @@ app.get('/api/stats/transactions', async (req, res) => {
 });
 
 app.post('/api/wallets/bulk', async (req, res) => {
+  const startTime = Date.now();
+  
   try {
     const { wallets, groupId } = req.body;
 
+    // Валидация входных данных
     if (!wallets || !Array.isArray(wallets)) {
-      return res.status(400).json({ error: 'Wallets array is required' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Wallets array is required' 
+      });
     }
 
     if (wallets.length === 0) {
-      return res.status(400).json({ error: 'At least one wallet is required' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'At least one wallet is required' 
+      });
     }
 
-    // Увеличиваем лимит до 10,000
     if (wallets.length > 10000) {
-      return res.status(400).json({ error: 'Maximum 10,000 wallets allowed per bulk import' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Maximum 10,000 wallets allowed per bulk import' 
+      });
     }
 
     console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets`);
 
+    // Инициализация результатов
     const results = {
       total: wallets.length,
       successful: 0,
       failed: 0,
+      skipped: 0,
       errors: [],
-      successfulWallets: [],
-      skipped: 0
+      successfulWallets: []
     };
 
-    // Предварительная валидация всех адресов
-    console.log(`[${new Date().toISOString()}] 🔍 Pre-validating ${wallets.length} wallet addresses...`);
-    for (const wallet of wallets) {
-      if (!wallet.address || wallet.address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address)) {
+    // Предварительная валидация адресов
+    const validWallets = [];
+    const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
+
+    for (let i = 0; i < wallets.length; i++) {
+      const wallet = wallets[i];
+      
+      if (!wallet || !wallet.address) {
         results.failed++;
         results.errors.push({
-          address: wallet.address || 'invalid',
-          name: wallet.name || null,
-          error: 'Invalid Solana wallet address format',
+          address: 'unknown',
+          name: wallet?.name || null,
+          error: 'Missing wallet address'
         });
+        continue;
       }
+
+      if (!solanaAddressRegex.test(wallet.address)) {
+        results.failed++;
+        results.errors.push({
+          address: wallet.address,
+          name: wallet.name || null,
+          error: 'Invalid Solana address format'
+        });
+        continue;
+      }
+
+      validWallets.push({
+        address: wallet.address.trim(),
+        name: wallet.name?.trim() || null
+      });
     }
-
-    // Фильтруем только валидные кошельки
-    const validWallets = wallets.filter(wallet => {
-      return wallet.address && 
-             wallet.address.length === 44 && 
-             /^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.address);
-    });
-
-    console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation, ${results.failed} failed`);
 
     if (validWallets.length === 0) {
       return res.json({
@@ -488,99 +542,77 @@ app.post('/api/wallets/bulk', async (req, res) => {
       });
     }
 
-    // Обрабатываем пакетами по 200 кошельков для оптимальной производительности
-    const batchSize = 200;
-    const totalBatches = Math.ceil(validWallets.length / batchSize);
-    
-    console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${batchSize} wallets each...`);
+    console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation`);
 
-    for (let i = 0; i < validWallets.length; i += batchSize) {
-      const currentBatch = i / batchSize + 1;
-      const batch = validWallets.slice(i, i + batchSize);
+    // Обработка пакетами для избежания таймаутов
+    const BATCH_SIZE = 100; // Уменьшаем размер пакета
+    const totalBatches = Math.ceil(validWallets.length / BATCH_SIZE);
+    
+    console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${BATCH_SIZE} wallets each`);
+
+    // Обрабатываем пакеты последовательно, а не параллельно
+    for (let i = 0; i < validWallets.length; i += BATCH_SIZE) {
+      const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
+      const batch = validWallets.slice(i, i + BATCH_SIZE);
       
       console.log(`[${new Date().toISOString()}] 📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} wallets)`);
 
-      // Используем Promise.allSettled для обработки всех кошельков в пакете
-      const batchPromises = batch.map(async (wallet) => {
+      // Обрабатываем каждый кошелек в пакете
+      for (const wallet of batch) {
         try {
           const addedWallet = await solanaWebSocketService.addWallet(
             wallet.address, 
-            wallet.name || null, 
+            wallet.name, 
             groupId
           );
           
-          return {
-            success: true,
-            wallet: {
-              address: wallet.address,
-              name: wallet.name || null,
-              id: addedWallet.id,
-              groupId: addedWallet.group_id,
-            }
-          };
-        } catch (error) {
-          return {
-            success: false,
-            wallet: wallet,
-            error: error.message
-          };
-        }
-      });
+          results.successful++;
+          results.successfulWallets.push({
+            address: wallet.address,
+            name: wallet.name,
+            id: addedWallet.id,
+            groupId: addedWallet.group_id,
+          });
 
-      const batchResults = await Promise.allSettled(batchPromises);
-      
-      // Обрабатываем результаты пакета
-      batchResults.forEach((result, index) => {
-        if (result.status === 'fulfilled') {
-          const { success, wallet, error } = result.value;
-          
-          if (success) {
-            results.successful++;
-            results.successfulWallets.push(wallet);
-          } else {
-            results.failed++;
-            results.errors.push({
-              address: wallet.address,
-              name: wallet.name || null,
-              error: error
-            });
-          }
-        } else {
-          // Promise был отклонен
-          const wallet = batch[index];
+        } catch (error) {
           results.failed++;
           results.errors.push({
             address: wallet.address,
-            name: wallet.name || null,
-            error: `Promise rejected: ${result.reason?.message || 'Unknown error'}`
+            name: wallet.name,
+            error: error.message || 'Unknown error'
           });
         }
-      });
-
-      // Прогресс лог
-      console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Progress: ${results.successful} successful, ${results.failed} failed`);
-
-      // Небольшая пауза между пакетами для предотвращения перегрузки БД
-      if (i + batchSize < validWallets.length) {
-        await new Promise(resolve => setTimeout(resolve, 100));
       }
+
+      // Небольшая пауза между пакетами
+      if (i + BATCH_SIZE < validWallets.length) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // Промежуточное логирование прогресса
+      console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Total: ${results.successful} successful, ${results.failed} failed`);
     }
 
-    // Финальная статистика
-    const totalProcessed = results.successful + results.failed;
-    console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed: ${results.successful}/${totalProcessed} successful`);
+    const duration = Date.now() - startTime;
+    console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful`);
 
+    // Возвращаем результат
     res.json({
       success: results.successful > 0,
       message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
-      results
+      results,
+      duration: duration
     });
 
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in bulk wallet import:`, error);
+    const duration = Date.now() - startTime;
+    console.error(`[${new Date().toISOString()}] ❌ Bulk import failed after ${duration}ms:`, error);
+    
     res.status(500).json({ 
-      error: 'Failed to import wallets',
-      details: error.message 
+      success: false,
+      error: 'Internal server error during bulk import',
+      details: error.message,
+      duration: duration
     });
   }
 });
@@ -827,6 +859,48 @@ app.post('/api/groups/switch', async (req, res) => {
     console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error);
     res.status(500).json({ error: 'Failed to switch group' });
   }
+});
+
+app.use((error, req, res, next) => {
+  console.error(`[${new Date().toISOString()}] ❌ Server Error:`, error);
+  
+  // Проверяем, не был ли ответ уже отправлен
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  // Обрабатываем различные типы ошибок
+  if (error.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      error: 'Request too large. Maximum 50MB allowed.',
+      code: 'REQUEST_TOO_LARGE'
+    });
+  }
+
+  if (error.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid JSON format in request body.',
+      code: 'JSON_PARSE_ERROR'
+    });
+  }
+
+  if (error.code === 'TIMEOUT') {
+    return res.status(408).json({
+      success: false,
+      error: 'Request timeout. Try with smaller batches.',
+      code: 'TIMEOUT'
+    });
+  }
+
+  // Общая ошибка сервера
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    message: error.message,
+    code: 'INTERNAL_ERROR'
+  });
 });
 
 process.on('SIGINT', async () => {
