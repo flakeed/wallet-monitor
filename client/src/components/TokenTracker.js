@@ -15,7 +15,7 @@ function TokenTracker({ groupId, timeframe = '24' }) {
     setError(null);
   
     try {
-      const response = await fetch(`/api/tokens/tracker?hours=24`);
+      const response = await fetch(`/api/tokens/tracker?hours=${hours}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
@@ -32,10 +32,9 @@ function TokenTracker({ groupId, timeframe = '24' }) {
       setItems(data);
   
       // Ensure data is an array before filtering
-      const mintsWithBalance =Array.isArray(r)
-      ? r.filter(token => token?.summary?.totalTokensRemaining > 0)
+      const mintsWithBalance = Array.isArray(data)
+      ? data.filter(token => token?.summary?.totalTokensRemaining > 0)
       : [];
-  
       if (mintsWithBalance.length > 0) {
         try {
           const priceResponse = await fetch(`/api/tokens/price/batch`, {
@@ -114,10 +113,8 @@ const enhancedItems = items.map(token => {
     };
   });
 
-  // Load data on mount and when dependencies change
-  useEffect(() => {
-    fetchTokenData();
-  }, [fetchTokenData]);
+
+
 
   // Update hours when timeframe prop changes
   useEffect(() => {
