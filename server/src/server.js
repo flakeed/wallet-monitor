@@ -866,7 +866,8 @@ app.get('/api/prices/stream', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const subscriber = tokenPriceService.redis; // Reuse existing Redis instance
+  // Use the Pub/Sub Redis client
+  const subscriber = tokenPriceService.redisPubSub;
 
   subscriber.subscribe('price_updates', (err) => {
       if (err) {
@@ -878,43 +879,43 @@ app.get('/api/prices/stream', (req, res) => {
   });
 
   subscriber.on('message', (channel, message) => {
-    if (channel === 'price_updates' && res.writable) {
-      res.write(`data: ${message}\n\n`);
-    }
+      if (channel === 'price_updates' && res.writable) {
+          res.write(`data: ${message}\n\n`);
+      }
   });
 
-  // Отправляем обновления цен каждые 5 секунд для активных токенов
+  // Send price updates every 5 seconds for active tokens
   const priceInterval = setInterval(async () => {
-    try {
-      const activeTokens = await tokenPriceService.getActiveTokens();
-      if (activeTokens.length > 0 && res.writable) {
-        const prices = await tokenPriceService.batchUpdatePrices(activeTokens);
-        const priceUpdate = {
-          timestamp: Date.now(),
-          prices: Object.fromEntries(prices)
-        };
-        res.write(`data: ${JSON.stringify(priceUpdate)}\n\n`);
+      try {
+          const activeTokens = await tokenPriceService.getActiveTokens();
+          if (activeTokens.length > 0 && res.writable) {
+              const prices = await tokenPriceService.batchUpdatePrices(activeTokens);
+              const priceUpdate = {
+                  timestamp: Date.now(),
+                  prices: Object.fromEntries(prices)
+              };
+              res.write(`data: ${JSON.stringify(priceUpdate)}\n\n`);
+          }
+      } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Error sending price updates:`, error);
       }
-    } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Error sending price updates:`, error);
-    }
   }, 5000);
 
   req.on('close', () => {
-    console.log(`[${new Date().toISOString()}] 🔌 Price stream client disconnected`);
-    clearInterval(priceInterval);
-    subscriber.unsubscribe();
-    subscriber.quit();
-    res.end();
+      console.log(`[${new Date().toISOString()}] 🔌 Price stream client disconnected`);
+      clearInterval(priceInterval);
+      subscriber.unsubscribe();
+      subscriber.quit();
+      res.end();
   });
 
   // Keep-alive
   const keepAlive = setInterval(() => {
-    if (res.writable) {
-      res.write(': keep-alive\n\n');
-    } else {
-      clearInterval(keepAlive);
-    }
+      if (res.writable) {
+          res.write(': keep-alive\n\n');
+      } else {
+          clearInterval(keepAlive);
+      }
   }, 30000);
 });
 
