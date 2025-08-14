@@ -668,11 +668,17 @@ app.get('/api/tokens/tracker', async (req, res) => {
       const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
       const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
       const currentPrice = await fetchTokenPrice(row.mint);
-      // Corrected unrealized PNL: Current market value - Cost basis
-      const costBasis = Number(row.sol_spent || 0); // Total spent SOL for tokens bought
-      const currentMarketValue = currentBalance * currentPrice;
-      const unrealizedPNL = currentMarketValue - costBasis;
       
+      // Validate currentPrice to avoid extreme values
+      const validatedPrice = currentPrice > 0 ? currentPrice : 0.0001; // Minimum price to prevent division by zero or negative
+      // Cost basis is the spent SOL for this wallet's holdings
+      const costBasis = Number(row.sol_spent || 0);
+      // Current market value of held tokens
+      const currentMarketValue = currentBalance * validatedPrice;
+      // Unrealized PNL, capped to not exceed the negative of cost basis
+      const unrealizedPNL = currentMarketValue - costBasis;
+      const cappedUnrealizedPNL = Math.max(unrealizedPNL, -costBasis); // Ensure loss doesn't exceed spent amount
+
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
@@ -685,7 +691,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
         realizedPNL: +realizedPNL.toFixed(6),
-        unrealizedPNL: +unrealizedPNL.toFixed(6),
+        unrealizedPNL: +cappedUnrealizedPNL.toFixed(6),
         currentBalance: +currentBalance.toFixed(6),
         lastActivity: row.last_activity,
       });
@@ -697,7 +703,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
       token.summary.currentBalance += currentBalance;
       token.summary.realizedPNL += realizedPNL;
-      token.summary.unrealizedPNL += unrealizedPNL;
+      token.summary.unrealizedPNL += cappedUnrealizedPNL;
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
