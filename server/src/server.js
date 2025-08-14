@@ -70,16 +70,25 @@ const sseClients = new Set();
 // Mock function to fetch token price (replace with real API like Jupiter or Birdeye)
 async function fetchTokenPrice(mint) {
   try {
-    // Example using Jupiter API (replace with your preferred API)
-    const response = await axios.get(`https://price.jup.ag/v4/price?ids=${mint}`);
-    const priceData = response.data.data[mint];
-    if (!priceData || !priceData.price) {
-      console.warn(`[${new Date().toISOString()}] No price data for mint ${mint}, using fallback price`);
+    const response = await axios.get(`https://api.coingecko.com/api/v3/simple/token_price/solana`, {
+      params: {
+        contract_addresses: mint,
+        vs_currencies: 'sol',
+      },
+    });
+    const priceData = response.data[mint];
+    if (!priceData || !priceData.sol) {
+      console.warn(`[${new Date().toISOString()}] No price data for mint ${mint} on CoinGecko, using fallback price`);
       return 0.01; // Fallback price
     }
-    return priceData.price; // Price in SOL
+    const price = priceData.sol;
+    if (isNaN(price) || price <= 0) {
+      console.warn(`[${new Date().toISOString()}] Invalid price ${price} for mint ${mint}, using fallback price`);
+      return 0.01;
+    }
+    return price; // Price in SOL
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] Error fetching price for mint ${mint}:`, error.message);
+    console.error(`[${new Date().toISOString()}] Error fetching price for mint ${mint} from CoinGecko:`, error.message);
     return 0.01; // Fallback price
   }
 }
@@ -636,11 +645,9 @@ app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
     const groupId = req.query.groupId || null;
-    
     console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
     
     const rows = await db.getTokenWalletAggregates(hours, groupId);
-    
     console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
 
     const byToken = new Map();
@@ -650,7 +657,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
           mint: row.mint,
           symbol: row.symbol,
           name: row.name,
-          decimals: row.decimals,
+          decimals: row.decimals || 9, // Default to 9 if not provided
           wallets: [],
           summary: {
             uniqueWallets: 0,
@@ -665,11 +672,25 @@ app.get('/api/tokens/tracker', async (req, res) => {
         });
       }
       const token = byToken.get(row.mint);
-      const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
-      const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
+      // Normalize token amounts by decimals
+      const tokensBought = Number(row.tokens_bought || 0) / Math.pow(10, row.decimals || 9);
+      const tokensSold = Number(row.tokens_sold || 0) / Math.pow(10, row.decimals || 9);
+      const solSpent = Number(row.sol_spent || 0);
+      const solReceived = Number(row.sol_received || 0);
+      const realizedPNL = solReceived - solSpent;
+      const currentBalance = tokensBought - tokensSold;
       const currentPrice = await fetchTokenPrice(row.mint);
-      const unrealizedPNL = currentBalance * currentPrice - Number(row.sol_spent || 0);
-      
+      const unrealizedPNL = currentBalance * currentPrice - solSpent;
+
+      // Log intermediate values for debugging
+      console.log(`[${new Date().toISOString()}] Mint ${row.mint}: tokensBought=${tokensBought}, tokensSold=${tokensSold}, currentBalance=${currentBalance}, price=${currentPrice}, unrealizedPNL=${unrealizedPNL}`);
+
+      // Validate calculations
+      if (isNaN(realizedPNL) || isNaN(unrealizedPNL) || isNaN(currentBalance)) {
+        console.warn(`[${new Date().toISOString()}] Invalid calculation for mint ${row.mint}: realizedPNL=${realizedPNL}, unrealizedPNL=${unrealizedPNL}, currentBalance=${currentBalance}`);
+        continue;
+      }
+
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
@@ -677,10 +698,10 @@ app.get('/api/tokens/tracker', async (req, res) => {
         groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        tokensBought: Number(row.tokens_bought) || 0,
-        tokensSold: Number(row.tokens_sold) || 0,
+        solSpent: +solSpent.toFixed(6),
+        solReceived: +solReceived.toFixed(6),
+        tokensBought: +tokensBought.toFixed(6),
+        tokensSold: +tokensSold.toFixed(6),
         realizedPNL: +realizedPNL.toFixed(6),
         unrealizedPNL: +unrealizedPNL.toFixed(6),
         currentBalance: +currentBalance.toFixed(6),
@@ -690,8 +711,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalSpentSOL += solSpent;
+      token.summary.totalReceivedSOL += solReceived;
       token.summary.currentBalance += currentBalance;
       token.summary.realizedPNL += realizedPNL;
       token.summary.unrealizedPNL += unrealizedPNL;
@@ -709,7 +730,6 @@ app.get('/api/tokens/tracker', async (req, res) => {
     }));
 
     result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
-
     console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
     res.json(result);
   } catch (error) {
@@ -717,6 +737,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
     res.status(500).json({ error: 'Failed to build token tracker' });
   }
 });
+
 
 app.get('/api/websocket/status', (req, res) => {
   try {
