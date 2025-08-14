@@ -673,7 +673,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
       
       const currentPrice = await fetchTokenPrice(row.mint);
       // Validate currentPrice to ensure it's positive and reasonable
-      const validatedPrice = currentPrice > 0 ? Math.min(currentPrice, 1000) : 0.0001; // Cap price at 1000 SOL to prevent extreme values
+      const validatedPrice = currentPrice > 0 ? Math.min(Math.max(currentPrice, 0.00001), 1000) : 0.00001; // Range: 0.00001 to 1000 SOL
       
       // Cost basis is the spent SOL for this wallet's holdings
       const costBasis = Number(row.sol_spent || 0);
@@ -681,7 +681,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
       const currentMarketValue = validatedBalance * validatedPrice;
       // Unrealized PNL, capped to a realistic range
       const unrealizedPNL = currentMarketValue - costBasis;
-      const cappedUnrealizedPNL = Math.min(Math.max(unrealizedPNL, -costBasis), 100 * costBasis); // Limit gain to 100x spent amount
+      const cappedUnrealizedPNL = Math.min(Math.max(unrealizedPNL, -costBasis * 2), costBasis * 100); // Limit loss to 2x spent, gain to 100x spent
 
       token.wallets.push({
         address: row.wallet_address,
