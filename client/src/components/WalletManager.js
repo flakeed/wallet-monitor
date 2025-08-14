@@ -221,7 +221,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     try {
       console.log(`Starting bulk import of ${wallets.length} wallets...`);
       
-      const result = await handleAddWalletsBulk(wallets, groupId || null, (progress) => {
+      const result = await onAddWalletsBulk(wallets, groupId || null, (progress) => {
         setImportProgress(progress);
       });
   
