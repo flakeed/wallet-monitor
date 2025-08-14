@@ -866,15 +866,15 @@ app.get('/api/prices/stream', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const subscriber = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-  
+  const subscriber = tokenPriceService.redis; // Reuse existing Redis instance
+
   subscriber.subscribe('price_updates', (err) => {
-    if (err) {
-      console.error(`[${new Date().toISOString()}] ❌ Price stream subscription error:`, err);
-      res.status(500).end();
-      return;
-    }
-    console.log(`[${new Date().toISOString()}] ✅ New price stream client connected`);
+      if (err) {
+          console.error(`[${new Date().toISOString()}] ❌ Price stream subscription error:`, err);
+          res.status(500).end();
+          return;
+      }
+      console.log(`[${new Date().toISOString()}] ✅ New price stream client connected`);
   });
 
   subscriber.on('message', (channel, message) => {

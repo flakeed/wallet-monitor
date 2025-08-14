@@ -1,6 +1,7 @@
 // server/src/services/tokenPriceService.js
 const { Connection, PublicKey } = require('@solana/web3.js');
 const Redis = require('ioredis');
+const { fetchTokenMetadata } = require('./tokenService');
 
 class TokenPriceService {
     constructor() {
@@ -10,21 +11,11 @@ class TokenPriceService {
             wsEndpoint: process.env.SOLANA_WS_URL
         });
         
-        // Используем правильный Redis URL
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
-        
-        this.redis.on('connect', () => {
-            console.log(`[${new Date().toISOString()}] ✅ TokenPriceService connected to Redis`);
-        });
-        
-        this.redis.on('error', (err) => {
-            console.error(`[${new Date().toISOString()}] ❌ TokenPriceService Redis error:`, err.message);
-        });
-        
+        this.redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
         this.priceCache = new Map();
         this.CACHE_TTL = 30; // 30 секунд кэш для цен
+        this.RAYDIUM_V4 = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
         this.JUPITER_PRICE_API = 'https://price.jup.ag/v4/price';
-        this.SOL_MINT = 'So11111111111111111111111111111111111111112';
         
         // Запускаем периодическое обновление цен
         this.startPriceUpdater();
@@ -36,38 +27,28 @@ class TokenPriceService {
             try {
                 const activeTokens = await this.getActiveTokens();
                 if (activeTokens.length > 0) {
-                    console.log(`[${new Date().toISOString()}] 📊 Updating prices for ${activeTokens.length} active tokens`);
                     await this.batchUpdatePrices(activeTokens);
                 }
             } catch (error) {
-                console.error(`[${new Date().toISOString()}] ❌ Error updating prices:`, error.message);
+                console.error(`[${new Date().toISOString()}] ❌ Error updating prices:`, error);
             }
         }, 10000);
     }
 
     async getActiveTokens() {
-        try {
-            // Получаем список активных токенов из Redis
-            const keys = await this.redis.keys('active_token:*');
-            return keys.map(key => key.replace('active_token:', ''));
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error getting active tokens:`, error.message);
-            return [];
-        }
+        // Получаем список активных токенов из Redis
+        const keys = await this.redis.keys('active_token:*');
+        return keys.map(key => key.replace('active_token:', ''));
     }
 
     async markTokenActive(tokenMint) {
-        try {
-            // Помечаем токен как активный на 5 минут
-            await this.redis.set(`active_token:${tokenMint}`, '1', 'EX', 300);
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error marking token active:`, error.message);
-        }
+        // Помечаем токен как активный на 5 минут
+        await this.redis.set(`active_token:${tokenMint}`, '1', 'EX', 300);
     }
 
     async getTokenPrice(tokenMint) {
         try {
-            // Проверяем кэш Redis
+            // Проверяем кэш
             const cached = await this.redis.get(`price:${tokenMint}`);
             if (cached) {
                 return JSON.parse(cached);
@@ -80,45 +61,101 @@ class TokenPriceService {
                 return priceData;
             }
 
+            // Если Jupiter не вернул цену, пробуем получить через Raydium pools
+            const raydiumPrice = await this.fetchRaydiumPrice(tokenMint);
+            if (raydiumPrice) {
+                await this.redis.set(`price:${tokenMint}`, JSON.stringify(raydiumPrice), 'EX', this.CACHE_TTL);
+                return raydiumPrice;
+            }
+
             return null;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${tokenMint}:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${tokenMint}:`, error);
             return null;
         }
     }
 
     async fetchJupiterPrice(tokenMint) {
         try {
-            console.log(`[${new Date().toISOString()}] 🔍 Fetching price from Jupiter for ${tokenMint}`);
-            
-            // Получаем цену токена и SOL одним запросом
-            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=${tokenMint},${this.SOL_MINT}`);
-            if (!response.ok) {
-                console.log(`[${new Date().toISOString()}] ❌ Jupiter API returned ${response.status}`);
-                return null;
-            }
+            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=${tokenMint}`);
+            if (!response.ok) return null;
             
             const data = await response.json();
-            
             if (data.data && data.data[tokenMint]) {
-                const tokenPrice = data.data[tokenMint].price;
-                const solPrice = data.data[this.SOL_MINT]?.price || 150;
-                
-                const priceData = {
-                    priceInSOL: tokenPrice / solPrice,
-                    priceInUSD: tokenPrice,
+                const price = data.data[tokenMint].price;
+                return {
+                    priceInSOL: price / data.data['So11111111111111111111111111111111111111112']?.price || 0,
+                    priceInUSD: price,
                     source: 'jupiter',
                     timestamp: Date.now()
                 };
-                
-                console.log(`[${new Date().toISOString()}] ✅ Got price for ${tokenMint}: ${priceData.priceInSOL} SOL`);
-                return priceData;
             }
-            
-            console.log(`[${new Date().toISOString()}] ⚠️ No price data from Jupiter for ${tokenMint}`);
             return null;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Jupiter API error:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Jupiter API error:`, error);
+            return null;
+        }
+    }
+
+    async fetchRaydiumPrice(tokenMint) {
+        try {
+            // Получаем аккаунты пулов Raydium для токена
+            const filters = [
+                { dataSize: 752 },
+                { memcmp: { offset: 400, bytes: tokenMint } }
+            ];
+            
+            const poolAccounts = await this.connection.getProgramAccounts(
+                this.RAYDIUM_V4,
+                { filters }
+            );
+
+            if (poolAccounts.length === 0) {
+                // Пробуем найти пул где токен - quote
+                const altFilters = [
+                    { dataSize: 752 },
+                    { memcmp: { offset: 432, bytes: tokenMint } }
+                ];
+                const altPools = await this.connection.getProgramAccounts(
+                    this.RAYDIUM_V4,
+                    { filters: altFilters }
+                );
+                if (altPools.length > 0) {
+                    poolAccounts.push(...altPools);
+                }
+            }
+
+            if (poolAccounts.length === 0) return null;
+
+            // Берем первый найденный пул
+            const poolData = poolAccounts[0].account.data;
+            
+            // Парсим данные пула (упрощенная версия)
+            const baseVault = new PublicKey(poolData.slice(64, 96));
+            const quoteVault = new PublicKey(poolData.slice(96, 128));
+            
+            // Получаем балансы
+            const [baseBalance, quoteBalance] = await Promise.all([
+                this.connection.getTokenAccountBalance(baseVault),
+                this.connection.getTokenAccountBalance(quoteVault)
+            ]);
+
+            const baseAmount = parseFloat(baseBalance.value.uiAmount || 0);
+            const quoteAmount = parseFloat(quoteBalance.value.uiAmount || 0);
+
+            if (baseAmount === 0) return null;
+
+            // Считаем цену в SOL (предполагаем что quote - это SOL)
+            const priceInSOL = quoteAmount / baseAmount;
+
+            return {
+                priceInSOL,
+                priceInUSD: priceInSOL * (await this.getSOLPrice()),
+                source: 'raydium',
+                timestamp: Date.now()
+            };
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Raydium price fetch error:`, error);
             return null;
         }
     }
@@ -130,14 +167,14 @@ class TokenPriceService {
                 return parseFloat(cached);
             }
 
-            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=${this.SOL_MINT}`);
+            const response = await fetch(`${this.JUPITER_PRICE_API}?ids=So11111111111111111111111111111111111111112`);
             const data = await response.json();
-            const solPrice = data.data[this.SOL_MINT]?.price || 150;
+            const solPrice = data.data['So11111111111111111111111111111111111111112']?.price || 150;
             
             await this.redis.set('price:SOL', solPrice.toString(), 'EX', 60);
             return solPrice;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error);
             return 150; // Fallback price
         }
     }
@@ -149,29 +186,15 @@ class TokenPriceService {
         const batchSize = 100;
         for (let i = 0; i < tokenMints.length; i += batchSize) {
             const batch = tokenMints.slice(i, i + batchSize);
-            const mintString = batch.join(',');
+            const batchPrices = await Promise.all(
+                batch.map(mint => this.getTokenPrice(mint))
+            );
             
-            try {
-                const response = await fetch(`${this.JUPITER_PRICE_API}?ids=${mintString},${this.SOL_MINT}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    const solPrice = data.data[this.SOL_MINT]?.price || 150;
-                    
-                    batch.forEach(mint => {
-                        if (data.data[mint]) {
-                            const tokenPrice = data.data[mint].price;
-                            prices.set(mint, {
-                                priceInSOL: tokenPrice / solPrice,
-                                priceInUSD: tokenPrice,
-                                source: 'jupiter',
-                                timestamp: Date.now()
-                            });
-                        }
-                    });
+            batch.forEach((mint, index) => {
+                if (batchPrices[index]) {
+                    prices.set(mint, batchPrices[index]);
                 }
-            } catch (error) {
-                console.error(`[${new Date().toISOString()}] ❌ Batch price update error:`, error.message);
-            }
+            });
         }
         
         return prices;
@@ -179,8 +202,6 @@ class TokenPriceService {
 
     async getTokenBalance(walletAddress, tokenMint) {
         try {
-            console.log(`[${new Date().toISOString()}] 🔍 Getting balance for wallet ${walletAddress} token ${tokenMint}`);
-            
             const walletPubkey = new PublicKey(walletAddress);
             const mintPubkey = new PublicKey(tokenMint);
             
@@ -191,7 +212,6 @@ class TokenPriceService {
             );
 
             if (tokenAccounts.value.length === 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ No token accounts found`);
                 return 0;
             }
 
@@ -202,15 +222,14 @@ class TokenPriceService {
                 totalBalance += balance || 0;
             }
 
-            console.log(`[${new Date().toISOString()}] ✅ Balance: ${totalBalance}`);
             return totalBalance;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error getting token balance:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error getting token balance:`, error);
             return 0;
         }
     }
 
-    async calculateUnrealizedPnL(walletAddress, tokenMint, spent, received) {
+    async calculateUnrealizedPnL(walletAddress, tokenMint, spent, bought) {
         try {
             // Получаем текущий баланс токенов
             const currentBalance = await this.getTokenBalance(walletAddress, tokenMint);
@@ -218,11 +237,10 @@ class TokenPriceService {
             // Получаем текущую цену
             const priceData = await this.getTokenPrice(tokenMint);
             if (!priceData) {
-                console.log(`[${new Date().toISOString()}] ⚠️ No price data for ${tokenMint}, using 0`);
                 return {
                     currentBalance,
                     currentValueSOL: 0,
-                    unrealizedPnL: spent > received ? -(spent - received) : 0,
+                    unrealizedPnL: -spent,
                     percentChange: -100,
                     pricePerToken: 0
                 };
@@ -232,12 +250,8 @@ class TokenPriceService {
             const currentValueSOL = currentBalance * priceData.priceInSOL;
             
             // Рассчитываем нереализованный PnL
-            // unrealized = текущая стоимость - (потрачено - получено от продаж)
-            const netSpent = spent - received;
-            const unrealizedPnL = currentValueSOL - netSpent;
-            const percentChange = netSpent > 0 ? ((unrealizedPnL / netSpent) * 100) : 0;
-
-            console.log(`[${new Date().toISOString()}] 💰 PnL for ${walletAddress}: balance=${currentBalance}, value=${currentValueSOL}, unrealized=${unrealizedPnL}`);
+            const unrealizedPnL = currentValueSOL - spent;
+            const percentChange = spent > 0 ? ((unrealizedPnL / spent) * 100) : 0;
 
             return {
                 currentBalance,
@@ -249,11 +263,11 @@ class TokenPriceService {
                 priceTimestamp: priceData.timestamp
             };
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error calculating unrealized PnL:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error calculating unrealized PnL:`, error);
             return {
                 currentBalance: 0,
                 currentValueSOL: 0,
-                unrealizedPnL: -(spent - received),
+                unrealizedPnL: -spent,
                 percentChange: -100,
                 pricePerToken: 0
             };
@@ -261,81 +275,59 @@ class TokenPriceService {
     }
 
     async enrichTokenDataWithPnL(tokenData) {
-        try {
-            console.log(`[${new Date().toISOString()}] 🎯 Enriching token ${tokenData.symbol} (${tokenData.mint})`);
-            
-            const enrichedData = { ...tokenData };
-            
-            // Помечаем токен как активный для отслеживания цены
-            await this.markTokenActive(tokenData.mint);
-            
-            // Получаем цену токена
-            const priceData = await this.getTokenPrice(tokenData.mint);
-            enrichedData.currentPrice = priceData;
-            
-            // Обогащаем данные каждого кошелька параллельно
-            const enrichmentPromises = tokenData.wallets.map(async (wallet) => {
-                try {
-                    const pnlData = await this.calculateUnrealizedPnL(
-                        wallet.address,
-                        tokenData.mint,
-                        wallet.solSpent,
-                        wallet.solReceived
-                    );
-                    
-                    return {
-                        ...wallet,
-                        currentBalance: pnlData.currentBalance,
-                        remainingTokens: pnlData.currentBalance,
-                        currentValueSOL: pnlData.currentValueSOL,
-                        unrealizedPnL: pnlData.unrealizedPnL,
-                        totalPnL: wallet.pnlSol + pnlData.unrealizedPnL,
-                        percentChange: pnlData.percentChange
-                    };
-                } catch (error) {
-                    console.error(`[${new Date().toISOString()}] ❌ Error enriching wallet ${wallet.address}:`, error.message);
-                    return {
-                        ...wallet,
-                        currentBalance: 0,
-                        remainingTokens: 0,
-                        currentValueSOL: 0,
-                        unrealizedPnL: 0,
-                        totalPnL: wallet.pnlSol,
-                        percentChange: 0
-                    };
-                }
-            });
-            
-            enrichedData.wallets = await Promise.all(enrichmentPromises);
-            
-            // Обновляем общую статистику
-            const totalUnrealizedPnL = enrichedData.wallets.reduce(
-                (sum, w) => sum + (w.unrealizedPnL || 0), 0
-            );
-            const totalCurrentValue = enrichedData.wallets.reduce(
-                (sum, w) => sum + (w.currentValueSOL || 0), 0
-            );
-            const totalRemainingTokens = enrichedData.wallets.reduce(
-                (sum, w) => sum + (w.remainingTokens || 0), 0
-            );
-            
-            enrichedData.summary = {
-                ...enrichedData.summary,
-                totalUnrealizedPnL,
-                totalPnL: enrichedData.summary.netSOL + totalUnrealizedPnL,
-                totalCurrentValueSOL: totalCurrentValue,
-                totalRemainingTokens,
-                avgEntryPrice: enrichedData.summary.totalSpentSOL / 
-                    (enrichedData.summary.totalBuys > 0 ? enrichedData.summary.totalBuys : 1)
-            };
-            
-            console.log(`[${new Date().toISOString()}] ✅ Enriched ${tokenData.symbol}: totalPnL=${enrichedData.summary.totalPnL}, unrealized=${totalUnrealizedPnL}`);
-            
-            return enrichedData;
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error enriching token data:`, error.message);
-            return tokenData;
-        }
+        const enrichedData = { ...tokenData };
+        
+        // Помечаем токен как активный для отслеживания цены
+        await this.markTokenActive(tokenData.mint);
+        
+        // Получаем цену токена
+        const priceData = await this.getTokenPrice(tokenData.mint);
+        enrichedData.currentPrice = priceData;
+        
+        // Обогащаем данные каждого кошелька
+        enrichedData.wallets = await Promise.all(
+            tokenData.wallets.map(async (wallet) => {
+                const pnlData = await this.calculateUnrealizedPnL(
+                    wallet.address,
+                    tokenData.mint,
+                    wallet.solSpent,
+                    wallet.tokensBought
+                );
+                
+                return {
+                    ...wallet,
+                    currentBalance: pnlData.currentBalance,
+                    currentValueSOL: pnlData.currentValueSOL,
+                    unrealizedPnL: pnlData.unrealizedPnL,
+                    totalPnL: wallet.pnlSol + pnlData.unrealizedPnL,
+                    percentChange: pnlData.percentChange,
+                    remainingTokens: pnlData.currentBalance
+                };
+            })
+        );
+        
+        // Обновляем общую статистику
+        const totalUnrealizedPnL = enrichedData.wallets.reduce(
+            (sum, w) => sum + (w.unrealizedPnL || 0), 0
+        );
+        const totalCurrentValue = enrichedData.wallets.reduce(
+            (sum, w) => sum + (w.currentValueSOL || 0), 0
+        );
+        const totalRemainingTokens = enrichedData.wallets.reduce(
+            (sum, w) => sum + (w.remainingTokens || 0), 0
+        );
+        
+        enrichedData.summary = {
+            ...enrichedData.summary,
+            totalUnrealizedPnL,
+            totalPnL: enrichedData.summary.netSOL + totalUnrealizedPnL,
+            totalCurrentValueSOL: totalCurrentValue,
+            totalRemainingTokens,
+            avgEntryPrice: enrichedData.summary.totalSpentSOL / 
+                (enrichedData.summary.totalBuys > 0 ? enrichedData.summary.totalBuys : 1)
+        };
+        
+        return enrichedData;
     }
 
     async shutdown() {
