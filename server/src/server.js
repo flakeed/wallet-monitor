@@ -668,7 +668,10 @@ app.get('/api/tokens/tracker', async (req, res) => {
       const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
       const currentBalance = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
       const currentPrice = await fetchTokenPrice(row.mint);
-      const unrealizedPNL = currentBalance * currentPrice - Number(row.sol_spent || 0);
+      // Corrected unrealized PNL: Current market value - Cost basis
+      const costBasis = Number(row.sol_spent || 0); // Total spent SOL for tokens bought
+      const currentMarketValue = currentBalance * currentPrice;
+      const unrealizedPNL = currentMarketValue - costBasis;
       
       token.wallets.push({
         address: row.wallet_address,
