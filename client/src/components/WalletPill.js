@@ -2,8 +2,9 @@ import React from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
   const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-  const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
-  const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
+  const realizedPnLColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+  const unrealizedPnLColor = wallet.unrealizedPnL > 0 ? 'text-green-700' : wallet.unrealizedPnL < 0 ? 'text-red-700' : 'text-gray-700';
+  const totalPnLColor = wallet.totalPnL > 0 ? 'text-green-700' : wallet.totalPnL < 0 ? 'text-red-700' : 'text-gray-700';
 
   // Function to open token chart with wallet as maker in GMGN
   const openGmgnTokenWithMaker = () => {
@@ -21,9 +22,9 @@ function WalletPill({ wallet, tokenMint }) {
   };
 
   return (
-    <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
-      <div className="truncate max-w-xs">
-        <div className="flex items-center space-x-2">
+    <div className="border rounded-md px-3 py-2 bg-white">
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center space-x-2 min-w-0">
           <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
           <button
             onClick={copyToClipboard}
@@ -54,11 +55,46 @@ function WalletPill({ wallet, tokenMint }) {
             </svg>
           </button>
         </div>
-        <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+        <div className="text-right">
+          <div className={`text-xs font-semibold ${totalPnLColor}`}>
+            {wallet.totalPnL > 0 ? '+' : ''}{wallet.totalPnL.toFixed(4)} SOL
+          </div>
+        </div>
       </div>
-      <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
+
+      {/* Transaction and token info */}
+      <div className="flex justify-between items-center text-[10px] text-gray-500 mb-1">
+        <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
+        <span>Balance: {wallet.currentTokenBalance.toFixed(2)}</span>
+      </div>
+
+      {/* PnL breakdown */}
+      <div className="grid grid-cols-2 gap-1 text-[9px]">
+        <div className="text-gray-400">
+          <span>Realized: </span>
+          <span className={realizedPnLColor}>
+            {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)}
+          </span>
+        </div>
+        <div className="text-gray-400">
+          <span>Unrealized: </span>
+          <span className={unrealizedPnLColor}>
+            {wallet.unrealizedPnL > 0 ? '+' : ''}{wallet.unrealizedPnL.toFixed(4)}
+          </span>
+        </div>
+      </div>
+
+      {/* Investment details */}
+      <div className="text-[9px] text-gray-400 mt-1">
+        <div className="flex justify-between">
+          <span>Spent: {wallet.solSpent.toFixed(4)}</span>
+          <span>Received: {wallet.solReceived.toFixed(4)}</span>
+        </div>
+        {wallet.currentValue > 0 && (
+          <div className="text-center mt-0.5">
+            Current Value: {wallet.currentValue.toFixed(4)} SOL
+          </div>
+        )}
       </div>
     </div>
   );

@@ -7,6 +7,10 @@ const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
+const TokenPriceService = require('./services/tokenPriceService');
+
+// После инициализации других сервисов:
+const tokenPriceService = new TokenPriceService();
 
 const app = express();
 const port = process.env.PORT || 5001;
@@ -631,15 +635,13 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
-// Исправленный endpoint в вашем основном файле сервера
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    // ИСПРАВЛЕНО: НЕ парсим как число, оставляем как строку UUID
     const groupId = req.query.groupId || null;
+    const includePnL = req.query.includePnL !== 'false'; // По умолчанию включено
     
-    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
+    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}, includePnL=${includePnL}`);
     
     const rows = await db.getTokenWalletAggregates(hours, groupId);
     
@@ -688,7 +690,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
     }
 
-    const result = Array.from(byToken.values()).map((t) => ({
+    let result = Array.from(byToken.values()).map((t) => ({
       ...t,
       summary: {
         ...t.summary,
@@ -696,7 +698,33 @@ app.get('/api/tokens/tracker', async (req, res) => {
       },
     }));
 
-    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+    // Если включен PnL, обогащаем данные
+    if (includePnL && result.length > 0) {
+      console.log(`[${new Date().toISOString()}] 💰 Enriching ${result.length} tokens with PnL data...`);
+      
+      // Обрабатываем параллельно, но с ограничением
+      const enrichmentPromises = result.map(async (token) => {
+        try {
+          return await tokenPriceService.enrichTokenDataWithPnL(token);
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Error enriching token ${token.mint}:`, error);
+          return token; // Возвращаем без PnL в случае ошибки
+        }
+      });
+      
+      result = await Promise.all(enrichmentPromises);
+    }
+
+    // Сортируем по общему PnL если включен, иначе по netSOL
+    if (includePnL) {
+      result.sort((a, b) => {
+        const aTotalPnL = (a.summary.totalPnL || a.summary.netSOL) || 0;
+        const bTotalPnL = (b.summary.totalPnL || b.summary.netSOL) || 0;
+        return Math.abs(bTotalPnL) - Math.abs(aTotalPnL);
+      });
+    } else {
+      result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+    }
 
     console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
     res.json(result);
@@ -704,6 +732,190 @@ app.get('/api/tokens/tracker', async (req, res) => {
     console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
     res.status(500).json({ error: 'Failed to build token tracker' });
   }
+});
+
+app.get('/api/tokens/:mint/price', async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Invalid token mint address' });
+    }
+    
+    const priceData = await tokenPriceService.getTokenPrice(mint);
+    
+    if (!priceData) {
+      return res.status(404).json({ error: 'Price not found for this token' });
+    }
+    
+    res.json(priceData);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching token price:`, error);
+    res.status(500).json({ error: 'Failed to fetch token price' });
+  }
+});
+
+// Новый endpoint для получения баланса токенов кошелька
+app.get('/api/wallet/:address/token/:mint/balance', async (req, res) => {
+  try {
+    const { address, mint } = req.params;
+    
+    if (!address || address.length !== 44) {
+      return res.status(400).json({ error: 'Invalid wallet address' });
+    }
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Invalid token mint address' });
+    }
+    
+    const balance = await tokenPriceService.getTokenBalance(address, mint);
+    const priceData = await tokenPriceService.getTokenPrice(mint);
+    
+    const valueInSOL = priceData ? balance * priceData.priceInSOL : 0;
+    const valueInUSD = priceData ? balance * priceData.priceInUSD : 0;
+    
+    res.json({
+      balance,
+      valueInSOL,
+      valueInUSD,
+      price: priceData
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching token balance:`, error);
+    res.status(500).json({ error: 'Failed to fetch token balance' });
+  }
+});
+
+// Новый endpoint для получения PnL конкретного кошелька по токену
+app.get('/api/wallet/:address/token/:mint/pnl', async (req, res) => {
+  try {
+    const { address, mint } = req.params;
+    
+    if (!address || address.length !== 44) {
+      return res.status(400).json({ error: 'Invalid wallet address' });
+    }
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Invalid token mint address' });
+    }
+    
+    // Получаем историю транзакций кошелька с этим токеном
+    const wallet = await db.getWalletByAddress(address);
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+    
+    // Получаем агрегированные данные по токену для этого кошелька
+    const rows = await db.getTokenWalletAggregates(24 * 30, null); // За 30 дней
+    const walletTokenData = rows.find(r => 
+      r.wallet_address === address && r.mint === mint
+    );
+    
+    if (!walletTokenData) {
+      return res.status(404).json({ error: 'No transactions found for this token' });
+    }
+    
+    // Рассчитываем PnL
+    const pnlData = await tokenPriceService.calculateUnrealizedPnL(
+      address,
+      mint,
+      Number(walletTokenData.sol_spent) || 0,
+      Number(walletTokenData.tokens_bought) || 0
+    );
+    
+    const realizedPnL = Number(walletTokenData.sol_received || 0) - Number(walletTokenData.sol_spent || 0);
+    
+    res.json({
+      wallet: {
+        address,
+        name: wallet.name
+      },
+      token: {
+        mint,
+        symbol: walletTokenData.symbol,
+        name: walletTokenData.name
+      },
+      transactions: {
+        buys: Number(walletTokenData.tx_buys) || 0,
+        sells: Number(walletTokenData.tx_sells) || 0,
+        totalSpentSOL: Number(walletTokenData.sol_spent) || 0,
+        totalReceivedSOL: Number(walletTokenData.sol_received) || 0,
+        tokensBought: Number(walletTokenData.tokens_bought) || 0,
+        tokensSold: Number(walletTokenData.tokens_sold) || 0
+      },
+      pnl: {
+        realizedPnL,
+        unrealizedPnL: pnlData.unrealizedPnL,
+        totalPnL: realizedPnL + pnlData.unrealizedPnL,
+        percentChange: pnlData.percentChange,
+        currentBalance: pnlData.currentBalance,
+        currentValueSOL: pnlData.currentValueSOL,
+        pricePerToken: pnlData.pricePerToken
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error calculating PnL:`, error);
+    res.status(500).json({ error: 'Failed to calculate PnL' });
+  }
+});
+
+// WebSocket для real-time обновлений цен
+app.get('/api/prices/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const subscriber = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+  
+  subscriber.subscribe('price_updates', (err) => {
+    if (err) {
+      console.error(`[${new Date().toISOString()}] ❌ Price stream subscription error:`, err);
+      res.status(500).end();
+      return;
+    }
+    console.log(`[${new Date().toISOString()}] ✅ New price stream client connected`);
+  });
+
+  subscriber.on('message', (channel, message) => {
+    if (channel === 'price_updates' && res.writable) {
+      res.write(`data: ${message}\n\n`);
+    }
+  });
+
+  // Отправляем обновления цен каждые 5 секунд для активных токенов
+  const priceInterval = setInterval(async () => {
+    try {
+      const activeTokens = await tokenPriceService.getActiveTokens();
+      if (activeTokens.length > 0 && res.writable) {
+        const prices = await tokenPriceService.batchUpdatePrices(activeTokens);
+        const priceUpdate = {
+          timestamp: Date.now(),
+          prices: Object.fromEntries(prices)
+        };
+        res.write(`data: ${JSON.stringify(priceUpdate)}\n\n`);
+      }
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error sending price updates:`, error);
+    }
+  }, 5000);
+
+  req.on('close', () => {
+    console.log(`[${new Date().toISOString()}] 🔌 Price stream client disconnected`);
+    clearInterval(priceInterval);
+    subscriber.unsubscribe();
+    subscriber.quit();
+    res.end();
+  });
+
+  // Keep-alive
+  const keepAlive = setInterval(() => {
+    if (res.writable) {
+      res.write(': keep-alive\n\n');
+    } else {
+      clearInterval(keepAlive);
+    }
+  }, 30000);
 });
 
 app.get('/api/websocket/status', (req, res) => {
