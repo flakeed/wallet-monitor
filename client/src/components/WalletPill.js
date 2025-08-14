@@ -2,10 +2,9 @@ import React from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
   const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-  const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
-  const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
+  const pnlColor = wallet.realizedPNL > 0 ? 'text-green-700' : wallet.realizedPNL < 0 ? 'text-red-700' : 'text-gray-700';
+  const unrealizedPnlColor = wallet.unrealizedPNL > 0 ? 'text-green-600' : wallet.unrealizedPNL < 0 ? 'text-red-600' : 'text-gray-600';
 
-  // Function to open token chart with wallet as maker in GMGN
   const openGmgnTokenWithMaker = () => {
     if (!tokenMint || !wallet.address) {
       console.warn('Missing token mint or wallet address');
@@ -15,7 +14,6 @@ function WalletPill({ wallet, tokenMint }) {
     window.open(gmgnUrl, '_blank');
   };
 
-  // Function to copy wallet address to clipboard
   const copyToClipboard = () => {
     navigator.clipboard.writeText(wallet.address);
   };
@@ -57,8 +55,15 @@ function WalletPill({ wallet, tokenMint }) {
         <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
       </div>
       <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
+        <div className={`text-xs font-semibold ${pnlColor}`}>
+          Realized: {wallet.realizedPNL > 0 ? '+' : ''}{wallet.realizedPNL.toFixed(4)} SOL
+        </div>
+        <div className={`text-xs ${unrealizedPnlColor}`}>
+          Unrealized: {wallet.unrealizedPNL > 0 ? '+' : ''}{wallet.unrealizedPNL.toFixed(4)} SOL
+        </div>
+        <div className="text-[9px] text-gray-400">
+          Total bought: {wallet.tokensBought.toFixed(2)} · Balance: {wallet.tokenBalance.toFixed(2)}
+        </div>
       </div>
     </div>
   );

@@ -3,8 +3,9 @@ import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+  const realizedPnlColor = token.summary.realizedPNL > 0 ? 'text-green-600' : token.summary.realizedPNL < 0 ? 'text-red-600' : 'text-gray-600';
+  const unrealizedPnlColor = token.summary.unrealizedPNL > 0 ? 'text-green-500' : token.summary.unrealizedPNL < 0 ? 'text-red-500' : 'text-gray-500';
 
-  // Function to copy text to clipboard
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
       .then(() => {
@@ -15,7 +16,6 @@ function TokenCard({ token, onOpenChart }) {
       });
   };
 
-  // Function to open chart in new window
   const openGmgnChartInNewWindow = () => {
     if (!token.mint) {
       console.warn('No mint address available for chart');
@@ -52,8 +52,18 @@ function TokenCard({ token, onOpenChart }) {
           </div>
         </div>
         <div className="text-right">
-          <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
-          <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+          <div className={`text-base font-bold ${netColor}`}>
+            Net: {token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
+          </div>
+          <div className={`text-sm ${realizedPnlColor}`}>
+            Realized: {token.summary.realizedPNL > 0 ? '+' : ''}{token.summary.realizedPNL.toFixed(4)} SOL
+          </div>
+          <div className={`text-sm ${unrealizedPnlColor}`}>
+            Unrealized: {token.summary.unrealizedPNL > 0 ? '+' : ''}{token.summary.unrealizedPNL.toFixed(4)} SOL
+          </div>
+          <div className="text-xs text-gray-500">
+            Total bought: {token.summary.totalBought.toFixed(2)} · {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

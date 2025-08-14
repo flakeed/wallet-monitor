@@ -7,11 +7,9 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Функция для агрегации данных о токенах из транзакций
   const aggregateTokens = (transactions, hours, groupId) => {
     const byToken = new Map();
 
-    // Фильтруем транзакции по времени и groupId
     const now = new Date();
     const filteredTransactions = transactions.filter((tx) => {
       const txTime = new Date(tx.time);
@@ -21,7 +19,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       return matchesTimeframe && matchesGroup;
     });
 
-    // Агрегируем данные по токенам
     filteredTransactions.forEach((tx) => {
       const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
       if (!tokens || tokens.length === 0) return;
@@ -33,13 +30,17 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             symbol: token.symbol || 'Unknown',
             name: token.name || 'Unknown Token',
             decimals: token.decimals || 6,
+            currentPrice: 0, // Will be updated by backend
             wallets: [],
             summary: {
               uniqueWallets: new Set(),
               totalBuys: 0,
               totalSells: 0,
+              totalBought: 0,
               totalSpentSOL: 0,
               totalReceivedSOL: 0,
+              realizedPNL: 0,
+              unrealizedPNL: 0,
               netSOL: 0,
             },
           });
@@ -49,7 +50,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         const walletAddress = tx.wallet.address;
         const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
 
-        // Обновляем статистику кошелька
         if (!wallet) {
           tokenData.wallets.push({
             address: walletAddress,
@@ -62,8 +62,10 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
             tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
             tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
-            pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
-                    (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
+            tokenBalance: tx.transactionType === 'buy' ? token.amount || 0 : -(token.amount || 0),
+            realizedPNL: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
+                         (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
+            unrealizedPNL: 0, // Will be calculated by backend
             lastActivity: tx.time,
           });
           tokenData.summary.uniqueWallets.add(walletAddress);
@@ -74,35 +76,37 @@ function TokenTracker({ groupId, transactions, timeframe }) {
           wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
           wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
           wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
-          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
+          wallet.tokenBalance += tx.transactionType === 'buy' ? token.amount || 0 : -(token.amount || 0);
+          wallet.realizedPNL = wallet.solReceived - wallet.solSpent;
           wallet.lastActivity = tx.time > wallet.lastActivity ? tx.time : wallet.lastActivity;
         }
 
-        // Обновляем summary
         tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
         tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
+        tokenData.summary.totalBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
         tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
         tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+        tokenData.summary.realizedPNL += (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
+                                       (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0);
       });
     });
 
-    // Формируем итоговый массив токенов
     const result = Array.from(byToken.values()).map((t) => ({
       ...t,
       summary: {
         ...t.summary,
         uniqueWallets: t.summary.uniqueWallets.size,
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+        realizedPNL: +t.summary.realizedPNL.toFixed(6),
+        unrealizedPNL: 0, // Will be updated by backend
       },
     }));
 
-    // Сортируем по абсолютному значению netSOL
     result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
 
     return result;
   };
 
-  // Обновляем items при изменении transactions, hours или groupId
   useEffect(() => {
     setLoading(true);
     try {
@@ -117,7 +121,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     }
   }, [transactions, hours, groupId]);
 
-  // Синхронизируем hours с timeframe из пропсов
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);

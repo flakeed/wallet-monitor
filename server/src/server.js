@@ -3,16 +3,15 @@ const cors = require('cors');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const Redis = require('ioredis');
 require('dotenv').config();
-const { redis } = require('./services/tokenService');
+const { redis, fetchTokenMetadata } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
+const https = require('https');
+const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 5001;
-
-const https = require('https');
-const fs = require('fs');
 
 app.use(express.json({ 
   limit: '50mb',
@@ -31,15 +30,11 @@ app.use('/api/wallets/bulk', (req, res, next) => {
   console.log(`- Content-Length: ${req.get('Content-Length')}`);
   console.log(`- Content-Type: ${req.get('Content-Type')}`);
   
-  // Устанавливаем увеличенные таймауты именно для этого endpoint
-  req.setTimeout(600000); // 10 минут
-  res.setTimeout(600000); // 10 минут
-  
+  req.setTimeout(600000);
+  res.setTimeout(600000);
   next();
 });
 
-
-// Load SSL certificates
 const sslOptions = {
   key: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/privkey.pem'),
   cert: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/fullchain.pem'),
@@ -60,8 +55,8 @@ app.use(
 app.use(express.json());
 
 app.use((req, res, next) => {
-  req.setTimeout(300000); // 5 минут
-  res.setTimeout(300000); // 5 минут
+  req.setTimeout(300000);
+  res.setTimeout(300000);
   next();
 });
 
@@ -98,8 +93,20 @@ const startWebSocketService = async () => {
 
 setTimeout(startWebSocketService, 2000);
 
+// New function to fetch token price from an external API (simplified example)
+async function fetchTokenPrice(mint) {
+  try {
+    // This is a placeholder - you would need to integrate with a real price API like Jupiter or Orca
+    const response = await fetch(`https://api.jup.ag/price/v1/tokens/${mint}`);
+    const data = await response.json();
+    return data.price || 0;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${mint}:`, error.message);
+    return 0;
+  }
+}
+
 app.get('/api/transactions/stream', (req, res) => {
-  // ИСПРАВЛЕНО: НЕ парсим groupId как число, оставляем как строку (UUID)
   const groupId = req.query.groupId || null;
   
   res.setHeader('Content-Type', 'text/event-stream');
@@ -124,7 +131,6 @@ app.get('/api/transactions/stream', (req, res) => {
       try {
         const transaction = JSON.parse(message);
         
-        // ИСПРАВЛЕНО: сравнение UUID строк
         if (groupId !== null && transaction.groupId !== groupId) {
           console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
           return;
@@ -158,7 +164,7 @@ app.get('/api/transactions/stream', (req, res) => {
 
 app.get('/api/wallets', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const wallets = await db.getActiveWallets(groupId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
@@ -280,7 +286,7 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
 
     const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
@@ -331,7 +337,7 @@ app.get('/api/transactions', async (req, res) => {
 
 app.get('/api/monitoring/status', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const monitoringStatus = monitoringService.getStatus();
     const websocketStatus = solanaWebSocketService.getStatus();
     const dbStats = await db.getMonitoringStats(groupId);
@@ -444,7 +450,7 @@ app.get('/api/wallet/:address', async (req, res) => {
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const stats = await db.getMonitoringStats(groupId);
 
     res.json({
@@ -467,7 +473,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
   try {
     const { wallets, groupId } = req.body;
 
-    // Валидация входных данных
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ 
         success: false,
@@ -491,7 +496,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets`);
 
-    // Инициализация результатов
     const results = {
       total: wallets.length,
       successful: 0,
@@ -501,7 +505,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
       successfulWallets: []
     };
 
-    // Предварительная валидация адресов
     const validWallets = [];
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 
@@ -544,20 +547,17 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation`);
 
-    // Обработка пакетами для избежания таймаутов
-    const BATCH_SIZE = 100; // Уменьшаем размер пакета
+    const BATCH_SIZE = 100;
     const totalBatches = Math.ceil(validWallets.length / BATCH_SIZE);
     
     console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${BATCH_SIZE} wallets each`);
 
-    // Обрабатываем пакеты последовательно, а не параллельно
     for (let i = 0; i < validWallets.length; i += BATCH_SIZE) {
       const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
       const batch = validWallets.slice(i, i + BATCH_SIZE);
       
       console.log(`[${new Date().toISOString()}] 📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} wallets)`);
 
-      // Обрабатываем каждый кошелек в пакете
       for (const wallet of batch) {
         try {
           const addedWallet = await solanaWebSocketService.addWallet(
@@ -584,19 +584,16 @@ app.post('/api/wallets/bulk', async (req, res) => {
         }
       }
 
-      // Небольшая пауза между пакетами
       if (i + BATCH_SIZE < validWallets.length) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
 
-      // Промежуточное логирование прогресса
       console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Total: ${results.successful} successful, ${results.failed} failed`);
     }
 
     const duration = Date.now() - startTime;
     console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful`);
 
-    // Возвращаем результат
     res.json({
       success: results.successful > 0,
       message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
@@ -621,7 +618,7 @@ app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
 
     const topTokens = await db.getTopTokens(limit, type, groupId);
     res.json(topTokens);
@@ -631,40 +628,46 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
-// Исправленный endpoint в вашем основном файле сервера
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    // ИСПРАВЛЕНО: НЕ парсим как число, оставляем как строку UUID
     const groupId = req.query.groupId || null;
     
     console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
     
     const rows = await db.getTokenWalletAggregates(hours, groupId);
+    const connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
     
-    console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
-
     const byToken = new Map();
     for (const row of rows) {
       if (!byToken.has(row.mint)) {
+        // Fetch current price for unrealized PNL calculation
+        const price = await fetchTokenPrice(row.mint);
+        const tokenInfo = await fetchTokenMetadata(row.mint, connection);
+        
         byToken.set(row.mint, {
           mint: row.mint,
           symbol: row.symbol,
           name: row.name,
           decimals: row.decimals,
+          currentPrice: price,
           wallets: [],
           summary: {
             uniqueWallets: 0,
             totalBuys: 0,
             totalSells: 0,
+            totalBought: 0,
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
+            realizedPNL: 0,
+            unrealizedPNL: 0,
           },
         });
       }
       const token = byToken.get(row.mint);
-      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+      const netTokens = Number(row.tokens_bought || 0) - Number(row.tokens_sold || 0);
+      const realizedPNL = Number(row.sol_received || 0) - Number(row.sol_spent || 0);
+      const unrealizedPNL = netTokens * token.currentPrice;
       
       token.wallets.push({
         address: row.wallet_address,
@@ -677,15 +680,20 @@ app.get('/api/tokens/tracker', async (req, res) => {
         solReceived: Number(row.sol_received) || 0,
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
-        pnlSol: +pnlSol.toFixed(6),
+        tokenBalance: netTokens,
+        realizedPNL: +realizedPNL.toFixed(6),
+        unrealizedPNL: +unrealizedPNL.toFixed(6),
         lastActivity: row.last_activity,
       });
       
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
+      token.summary.totalBought += Number(row.tokens_bought) || 0;
       token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
       token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.realizedPNL += realizedPNL;
+      token.summary.unrealizedPNL += unrealizedPNL;
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
@@ -693,6 +701,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
       summary: {
         ...t.summary,
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+        realizedPNL: +t.summary.realizedPNL.toFixed(6),
+        unrealizedPNL: +t.summary.unrealizedPNL.toFixed(6),
       },
     }));
 
@@ -846,7 +856,6 @@ app.post('/api/wallets/validate-bulk', (req, res) => {
   }
 });
 
-
 app.post('/api/groups/switch', async (req, res) => {
   try {
     const { groupId } = req.body;
@@ -864,12 +873,10 @@ app.post('/api/groups/switch', async (req, res) => {
 app.use((error, req, res, next) => {
   console.error(`[${new Date().toISOString()}] ❌ Server Error:`, error);
   
-  // Проверяем, не был ли ответ уже отправлен
   if (res.headersSent) {
     return next(error);
   }
 
-  // Обрабатываем различные типы ошибок
   if (error.type === 'entity.too.large') {
     return res.status(413).json({
       success: false,
@@ -894,7 +901,6 @@ app.use((error, req, res, next) => {
     });
   }
 
-  // Общая ошибка сервера
   res.status(500).json({
     success: false,
     error: 'Internal server error',
@@ -906,7 +912,7 @@ app.use((error, req, res, next) => {
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
-  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
+  await solanaWebSocketService.shutdown();
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
@@ -915,7 +921,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
-  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
+  await solanaWebSocketService.shutdown();
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
