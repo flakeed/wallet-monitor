@@ -13,35 +13,37 @@ function TokenTracker({ groupId, timeframe = '24' }) {
   const fetchTokenData = useCallback(async () => {
     setLoading(true);
     setError(null);
-    
+  
     try {
       const response = await fetch(`/api/tokens/tracker?hours=24`);
       if (!response.ok) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
-      
+  
       const responseData = await response.json();
       console.log('Fetched token data:', responseData); // Line 48
-      
+  
+      // Early validation of responseData
       if (!responseData.success || !Array.isArray(responseData.data)) {
         throw new Error('Invalid API response format: expected an array in data property');
       }
-      
+  
       const data = responseData.data;
       setItems(data);
-      
-      const mintsWithBalance = data
-        .filter(token => token.summary.totalTokensRemaining > 0) // Line 53
-        .map(token => token.mint);
-      
+  
+      // Ensure data is an array before filtering
+      const mintsWithBalance = Array.isArray(data)
+        ? data
+            .filter(token => token?.summary?.totalTokensRemaining > 0)
+            .map(token => token.mint)
+        : [];
+  
       if (mintsWithBalance.length > 0) {
-        // Fetch prices (e.g., using /api/tokens/price/batch)
-        // Example:
         try {
           const priceResponse = await fetch(`/api/tokens/price/batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mints: mintsWithBalance })
+            body: JSON.stringify({ mints: mintsWithBalance }),
           });
           if (!priceResponse.ok) {
             throw new Error(`Failed to fetch token prices: ${priceResponse.statusText}`);
