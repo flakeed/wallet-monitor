@@ -160,26 +160,33 @@ async function fetchTokenMetadata(mint, connection) {
     });
 }
 
-async function fetchOnChainMetadata(mint, connection) {
+async function fetchOnChainMetadata(mint, connection, maxRetries = 3, delayMs = 200) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-        const metaplex = new Metaplex(connection);
-        const mintPubkey = new PublicKey(mint);
-        const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
-        if (metadataAccount && metadataAccount.data) {
-            return {
-                address: mint,
-                symbol: metadataAccount.data.symbol || 'Unknown',
-                name: metadataAccount.data.name || 'Unknown Token',
-                decimals: metadataAccount.mint.decimals || 0,
-            };
-        }
-        console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint}`);
+      const metaplex = new Metaplex(connection);
+      const mintPubkey = new PublicKey(mint);
+      console.log(`[${new Date().toISOString()}] Attempt ${attempt} to fetch metadata for mint ${mint}`);
+      const metadataAccount = await metaplex.nfts().findByMint({ mintAddress: mintPubkey });
+      if (metadataAccount && metadataAccount.data) {
+        console.log(`[${new Date().toISOString()}] Metadata found for mint ${mint}`);
+        return {
+          address: mint,
+          symbol: metadataAccount.data.symbol || 'Unknown',
+          name: metadataAccount.data.name || 'Unknown Token',
+          decimals: metadataAccount.mint.decimals || 0,
+        };
+      }
+      console.warn(`[${new Date().toISOString()}] No metadata found for mint ${mint} on attempt ${attempt}`);
     } catch (e) {
-        console.error(`[${new Date().toISOString()}] Error fetching on-chain metadata for mint ${mint}:`, e.message);
+      console.error(`[${new Date().toISOString()}] Error fetching metadata for mint ${mint} on attempt ${attempt}:`, e.message);
     }
-    return null;
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  console.warn(`[${new Date().toISOString()}] No on-chain metadata found for mint ${mint} after ${maxRetries} attempts`);
+  return null;
 }
-
 function normalizeImageUrl(imageUrl) {
     if (!imageUrl) return null;
     if (imageUrl.startsWith('ipfs://')) {
