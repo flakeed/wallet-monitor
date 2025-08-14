@@ -5,7 +5,7 @@ const Redis = require('ioredis');
 class DexScreenerService {
     constructor() {
         this.baseUrl = 'https://api.dexscreener.com/latest/dex';
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212);
+        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
         this.priceCache = new Map();
         this.CACHE_TTL = 60; // Cache prices for 60 seconds
         this.BATCH_SIZE = 30; // DexScreener allows up to 30 tokens per request
