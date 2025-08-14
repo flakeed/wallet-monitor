@@ -6,19 +6,19 @@ function TokenCard({ token, onOpenChart }) {
   const [priceData, setPriceData] = useState(null);
   const [loading, setLoading] = useState(false);
   
-  // Определяем цвета для различных метрик
+  // Define colors for metrics
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
-  const totalPnLColor = (token.summary.totalPnL || token.summary.netSOL) > 0 ? 'text-green-700' : 'text-red-700';
-  const unrealizedColor = token.summary.totalUnrealizedPnL > 0 ? 'text-green-600' : token.summary.totalUnrealizedPnL < 0 ? 'text-red-600' : 'text-gray-600';
+  const totalPnLColor = (token.summary.totalPnL || token.summary.netSOL || 0) > 0 ? 'text-green-700' : 'text-red-700';
+  const unrealizedColor = (token.summary.totalUnrealizedPnL || 0) > 0 ? 'text-green-600' : (token.summary.totalUnrealizedPnL || 0) < 0 ? 'text-red-600' : 'text-gray-600';
 
-  // Функция для копирования в буфер
+  // Copy to clipboard function
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
       .then(() => console.log('Address copied:', text))
       .catch((err) => console.error('Failed to copy:', err));
   };
 
-  // Открытие графика в новом окне
+  // Open chart in new window
   const openGmgnChartInNewWindow = () => {
     if (!token.mint) {
       console.warn('No mint address available for chart');
@@ -28,9 +28,9 @@ function TokenCard({ token, onOpenChart }) {
     window.open(gmgnUrl, '_blank');
   };
 
-  // Форматирование чисел
+  // Format numbers
   const formatNumber = (num) => {
-    if (!num) return '0';
+    if (num == null) return '0';
     if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
     if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
     if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
@@ -67,8 +67,8 @@ function TokenCard({ token, onOpenChart }) {
         <div className="text-right">
           {token.currentPrice && (
             <div className="text-xs text-gray-500 mb-1">
-              ${token.currentPrice.priceInUSD?.toFixed(6) || '0.00'} 
-              <span className="text-gray-400 ml-1">({token.currentPrice.priceInSOL?.toFixed(6) || '0'} SOL)</span>
+              ${formatNumber(token.currentPrice.priceInUSD)} 
+              <span className="text-gray-400 ml-1">({formatNumber(token.currentPrice.priceInSOL)} SOL)</span>
             </div>
           )}
           <div className="text-xs text-gray-500">
@@ -84,7 +84,7 @@ function TokenCard({ token, onOpenChart }) {
           <div>
             <div className="text-xs text-gray-500 mb-1">Realized P&L</div>
             <div className={`text-sm font-bold ${netColor}`}>
-              {token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
+              {(token.summary.netSOL || 0) > 0 ? '+' : ''}{(token.summary.netSOL || 0).toFixed(4)} SOL
             </div>
           </div>
           
@@ -92,8 +92,7 @@ function TokenCard({ token, onOpenChart }) {
           <div>
             <div className="text-xs text-gray-500 mb-1">Unrealized P&L</div>
             <div className={`text-sm font-bold ${unrealizedColor}`}>
-              {token.summary.totalUnrealizedPnL > 0 ? '+' : ''}
-              {(token.summary.totalUnrealizedPnL || 0).toFixed(4)} SOL
+              {(token.summary.totalUnrealizedPnL || 0) > 0 ? '+' : ''}{(token.summary.totalUnrealizedPnL || 0).toFixed(4)} SOL
             </div>
           </div>
           
@@ -101,8 +100,7 @@ function TokenCard({ token, onOpenChart }) {
           <div>
             <div className="text-xs text-gray-500 mb-1">Total P&L</div>
             <div className={`text-sm font-bold ${totalPnLColor}`}>
-              {(token.summary.totalPnL || token.summary.netSOL) > 0 ? '+' : ''}
-              {(token.summary.totalPnL || token.summary.netSOL).toFixed(4)} SOL
+              {(token.summary.totalPnL || token.summary.netSOL || 0) > 0 ? '+' : ''}{(token.summary.totalPnL || token.summary.netSOL || 0).toFixed(4)} SOL
             </div>
           </div>
         </div>
@@ -112,7 +110,7 @@ function TokenCard({ token, onOpenChart }) {
           <div>
             <div className="text-xs text-gray-500">Total Spent</div>
             <div className="text-xs font-semibold text-gray-700">
-              {token.summary.totalSpentSOL.toFixed(4)} SOL
+              {(token.summary.totalSpentSOL || 0).toFixed(4)} SOL
             </div>
           </div>
           <div>
@@ -159,9 +157,9 @@ function TokenCard({ token, onOpenChart }) {
 // Enhanced Wallet Pill Component
 function WalletPillEnhanced({ wallet, tokenMint }) {
   const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-  const realizedColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
-  const unrealizedColor = wallet.unrealizedPnL > 0 ? 'text-green-600' : wallet.unrealizedPnL < 0 ? 'text-red-600' : 'text-gray-600';
-  const totalPnLColor = wallet.totalPnL > 0 ? 'text-green-700' : wallet.totalPnL < 0 ? 'text-red-700' : 'text-gray-700';
+  const realizedColor = (wallet.realizedPnL || 0) > 0 ? 'text-green-700' : (wallet.realizedPnL || 0) < 0 ? 'text-red-700' : 'text-gray-700';
+  const unrealizedColor = (wallet.unrealizedPnL || 0) > 0 ? 'text-green-600' : (wallet.unrealizedPnL || 0) < 0 ? 'text-red-600' : 'text-gray-600';
+  const totalPnLColor = (wallet.totalPnL || 0) > 0 ? 'text-green-700' : (wallet.totalPnL || 0) < 0 ? 'text-red-700' : 'text-gray-700';
   
   const openGmgnTokenWithMaker = () => {
     if (!tokenMint || !wallet.address) return;
@@ -174,7 +172,7 @@ function WalletPillEnhanced({ wallet, tokenMint }) {
   };
 
   const formatNumber = (num) => {
-    if (!num) return '0';
+    if (num == null) return '0';
     if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
     if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
     return num.toFixed(2);
@@ -209,7 +207,7 @@ function WalletPillEnhanced({ wallet, tokenMint }) {
             </button>
           </div>
           <div className="text-[10px] text-gray-500 mt-1">
-            {wallet.txBuys} buys · {wallet.txSells} sells · {formatNumber(wallet.remainingTokens || 0)} tokens left
+            {wallet.txBuys || 0} buys · {wallet.txSells || 0} sells · {formatNumber(wallet.remainingTokens || 0)} tokens left
           </div>
         </div>
 
@@ -220,20 +218,20 @@ function WalletPillEnhanced({ wallet, tokenMint }) {
               <div>
                 <span className="text-gray-500">Real:</span>
                 <span className={`ml-1 font-semibold ${realizedColor}`}>
-                  {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(3)}
+                  {(wallet.realizedPnL || 0) > 0 ? '+' : ''}{(wallet.realizedPnL || 0).toFixed(3)}
                 </span>
               </div>
               <div>
                 <span className="text-gray-500">Unreal:</span>
                 <span className={`ml-1 font-semibold ${unrealizedColor}`}>
-                  {wallet.unrealizedPnL > 0 ? '+' : ''}{(wallet.unrealizedPnL || 0).toFixed(3)}
+                  {(wallet.unrealizedPnL || 0) > 0 ? '+' : ''}{(wallet.unrealizedPnL || 0).toFixed(3)}
                 </span>
               </div>
             </div>
             <div className={`text-xs font-bold ${totalPnLColor}`}>
-              Total: {wallet.totalPnL > 0 ? '+' : ''}{(wallet.totalPnL || wallet.pnlSol).toFixed(4)} SOL
+              Total: {(wallet.totalPnL || 0) > 0 ? '+' : ''}{(wallet.totalPnL || wallet.realizedPnL || 0).toFixed(4)} SOL
             </div>
-            {wallet.percentChange !== undefined && (
+            {wallet.percentChange != null && (
               <div className={`text-[9px] ${wallet.percentChange > 0 ? 'text-green-600' : 'text-red-600'}`}>
                 {wallet.percentChange > 0 ? '↑' : '↓'} {Math.abs(wallet.percentChange).toFixed(1)}%
               </div>

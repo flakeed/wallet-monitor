@@ -1,3 +1,4 @@
+// client/src/components/TokenTracker.js
 import React, { useState, useEffect, useRef } from 'react';
 import TokenCard from './TokenCard';
 
@@ -10,7 +11,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const eventSourceRef = useRef(null);
 
-  // Функция для получения данных с сервера
+  // Fetch token data from server
   const fetchTokenData = async () => {
     setLoading(true);
     try {
@@ -40,11 +41,10 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     }
   };
 
-  // Подключение к real-time обновлениям цен
+  // Connect to real-time price updates
   useEffect(() => {
     if (!autoRefresh) return;
 
-    // Подключаемся к SSE для получения обновлений цен
     const eventSource = new EventSource('/api/prices/stream');
     eventSourceRef.current = eventSource;
 
@@ -63,7 +63,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     eventSource.onerror = (error) => {
       console.error('SSE connection error:', error);
       eventSource.close();
-      // Переподключаемся через 5 секунд
       setTimeout(() => {
         if (autoRefresh && eventSourceRef.current === eventSource) {
           console.log('Reconnecting to price stream...');
@@ -78,33 +77,30 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     };
   }, [autoRefresh]);
 
-  // Обновление данных при изменении цен
+  // Update data on price changes
   useEffect(() => {
     if (Object.keys(priceUpdates).length === 0) return;
 
-    // Обновляем PnL для токенов с новыми ценами
     setItems(prevItems => {
       return prevItems.map(token => {
         const priceUpdate = priceUpdates[token.mint];
         if (!priceUpdate) return token;
 
-        // Пересчитываем unrealized PnL для каждого кошелька
         const updatedWallets = token.wallets.map(wallet => {
-          const currentValueSOL = (wallet.remainingTokens || 0) * priceUpdate.priceInSOL;
-          const unrealizedPnL = currentValueSOL - (wallet.solSpent - wallet.solReceived);
-          const totalPnL = wallet.pnlSol + unrealizedPnL;
-          const percentChange = wallet.solSpent > 0 ? ((unrealizedPnL / wallet.solSpent) * 100) : 0;
+          const currentValueSOL = (wallet.remainingTokens || 0) * (priceUpdate.priceInSOL || 0);
+          const unrealizedPnL = currentValueSOL - (wallet.solSpent || 0) + (wallet.solReceived || 0);
+          const totalPnL = (wallet.realizedPnL || 0) + unrealizedPnL;
+          const percentChange = (wallet.solSpent || 0) > 0 ? ((unrealizedPnL / (wallet.solSpent || 1)) * 100) : 0;
 
           return {
             ...wallet,
-            currentValueSOL,
-            unrealizedPnL,
-            totalPnL,
-            percentChange
+            currentValueSOL: currentValueSOL || 0,
+            unrealizedPnL: unrealizedPnL || 0,
+            totalPnL: totalPnL || 0,
+            percentChange: percentChange || 0
           };
         });
 
-        // Обновляем общую статистику
         const totalUnrealizedPnL = updatedWallets.reduce((sum, w) => sum + (w.unrealizedPnL || 0), 0);
         const totalCurrentValue = updatedWallets.reduce((sum, w) => sum + (w.currentValueSOL || 0), 0);
 
@@ -114,20 +110,19 @@ function TokenTracker({ groupId, transactions, timeframe }) {
           wallets: updatedWallets,
           summary: {
             ...token.summary,
-            totalUnrealizedPnL,
-            totalPnL: token.summary.netSOL + totalUnrealizedPnL,
-            totalCurrentValueSOL: totalCurrentValue
+            totalUnrealizedPnL: totalUnrealizedPnL || 0,
+            totalPnL: (token.summary.netSOL || 0) + (totalUnrealizedPnL || 0),
+            totalCurrentValueSOL: totalCurrentValue || 0
           }
         };
       });
     });
   }, [priceUpdates]);
 
-  // Загрузка данных при монтировании и изменении параметров
+  // Load data on mount and parameter change
   useEffect(() => {
     fetchTokenData();
     
-    // Обновляем данные каждые 30 секунд
     const interval = setInterval(() => {
       if (autoRefresh) {
         fetchTokenData();
@@ -137,7 +132,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     return () => clearInterval(interval);
   }, [hours, groupId]);
 
-  // Синхронизация с timeframe prop
+  // Sync with timeframe prop
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);
@@ -151,14 +146,14 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     window.location.href = gmgnUrl;
   };
 
-  // Сортировка по total PnL
+  // Sort by total PnL
   const sortedItems = [...items].sort((a, b) => {
     const aTotalPnL = a.summary.totalPnL || a.summary.netSOL || 0;
     const bTotalPnL = b.summary.totalPnL || b.summary.netSOL || 0;
     return Math.abs(bTotalPnL) - Math.abs(aTotalPnL);
   });
 
-  // Расчет общей статистики
+  // Calculate overall statistics
   const totalStats = items.reduce((acc, token) => ({
     totalRealizedPnL: acc.totalRealizedPnL + (token.summary.netSOL || 0),
     totalUnrealizedPnL: acc.totalUnrealizedPnL + (token.summary.totalUnrealizedPnL || 0),
@@ -226,31 +221,31 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             <div>
               <div className="text-xs text-gray-500">Total Spent</div>
               <div className="text-sm font-bold text-gray-900">
-                {totalStats.totalSpent.toFixed(4)} SOL
+                {(totalStats.totalSpent || 0).toFixed(4)} SOL
               </div>
             </div>
             <div>
               <div className="text-xs text-gray-500">Current Value</div>
               <div className="text-sm font-bold text-gray-900">
-                {totalStats.totalCurrentValue.toFixed(4)} SOL
+                {(totalStats.totalCurrentValue || 0).toFixed(4)} SOL
               </div>
             </div>
             <div>
               <div className="text-xs text-gray-500">Realized P&L</div>
-              <div className={`text-sm font-bold ${totalStats.totalRealizedPnL >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                {totalStats.totalRealizedPnL >= 0 ? '+' : ''}{totalStats.totalRealizedPnL.toFixed(4)} SOL
+              <div className={`text-sm font-bold ${(totalStats.totalRealizedPnL || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                {(totalStats.totalRealizedPnL || 0) >= 0 ? '+' : ''}{(totalStats.totalRealizedPnL || 0).toFixed(4)} SOL
               </div>
             </div>
             <div>
               <div className="text-xs text-gray-500">Unrealized P&L</div>
-              <div className={`text-sm font-bold ${totalStats.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {totalStats.totalUnrealizedPnL >= 0 ? '+' : ''}{totalStats.totalUnrealizedPnL.toFixed(4)} SOL
+              <div className={`text-sm font-bold ${(totalStats.totalUnrealizedPnL || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {(totalStats.totalUnrealizedPnL || 0) >= 0 ? '+' : ''}{(totalStats.totalUnrealizedPnL || 0).toFixed(4)} SOL
               </div>
             </div>
             <div>
               <div className="text-xs text-gray-500">Total P&L</div>
-              <div className={`text-sm font-bold ${totalStats.totalPnL >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                {totalStats.totalPnL >= 0 ? '+' : ''}{totalStats.totalPnL.toFixed(4)} SOL
+              <div className={`text-sm font-bold ${(totalStats.totalPnL || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                {(totalStats.totalPnL || 0) >= 0 ? '+' : ''}{(totalStats.totalPnL || 0).toFixed(4)} SOL
               </div>
             </div>
           </div>

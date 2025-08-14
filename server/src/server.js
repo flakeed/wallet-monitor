@@ -684,7 +684,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
               solReceived: Number(row.sol_received) || 0,
               tokensBought: Number(row.tokens_bought) || 0,
               tokensSold: Number(row.tokens_sold) || 0,
-              realizedPnL: +realizedPnL.toFixed(6),
+              realizedPnL: Number(realizedPnL.toFixed(6)) || 0,
               unrealizedPnL: 0,
               totalPnL: 0,
               remainingTokens: 0,
@@ -704,7 +704,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
           ...t,
           summary: {
               ...t.summary,
-              netSOL: +t.summary.netSOL.toFixed(6)
+              netSOL: Number(t.summary.netSOL.toFixed(6)) || 0
           }
       }));
       
@@ -724,9 +724,12 @@ app.get('/api/tokens/tracker', async (req, res) => {
           result = await Promise.all(enrichmentPromises);
       }
       
+      // Log the final result to debug missing fields
+      console.log(`[${new Date().toISOString()}] 📈 Final tracker response:`, JSON.stringify(result, null, 2));
+      
       result.sort((a, b) => {
-          const aTotalPnL = includePnL ? (a.summary.totalPnL || a.summary.netSOL) : a.summary.netSOL;
-          const bTotalPnL = includePnL ? (b.summary.totalPnL || b.summary.netSOL) : b.summary.netSOL;
+          const aTotalPnL = includePnL ? (a.summary.totalPnL || a.summary.netSOL || 0) : (a.summary.netSOL || 0);
+          const bTotalPnL = includePnL ? (b.summary.totalPnL || b.summary.netSOL || 0) : (b.summary.netSOL || 0);
           return Math.abs(bTotalPnL) - Math.abs(aTotalPnL);
       });
       
