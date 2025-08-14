@@ -10,23 +10,18 @@ function TokenTracker({ groupId, timeframe = '24' }) {
   const [tokenPrices, setTokenPrices] = useState({});
   const [priceLoading, setPriceLoading] = useState(false);
 
-  // Fetch token data from API
   const fetchTokenData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
     try {
-      const params = new URLSearchParams();
-      params.append('hours', hours);
-      if (groupId) params.append('groupId', groupId);
-      
-      const response = await fetch(`/api/tokens/tracker?${params}`);
+      const response = await fetch(`/api/tokens/tracker?hours=24`);
       if (!response.ok) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
       
       const responseData = await response.json();
-      console.log('Fetched token data:', responseData);
+      console.log('Fetched token data:', responseData); // Line 48
       
       if (!responseData.success || !Array.isArray(responseData.data)) {
         throw new Error('Invalid API response format: expected an array in data property');
@@ -36,61 +31,42 @@ function TokenTracker({ groupId, timeframe = '24' }) {
       setItems(data);
       
       const mintsWithBalance = data
-        .filter(token => token.summary.totalTokensRemaining > 0)
+        .filter(token => token.summary.totalTokensRemaining > 0) // Line 53
         .map(token => token.mint);
       
       if (mintsWithBalance.length > 0) {
-        fetchTokenPrices(mintsWithBalance);
+        // Fetch prices (e.g., using /api/tokens/price/batch)
+        // Example:
+        try {
+          const priceResponse = await fetch(`/api/tokens/price/batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mints: mintsWithBalance })
+          });
+          if (!priceResponse.ok) {
+            throw new Error(`Failed to fetch token prices: ${priceResponse.statusText}`);
+          }
+          const priceData = await priceResponse.json();
+          const prices = {};
+          Object.entries(priceData.data || {}).forEach(([mint, priceData]) => {
+            prices[mint] = priceData?.priceNative || null;
+          });
+          setTokenPrices(prices);
+        } catch (e) {
+          console.error('Error fetching token prices:', e);
+        }
       }
     } catch (e) {
-      console.error('Error fetching token data:', e);
+      console.error('Error fetching token data:', e); // Line 60
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [hours, groupId]);
-
-  const fetchTokenPrices = async (mints) => {
-    setPriceLoading(true);
-    try {
-      const response = await fetch(`/api/tokens/price/batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mints })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch token prices: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      const prices = {};
-      
-      Object.entries(data.data || {}).forEach(([mint, priceData]) => {
-        prices[mint] = priceData?.priceNative || null;
-      });
-      
-      setTokenPrices(prices);
-    } catch (e) {
-      console.error('Error fetching token prices:', e);
-    } finally {
-      setPriceLoading(false);
-    }
-  };
-
-  const debounceFetch = useCallback(() => {
-    let timeout;
-    return () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => fetchTokenData(), 1000);
-    };
-  }, [fetchTokenData]);
+  }, []);
   
   useEffect(() => {
-    if (items.length === 0) {
-      debounceFetch()();
-    }
-  }, [debounceFetch, items.length]);
+    fetchTokenData();
+  }, [fetchTokenData]);
 
   // Calculate unrealized PnL for each token
   const calculateUnrealizedPnL = (token, currentPrice) => {
