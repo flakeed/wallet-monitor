@@ -41,7 +41,7 @@ class Database {
                         // Ignore errors (e.g., table already exists)
                     }
                 }
-                // Add prices table if not exists
+                // Add prices table with unique constraint on mint
                 await client.query(`
                     CREATE TABLE IF NOT EXISTS prices (
                         id SERIAL PRIMARY KEY,
@@ -49,7 +49,7 @@ class Database {
                         price NUMERIC NOT NULL,
                         source VARCHAR(50) NOT NULL,
                         fetched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                        CONSTRAINT unique_mint_price UNIQUE (mint, fetched_at)
+                        CONSTRAINT unique_mint UNIQUE (mint)
                     );
                 `);
                 console.log('✅ Database schema initialized with prices table');
@@ -453,9 +453,7 @@ class Database {
             JOIN transactions t ON to_.transaction_id = t.id
             JOIN wallets w ON t.wallet_id = w.id
             LEFT JOIN groups g ON w.group_id = g.id
-            LEFT JOIN prices p ON tk.mint = p.mint AND p.fetched_at = (
-                SELECT fetched_at FROM prices p2 WHERE p2.mint = tk.mint ORDER BY fetched_at DESC LIMIT 1
-            )
+            LEFT JOIN prices p ON tk.mint = p.mint
             WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
         `;
         const params = [];
@@ -596,8 +594,13 @@ class Database {
                 fetched_at = CURRENT_TIMESTAMP
             RETURNING id, mint, price, fetched_at
         `;
-        const result = await this.pool.query(query, [mint, price, source]);
-        return result.rows[0];
+        try {
+            const result = await this.pool.query(query, [mint, price, source]);
+            return result.rows[0];
+        } catch (error) {
+            console.error(`❌ Error upserting price for mint ${mint}:`, error);
+            throw error;
+        }
     }
 
     async getLatestPrice(mint) {
