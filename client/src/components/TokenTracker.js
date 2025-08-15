@@ -1,45 +1,42 @@
 import React, { useState, useEffect, useCallback } from 'react';
-
 import TokenCard from './TokenCard';
 
-function TokenTracker({ groupId, timeframe = '24' }) {
+function TokenTracker({ groupId, timeframe = '24', transactions }) {
   const [items, setItems] = useState([]);
   const [hours, setHours] = useState(timeframe);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tokenPrices, setTokenPrices] = useState({});
-  const [priceLoading, setPriceLoading] = useState(false);
 
   const fetchTokenData = useCallback(async () => {
     setLoading(true);
     setError(null);
-  
+
     try {
-      const response = await fetch(`/api/tokens/tracker?hours=${hours}`);
+      const response = await fetch(`/api/tokens/tracker?hours=${hours}${groupId ? `&groupId=${groupId}` : ''}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch token data: ${response.statusText}`);
       }
-  
+
       const responseData = await response.json();
       console.log('Fetched token data:', responseData);
-  
-      // Validate response structure
+
       if (!responseData || typeof responseData !== 'object') {
         throw new Error('Invalid API response: response is not an object');
       }
-  
+
       if (!responseData.success) {
         throw new Error(`API error: ${responseData.message || 'Request failed'}`);
       }
-  
+
       if (!Array.isArray(responseData.data)) {
         console.error('Invalid API response: data is not an array', responseData.data);
         throw new Error('Invalid API response: data is not an array');
       }
-  
+
       const data = responseData.data;
       setItems(data);
-  
+
       // Fetch prices for tokens with remaining balance
       const mintsWithBalance = data.filter(token => token?.summary?.totalTokensRemaining > 0);
       if (mintsWithBalance.length > 0) {
@@ -65,80 +62,203 @@ function TokenTracker({ groupId, timeframe = '24' }) {
     } catch (e) {
       console.error('Error fetching token data:', e);
       setError(e.message);
-      setItems([]); // Ensure items is always an array
+      setItems([]);
     } finally {
       setLoading(false);
     }
-  }, [hours]);
-  
+  }, [hours, groupId]);
+
+  // Обновление items на основе новых транзакций
+  useEffect(() => {
+    if (!transactions || transactions.length === 0) return;
+
+    setItems((prevItems) => {
+      const updatedItems = [...prevItems];
+
+      transactions.forEach((tx) => {
+        if (!tx.tokensBought?.length && !tx.tokensSold?.length) return;
+
+        const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
+        tokens.forEach((token) => {
+          const mint = token.mint;
+          const tokenAmount = token.amount;
+          const solAmount = parseFloat(tx.solSpent || tx.solReceived || 0);
+
+          let tokenIndex = updatedItems.findIndex((item) => item.mint === mint);
+          if (tokenIndex === -1) {
+            // Новый токен
+            updatedItems.push({
+              mint,
+              symbol: token.symbol || 'Unknown',
+              name: token.name || 'Unknown Token',
+              wallets: [],
+              summary: {
+                totalBuys: 0,
+                totalSells: 0,
+                totalSpentSOL: 0,
+                totalReceivedSOL: 0,
+                totalTokensRemaining: 0,
+                uniqueWallets: 0,
+                netSOL: 0,
+                avgBuyPrice: 0,
+              },
+            });
+            tokenIndex = updatedItems.length - 1;
+          }
+
+          const tokenData = updatedItems[tokenIndex];
+          const walletIndex = tokenData.wallets.findIndex((w) => w.address === tx.wallet.address);
+
+          if (walletIndex === -1) {
+            // Новый кошелек
+            tokenData.wallets.push({
+              address: tx.wallet.address,
+              name: tx.wallet.name || null,
+              tokensBought: 0,
+              tokensSold: 0,
+              tokensRemaining: 0,
+              solSpent: 0,
+              solReceived: 0,
+              txBuys: 0,
+              txSells: 0,
+              avgBuyPrice: 0,
+              avgSellPrice: 0,
+              pnlSol: 0,
+            });
+          }
+
+          const wallet = tokenData.wallets[walletIndex === -1 ? tokenData.wallets.length - 1 : walletIndex];
+
+          if (tx.transactionType === 'buy') {
+            wallet.tokensBought = (wallet.tokensBought || 0) + tokenAmount;
+            wallet.solSpent = (wallet.solSpent || 0) + solAmount;
+            wallet.txBuys = (wallet.txBuys || 0) + 1;
+            tokenData.summary.totalBuys = (tokenData.summary.totalBuys || 0) + 1;
+            tokenData.summary.totalSpentSOL = (tokenData.summary.totalSpentSOL || 0) + solAmount;
+            // Обновляем среднюю цену покупки
+            const totalTokensBought = wallet.tokensBought;
+            wallet.avgBuyPrice = totalTokensBought
+              ? ((wallet.avgBuyPrice || 0) * (totalTokensBought - tokenAmount) + solAmount) / totalTokensBought
+              : solAmount / tokenAmount;
+          } else if (tx.transactionType === 'sell') {
+            wallet.tokensSold = (wallet.tokensSold || 0) + tokenAmount;
+            wallet.solReceived = (wallet.solReceived || 0) + solAmount;
+            wallet.txSells = (wallet.txSells || 0) + 1;
+            tokenData.summary.totalSells = (tokenData.summary.totalSells || 0) + 1;
+            tokenData.summary.totalReceivedSOL = (tokenData.summary.totalReceivedSOL || 0) + solAmount;
+            // Обновляем среднюю цену продажи
+            const totalTokensSold = wallet.tokensSold;
+            wallet.avgSellPrice = totalTokensSold
+              ? ((wallet.avgSellPrice || 0) * (totalTokensSold - tokenAmount) + solAmount) / totalTokensSold
+              : solAmount / tokenAmount;
+          }
+
+          wallet.tokensRemaining = wallet.tokensBought - wallet.tokensSold;
+          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
+          tokenData.summary.totalTokensRemaining = tokenData.wallets.reduce(
+            (sum, w) => sum + (w.tokensRemaining || 0),
+            0
+          );
+          tokenData.summary.netSOL = tokenData.summary.totalReceivedSOL - tokenData.summary.totalSpentSOL;
+          tokenData.summary.uniqueWallets = tokenData.wallets.length;
+
+          // Обновляем среднюю цену покупки для токена
+          tokenData.summary.avgBuyPrice = tokenData.summary.totalBuys
+            ? tokenData.summary.totalSpentSOL / tokenData.wallets.reduce((sum, w) => sum + (w.tokensBought || 0), 0)
+            : 0;
+        });
+      });
+
+      return updatedItems;
+    });
+
+    // Обновляем цены для новых токенов
+    const mintsWithBalance = transactions
+      .flatMap((tx) => (tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold) || [])
+      .map((token) => token.mint)
+      .filter((mint, index, self) => self.indexOf(mint) === index && mint);
+
+    if (mintsWithBalance.length > 0) {
+      fetch(`/api/tokens/price/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mints: mintsWithBalance }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`Failed to fetch token prices: ${res.statusText}`);
+          return res.json();
+        })
+        .then((priceData) => {
+          const prices = {};
+          Object.entries(priceData.data || {}).forEach(([mint, priceData]) => {
+            prices[mint] = priceData?.priceNative || null;
+          });
+          setTokenPrices((prev) => ({ ...prev, ...prices }));
+        })
+        .catch((e) => console.error('Error fetching token prices for new transactions:', e));
+    }
+  }, [transactions, groupId]);
+
   useEffect(() => {
     fetchTokenData();
   }, [fetchTokenData]);
 
-  // Calculate unrealized PnL for each token
+  // Остальная часть кода остается без изменений
   const calculateUnrealizedPnL = (token, currentPrice) => {
     if (!currentPrice || token.summary.totalTokensRemaining <= 0) {
       return 0;
     }
-    
-    // Current value of remaining tokens
     const currentValue = currentPrice * token.summary.totalTokensRemaining;
-    
-    // Average cost basis for remaining tokens
     const avgCostBasis = token.summary.avgBuyPrice * token.summary.totalTokensRemaining;
-    
-    // Unrealized PnL in SOL (assuming price is in SOL terms)
     return currentValue - avgCostBasis;
   };
 
-console.log('Items before mapping:', items); // Add for debugging
-const enhancedItems = Array.isArray(items) ? items.map(token => {
-  // Validate token structure
-  if (!token || !token.mint || !token.wallets || !token.summary) {
-    console.warn('Invalid token data:', token);
-    return null;
-  }
+  console.log('Items before mapping:', items);
+  const enhancedItems = Array.isArray(items)
+    ? items.map((token) => {
+        if (!token || !token.mint || !token.wallets || !token.summary) {
+          console.warn('Invalid token data:', token);
+          return null;
+        }
 
-  const currentPrice = tokenPrices[token.mint];
-  const unrealizedPnl = calculateUnrealizedPnL(token, currentPrice);
+        const currentPrice = tokenPrices[token.mint];
+        const unrealizedPnl = calculateUnrealizedPnL(token, currentPrice);
 
-  // Enhance wallets with unrealized PnL
-  const enhancedWallets = Array.isArray(token.wallets) ? token.wallets.map(wallet => {
-    if (!wallet || typeof wallet !== 'object') {
-      console.warn('Invalid wallet data:', wallet);
-      return null;
-    }
-    const walletUnrealizedPnl = currentPrice && wallet.tokensRemaining > 0
-      ? (currentPrice * wallet.tokensRemaining) - (wallet.avgBuyPrice * wallet.tokensRemaining)
-      : 0;
+        const enhancedWallets = Array.isArray(token.wallets)
+          ? token.wallets.map((wallet) => {
+              if (!wallet || typeof wallet !== 'object') {
+                console.warn('Invalid wallet data:', wallet);
+                return null;
+              }
+              const walletUnrealizedPnl = currentPrice && wallet.tokensRemaining > 0
+                ? (currentPrice * wallet.tokensRemaining) - (wallet.avgBuyPrice * wallet.tokensRemaining)
+                : 0;
 
-    return {
-      ...wallet,
-      unrealizedPnl: walletUnrealizedPnl,
-      totalPnl: wallet.pnlSol + walletUnrealizedPnl,
-    };
-  }).filter(wallet => wallet !== null) : [];
+              return {
+                ...wallet,
+                unrealizedPnl: walletUnrealizedPnl,
+                totalPnl: wallet.pnlSol + walletUnrealizedPnl,
+              };
+            }).filter((wallet) => wallet !== null)
+          : [];
 
-  return {
-    ...token,
-    wallets: enhancedWallets,
-    currentPrice,
-    summary: {
-      ...token.summary,
-      unrealizedPnl,
-      totalPnl: token.summary.netSOL + unrealizedPnl,
-    },
-  };
-}).filter(token => token !== null) : [];
+        return {
+          ...token,
+          wallets: enhancedWallets,
+          currentPrice,
+          summary: {
+            ...token.summary,
+            unrealizedPnl,
+            totalPnl: token.summary.netSOL + unrealizedPnl,
+          },
+        };
+      }).filter((token) => token !== null)
+    : [];
 
-
-
-  // Update hours when timeframe prop changes
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);
 
-  // Open GMGN chart
   const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
       console.warn('No mint address available for chart');
@@ -148,29 +268,30 @@ const enhancedItems = Array.isArray(items) ? items.map(token => {
     window.open(gmgnUrl, '_blank');
   };
 
-  // Summary statistics
-  const totals = enhancedItems.reduce((acc, token) => {
-    acc.totalSpentSOL += token.summary.totalSpentSOL;
-    acc.totalReceivedSOL += token.summary.totalReceivedSOL;
-    acc.realizedPnL += token.summary.netSOL;
-    acc.unrealizedPnL += token.summary.unrealizedPnl || 0;
-    acc.totalPnL += token.summary.totalPnl || token.summary.netSOL;
-    acc.uniqueTokens += 1;
-    acc.tokensWithBalance += token.summary.totalTokensRemaining > 0 ? 1 : 0;
-    return acc;
-  }, {
-    totalSpentSOL: 0,
-    totalReceivedSOL: 0,
-    realizedPnL: 0,
-    unrealizedPnL: 0,
-    totalPnL: 0,
-    uniqueTokens: 0,
-    tokensWithBalance: 0,
-  });
+  const totals = enhancedItems.reduce(
+    (acc, token) => {
+      acc.totalSpentSOL += token.summary.totalSpentSOL;
+      acc.totalReceivedSOL += token.summary.totalReceivedSOL;
+      acc.realizedPnL += token.summary.netSOL;
+      acc.unrealizedPnL += token.summary.unrealizedPnl || 0;
+      acc.totalPnL += token.summary.totalPnl || token.summary.netSOL;
+      acc.uniqueTokens += 1;
+      acc.tokensWithBalance += token.summary.totalTokensRemaining > 0 ? 1 : 0;
+      return acc;
+    },
+    {
+      totalSpentSOL: 0,
+      totalReceivedSOL: 0,
+      realizedPnL: 0,
+      unrealizedPnL: 0,
+      totalPnL: 0,
+      uniqueTokens: 0,
+      tokensWithBalance: 0,
+    }
+  );
 
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
@@ -200,7 +321,6 @@ const enhancedItems = Array.isArray(items) ? items.map(token => {
         </div>
       </div>
 
-      {/* Summary Statistics */}
       {enhancedItems.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg">
           <div>
@@ -222,10 +342,7 @@ const enhancedItems = Array.isArray(items) ? items.map(token => {
             </div>
           </div>
           <div>
-            <div className="text-xs text-gray-600 uppercase tracking-wider">
-              Unrealized PnL
-              {priceLoading && <span className="ml-1 text-gray-400">(loading...)</span>}
-            </div>
+            <div className="text-xs text-gray-600 uppercase tracking-wider">Unrealized PnL</div>
             <div className={`text-lg font-bold ${totals.unrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {totals.unrealizedPnL !== 0 ? (
                 <>
@@ -239,7 +356,6 @@ const enhancedItems = Array.isArray(items) ? items.map(token => {
         </div>
       )}
 
-      {/* Total PnL Summary */}
       {enhancedItems.length > 0 && totals.unrealizedPnL !== 0 && (
         <div className="mb-6 p-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg">
           <div className="flex justify-between items-center">
@@ -256,7 +372,6 @@ const enhancedItems = Array.isArray(items) ? items.map(token => {
         </div>
       )}
 
-      {/* Content */}
       {loading ? (
         <div className="flex justify-center items-center py-12">
           <div className="text-gray-500">Loading token data...</div>
