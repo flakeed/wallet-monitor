@@ -137,7 +137,7 @@ class WalletMonitoringService {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Invalid signature object:`, sig);
                 return null;
             }
-
+    
             const existingTx = await this.db.pool.query(
                 'SELECT id FROM transactions WHERE signature = $1',
                 [sig.signature]
@@ -146,17 +146,17 @@ class WalletMonitoringService {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed`);
                 return null;
             }
-
+    
             const tx = await this.connection.getParsedTransaction(sig.signature, {
                 maxSupportedTransactionVersion: 0,
                 commitment: 'confirmed',
             });
-
+    
             if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Invalid transaction ${sig.signature}`);
                 return null;
             }
-
+    
             const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
             let transactionType, solAmount;
             if (solChange < -0.001) {
@@ -169,13 +169,13 @@ class WalletMonitoringService {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - SOL change too small: ${solChange}`);
                 return null;
             }
-
+    
             const tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType);
             if (tokenChanges.length === 0) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
                 return null;
             }
-
+    
             return await this.db.withTransaction(async (client) => {
                 const query = `
                     INSERT INTO transactions (
@@ -193,18 +193,33 @@ class WalletMonitoringService {
                     transactionType === 'buy' ? solAmount : 0,
                     transactionType === 'sell' ? solAmount : 0,
                 ]);
-
+    
                 const transaction = result.rows[0];
+                const tokensBought = tokenChanges.filter(tc => tc.changeType === 'buy');
+                const tokensSold = tokenChanges.filter(tc => tc.changeType === 'sell');
+    
                 const tokenSavePromises = tokenChanges.map((tokenChange) =>
-                    this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType)
+                    this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, tokenChange.changeType)
                 );
                 await Promise.all(tokenSavePromises);
-
+    
                 return {
                     signature: sig.signature,
                     type: transactionType,
                     solAmount,
                     tokensChanged: tokenChanges,
+                    tokensBought: tokensBought.map(tc => ({
+                        mint: tc.mint,
+                        amount: tc.rawChange / Math.pow(10, tc.decimals),
+                        symbol: tc.symbol,
+                        name: tc.name,
+                    })),
+                    tokensSold: tokensSold.map(tc => ({
+                        mint: tc.mint,
+                        amount: tc.rawChange / Math.pow(10, tc.decimals),
+                        symbol: tc.symbol,
+                        name: tc.name,
+                    })),
                 };
             });
         } catch (error) {
@@ -217,41 +232,59 @@ class WalletMonitoringService {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const tokenChanges = [];
         const mints = new Set();
-
+    
+        console.log(`[${new Date().toISOString()}] 🔍 Analyzing token changes for transactionType: ${transactionType}`);
+    
+        // Собираем все изменения токенов
         for (const post of meta.postTokenBalances || []) {
             const pre = meta.preTokenBalances?.find((p) => p.mint === post.mint && p.accountIndex === post.accountIndex);
-            if (!pre || post.mint === WRAPPED_SOL_MINT) continue;
-
+            if (!pre || post.mint === WRAPPED_SOL_MINT) {
+                console.log(`[${new Date().toISOString()}] ℹ️ Skipping token: mint=${post.mint}, no pre-balance or wrapped SOL`);
+                continue;
+            }
+    
             const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
-            if ((transactionType === 'buy' && rawChange <= 0) || (transactionType === 'sell' && rawChange >= 0)) continue;
-
+            console.log(`[${new Date().toISOString()}] ℹ️ Token ${post.mint}: rawChange=${rawChange}`);
+    
+            if (rawChange === 0) {
+                console.log(`[${new Date().toISOString()}] ℹ️ Token ${post.mint}: no balance change`);
+                continue;
+            }
+    
             mints.add(post.mint);
-        }
-
-        const tokenInfos = await this.batchFetchTokenMetadata([...mints]);
-        for (const post of meta.postTokenBalances || []) {
-            const pre = meta.preTokenBalances?.find((p) => p.mint === post.mint && p.accountIndex === post.accountIndex);
-            if (!pre || post.mint === WRAPPED_SOL_MINT) continue;
-
-            const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
-            if ((transactionType === 'buy' && rawChange <= 0) || (transactionType === 'sell' && rawChange >= 0)) continue;
-
-            const tokenInfo = tokenInfos.get(post.mint) || {
-                symbol: 'Unknown',
-                name: 'Unknown Token',
-                decimals: post.uiTokenAmount.decimals,
-            };
-
             tokenChanges.push({
                 mint: post.mint,
-                rawChange: Math.abs(rawChange),
+                rawChange,
                 decimals: post.uiTokenAmount.decimals,
-                symbol: tokenInfo.symbol,
-                name: tokenInfo.name,
             });
         }
-
-        return tokenChanges;
+    
+        if (tokenChanges.length === 0) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No token changes detected`);
+            return [];
+        }
+    
+        // Получаем метаданные токенов
+        const tokenInfos = await this.batchFetchTokenMetadata([...mints]);
+        const result = tokenChanges.map((change) => {
+            const tokenInfo = tokenInfos.get(change.mint) || {
+                symbol: 'Unknown',
+                name: 'Unknown Token',
+                decimals: change.decimals,
+            };
+    
+            return {
+                mint: change.mint,
+                rawChange: Math.abs(change.rawChange),
+                decimals: change.decimals,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+                changeType: change.rawChange > 0 ? 'buy' : 'sell', // Определяем тип изменения
+            };
+        });
+    
+        console.log(`[${new Date().toISOString()}] ✅ Detected ${result.length} token changes:`, result);
+        return result;
     }
 
     async batchFetchTokenMetadata(mints) {

@@ -120,25 +120,27 @@ app.get('/api/transactions/stream', (req, res) => {
     sseClients.add(res);
   });
 
-  subscriber.on('message', (channel, message) => {
+subscriber.on('message', (channel, message) => {
     if (channel === 'transactions' && res.writable) {
-      try {
-        const transaction = JSON.parse(message);
-        
-        // ИСПРАВЛЕНО: сравнение UUID строк
-        if (groupId !== null && transaction.groupId !== groupId) {
-          console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
-          return;
+        try {
+            const transaction = JSON.parse(message);
+            console.log(`[${new Date().toISOString()}] 📡 Sending SSE transaction:`, {
+                signature: transaction.signature,
+                transactionType: transaction.transactionType,
+                tokensBought: transaction.tokensBought,
+                tokensSold: transaction.tokensSold,
+            });
+            if (groupId !== null && transaction.groupId !== groupId) {
+                console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
+                return;
+            }
+            res.write(`data: ${message}\n\n`);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
+            res.write(`data: ${message}\n\n`);
         }
-        
-        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for group ${transaction.groupId}:`, message.substring(0, 100) + '...');
-        res.write(`data: ${message}\n\n`);
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
-        res.write(`data: ${message}\n\n`);
-      }
     }
-  });
+});
 
   req.on('close', () => {
     console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected`);
