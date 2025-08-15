@@ -7,7 +7,10 @@ const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
+const DexScreenerService = require('./services/dexScreenerService');
 
+// Add this after your other service initializations
+const dexScreenerService = new DexScreenerService();
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -617,6 +620,279 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
+app.get('/api/tokens/:mint/price', async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length !== 44) {
+      return res.status(400).json({ error: 'Invalid token mint address' });
+    }
+
+    const priceData = await dexScreenerService.getTokenPrice(mint);
+    
+    if (!priceData) {
+      return res.status(404).json({ error: 'Price data not found for this token' });
+    }
+
+    res.json({
+      success: true,
+      data: priceData
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching token price:`, error);
+    res.status(500).json({ error: 'Failed to fetch token price' });
+  }
+});
+
+// Get batch token prices
+app.post('/api/tokens/prices', async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints) || mints.length === 0) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 50) {
+      return res.status(400).json({ error: 'Maximum 50 mints allowed per request' });
+    }
+
+    // Validate mint addresses
+    const validMints = mints.filter(mint => mint && mint.length === 44);
+    if (validMints.length === 0) {
+      return res.status(400).json({ error: 'No valid mint addresses provided' });
+    }
+
+    const priceData = await dexScreenerService.getBatchTokenPrices(validMints);
+    
+    // Convert Map to object for JSON response
+    const priceObject = {};
+    priceData.forEach((price, mint) => {
+      priceObject[mint] = price;
+    });
+
+    res.json({
+      success: true,
+      data: priceObject,
+      total: validMints.length
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching batch token prices:`, error);
+    res.status(500).json({ error: 'Failed to fetch token prices' });
+  }
+});
+
+// Enhanced token tracker with price data and PnL metrics
+app.get('/api/tokens/tracker/enhanced', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const groupId = req.query.groupId || null;
+    
+    console.log(`[${new Date().toISOString()}] 🔍 Enhanced token tracker request: hours=${hours}, groupId=${groupId}`);
+    
+    const rows = await db.getTokenWalletAggregates(hours, groupId);
+    
+    console.log(`[${new Date().toISOString()}] 📊 Enhanced token tracker found ${rows.length} wallet-token combinations`);
+
+    const byToken = new Map();
+    for (const row of rows) {
+      if (!byToken.has(row.mint)) {
+        byToken.set(row.mint, {
+          mint: row.mint,
+          symbol: row.symbol,
+          name: row.name,
+          decimals: row.decimals,
+          wallets: [],
+          summary: {
+            uniqueWallets: 0,
+            totalBuys: 0,
+            totalSells: 0,
+            totalSpentSOL: 0,
+            totalReceivedSOL: 0,
+          },
+        });
+      }
+      const token = byToken.get(row.mint);
+      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+      
+      token.wallets.push({
+        address: row.wallet_address,
+        name: row.wallet_name,
+        groupId: row.group_id,
+        groupName: row.group_name,
+        txBuys: Number(row.tx_buys) || 0,
+        txSells: Number(row.tx_sells) || 0,
+        solSpent: Number(row.sol_spent) || 0,
+        solReceived: Number(row.sol_received) || 0,
+        tokensBought: Number(row.tokens_bought) || 0,
+        tokensSold: Number(row.tokens_sold) || 0,
+        pnlSol: +pnlSol.toFixed(6),
+        lastActivity: row.last_activity,
+      });
+      
+      token.summary.uniqueWallets += 1;
+      token.summary.totalBuys += Number(row.tx_buys) || 0;
+      token.summary.totalSells += Number(row.tx_sells) || 0;
+      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
+      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+    }
+
+    const tokens = Array.from(byToken.values()).map((t) => ({
+      ...t,
+      summary: {
+        ...t.summary,
+        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+      },
+    }));
+
+    // Get price data for all tokens
+    const mints = tokens.map(t => t.mint);
+    const priceData = await dexScreenerService.getBatchTokenPrices(mints);
+    
+    // Enhance tokens with price data and metrics
+    const enhancedTokens = tokens.map(token => {
+      const price = priceData.get(token.mint);
+      const metrics = dexScreenerService.calculateTokenMetrics(token, price);
+      
+      return {
+        ...token,
+        priceData: price,
+        metrics: metrics,
+        summary: {
+          ...token.summary,
+          currentPrice: price?.priceNative || 0,
+          totalTokensHeld: metrics.totalTokensHeld,
+          currentValueSOL: metrics.currentValueSOL,
+          unrealizedPnlSOL: metrics.unrealizedPnlSOL,
+          totalPnlSOL: metrics.totalPnlSOL
+        }
+      };
+    });
+
+    // Sort by absolute total PnL (realized + unrealized)
+    enhancedTokens.sort((a, b) => {
+      const aTotalPnL = Math.abs(a.metrics?.totalPnlSOL || a.summary.netSOL);
+      const bTotalPnL = Math.abs(b.metrics?.totalPnlSOL || b.summary.netSOL);
+      return bTotalPnL - aTotalPnL;
+    });
+
+    console.log(`[${new Date().toISOString()}] 📈 Returning ${enhancedTokens.length} enhanced tokens with price data`);
+    res.json({
+      success: true,
+      data: enhancedTokens,
+      total: enhancedTokens.length,
+      priceDataAvailable: enhancedTokens.filter(t => t.priceData).length
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error building enhanced token tracker:`, error);
+    res.status(500).json({ error: 'Failed to build enhanced token tracker' });
+  }
+});
+
+// Get wallet-specific token metrics with unrealized PnL
+app.get('/api/wallets/:address/tokens/metrics', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const hours = parseInt(req.query.hours) || 24;
+    
+    if (!address || address.length !== 44) {
+      return res.status(400).json({ error: 'Invalid wallet address' });
+    }
+
+    const wallet = await db.getWalletByAddress(address);
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Get wallet's token aggregates
+    const rows = await db.getTokenWalletAggregates(hours, wallet.group_id);
+    const walletTokens = rows.filter(row => row.wallet_address === address);
+    
+    if (walletTokens.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        totalMetrics: {
+          totalSpentSOL: 0,
+          totalReceivedSOL: 0,
+          currentValueSOL: 0,
+          unrealizedPnlSOL: 0,
+          realizedPnlSOL: 0,
+          totalPnlSOL: 0
+        }
+      });
+    }
+
+    // Get price data for wallet's tokens
+    const mints = walletTokens.map(t => t.mint);
+    const priceData = await dexScreenerService.getBatchTokenPrices(mints);
+    
+    let totalMetrics = {
+      totalSpentSOL: 0,
+      totalReceivedSOL: 0,
+      currentValueSOL: 0,
+      unrealizedPnlSOL: 0,
+      realizedPnlSOL: 0,
+      totalPnlSOL: 0
+    };
+
+    const enhancedTokens = walletTokens.map(token => {
+      const price = priceData.get(token.mint);
+      const tokensHeld = Number(token.tokens_bought) - Number(token.tokens_sold);
+      const currentValue = price ? tokensHeld * price.priceNative : 0;
+      const unrealizedPnL = price ? currentValue - Number(token.sol_spent) : 0;
+      const realizedPnL = Number(token.sol_received) - Number(token.sol_spent);
+      
+      // Add to totals
+      totalMetrics.totalSpentSOL += Number(token.sol_spent);
+      totalMetrics.totalReceivedSOL += Number(token.sol_received);
+      totalMetrics.currentValueSOL += currentValue;
+      totalMetrics.unrealizedPnlSOL += unrealizedPnL;
+      totalMetrics.realizedPnlSOL += realizedPnL;
+      
+      return {
+        mint: token.mint,
+        symbol: token.symbol,
+        name: token.name,
+        decimals: token.decimals,
+        txBuys: Number(token.tx_buys),
+        txSells: Number(token.tx_sells),
+        solSpent: Number(token.sol_spent),
+        solReceived: Number(token.sol_received),
+        tokensBought: Number(token.tokens_bought),
+        tokensSold: Number(token.tokens_sold),
+        tokensHeld: tokensHeld,
+        currentPrice: price?.priceNative || 0,
+        currentValue: currentValue,
+        unrealizedPnL: unrealizedPnL,
+        realizedPnL: realizedPnL,
+        totalPnL: realizedPnL + unrealizedPnL,
+        priceData: price,
+        lastActivity: token.last_activity
+      };
+    });
+
+    totalMetrics.totalPnlSOL = totalMetrics.realizedPnlSOL + totalMetrics.unrealizedPnlSOL;
+
+    // Sort by absolute total PnL
+    enhancedTokens.sort((a, b) => Math.abs(b.totalPnL) - Math.abs(a.totalPnL));
+
+    res.json({
+      success: true,
+      data: enhancedTokens,
+      totalMetrics: totalMetrics,
+      wallet: {
+        address: wallet.address,
+        name: wallet.name,
+        groupId: wallet.group_id
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching wallet token metrics:`, error);
+    res.status(500).json({ error: 'Failed to fetch wallet token metrics' });
+  }
+});
+
 app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -907,6 +1183,7 @@ process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
   await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
+  await dexScreenerService.close();
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
@@ -916,6 +1193,7 @@ process.on('SIGTERM', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
   await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
+  await dexScreenerService.close();
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);

@@ -1,8 +1,50 @@
 import React from 'react';
 import WalletPill from './WalletPill';
 
-function TokenCard({ token, onOpenChart }) {
+function TokenCard({ token, onOpenChart, enhanced = false }) {
+  // Use enhanced data if available, otherwise calculate locally
+  const hasEnhancedData = enhanced && token.priceData && token.metrics;
+  
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
+  // Get metrics from enhanced data or calculate locally
+  const getMetrics = () => {
+    if (hasEnhancedData) {
+      return {
+        totalTokensHeld: token.summary.totalTokensHeld || 0,
+        totalSpentSOL: token.summary.totalSpentSOL || 0,
+        unrealizedPnlSOL: token.summary.unrealizedPnlSOL || 0,
+        currentPrice: token.summary.currentPrice || 0,
+        currentValueSOL: token.summary.currentValueSOL || 0,
+        totalPnlSOL: token.summary.totalPnlSOL || 0
+      };
+    } else {
+      // Fallback calculation for basic mode
+      const totalTokensHeld = token.wallets.reduce((sum, wallet) => {
+        return sum + (wallet.tokensBought - wallet.tokensSold);
+      }, 0);
+
+      const totalSpentSOL = token.wallets.reduce((sum, wallet) => {
+        return sum + wallet.solSpent;
+      }, 0);
+
+      return {
+        totalTokensHeld,
+        totalSpentSOL,
+        unrealizedPnlSOL: 0, // Not available in basic mode
+        currentPrice: 0,
+        currentValueSOL: 0,
+        totalPnlSOL: token.summary.netSOL || 0
+      };
+    }
+  };
+
+  const metrics = getMetrics();
+  const unrealizedColor = metrics.unrealizedPnlSOL > 0 ? 'text-green-700' : 
+                         metrics.unrealizedPnlSOL < 0 ? 'text-red-700' : 'text-gray-700';
+  
+  const totalPnlColor = metrics.totalPnlSOL > 0 ? 'text-green-700' : 
+                       metrics.totalPnlSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   // Function to copy text to clipboard
   const copyToClipboard = (text) => {
@@ -52,10 +94,87 @@ function TokenCard({ token, onOpenChart }) {
           </div>
         </div>
         <div className="text-right">
-          <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
-          <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+          <div className={`text-base font-bold ${netColor}`}>
+            {token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
+          </div>
+          <div className="text-xs text-gray-500">
+            {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+          </div>
         </div>
       </div>
+
+      {/* Enhanced metrics section */}
+      <div className="mb-3 p-2 bg-white rounded border">
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-gray-500">Total Tokens:</span>
+            <div className="font-semibold">{metrics.totalTokensHeld.toFixed(2)}</div>
+          </div>
+          <div>
+            <span className="text-gray-500">Total Spent:</span>
+            <div className="font-semibold">{metrics.totalSpentSOL.toFixed(4)} SOL</div>
+          </div>
+          <div>
+            <span className="text-gray-500">Current Price:</span>
+            <div className="font-semibold">
+              {hasEnhancedData ? 
+                metrics.currentPrice > 0 ? `${metrics.currentPrice.toFixed(8)} SOL` : 'N/A'
+                : 'Basic Mode'
+              }
+            </div>
+          </div>
+          <div>
+            <span className="text-gray-500">
+              {hasEnhancedData ? 'Unrealized PnL:' : 'Realized PnL:'}
+            </span>
+            <div className={`font-semibold ${hasEnhancedData ? unrealizedColor : totalPnlColor}`}>
+              {hasEnhancedData ? 
+                metrics.currentPrice > 0 ? 
+                  `${metrics.unrealizedPnlSOL > 0 ? '+' : ''}${metrics.unrealizedPnlSOL.toFixed(4)} SOL` : 
+                  'N/A'
+                : `${metrics.totalPnlSOL > 0 ? '+' : ''}${metrics.totalPnlSOL.toFixed(4)} SOL`
+              }
+            </div>
+          </div>
+          {hasEnhancedData && (
+            <>
+              <div>
+                <span className="text-gray-500">Current Value:</span>
+                <div className="font-semibold">
+                  {metrics.currentValueSOL > 0 ? `${metrics.currentValueSOL.toFixed(4)} SOL` : 'N/A'}
+                </div>
+              </div>
+              <div>
+                <span className="text-gray-500">Total PnL:</span>
+                <div className={`font-semibold ${totalPnlColor}`}>
+                  {metrics.totalPnlSOL > 0 ? '+' : ''}{metrics.totalPnlSOL.toFixed(4)} SOL
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        {hasEnhancedData && token.priceData && (
+          <div className="mt-2 pt-2 border-t border-gray-100 grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <span className="text-gray-500">USD Price:</span>
+              <div className="font-semibold">${token.priceData.priceUsd?.toFixed(6) || 'N/A'}</div>
+            </div>
+            <div>
+              <span className="text-gray-500">24h Change:</span>
+              <div className={`font-semibold ${
+                (token.priceData.priceChange24h || 0) > 0 ? 'text-green-600' : 
+                (token.priceData.priceChange24h || 0) < 0 ? 'text-red-600' : 'text-gray-600'
+              }`}>
+                {token.priceData.priceChange24h ? 
+                  `${token.priceData.priceChange24h > 0 ? '+' : ''}${token.priceData.priceChange24h.toFixed(2)}%` : 
+                  'N/A'
+                }
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {token.wallets.map((w) => (
           <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />

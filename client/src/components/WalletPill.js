@@ -1,9 +1,54 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
+  const [priceData, setPriceData] = useState(null);
+  
   const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
   const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
   const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
+
+  // Fetch price data for unrealized PnL calculation
+  useEffect(() => {
+    const fetchPrice = async () => {
+      try {
+        const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
+        const data = await response.json();
+        
+        if (data.pairs && data.pairs.length > 0) {
+          const bestPair = data.pairs.reduce((best, current) => {
+            const currentLiq = parseFloat(current.liquidity?.usd || 0);
+            const bestLiq = parseFloat(best.liquidity?.usd || 0);
+            return currentLiq > bestLiq ? current : best;
+          });
+          
+          setPriceData({
+            priceNative: parseFloat(bestPair.priceNative || 0)
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching price data for wallet pill:', error);
+      }
+    };
+
+    if (tokenMint) {
+      fetchPrice();
+    }
+  }, [tokenMint]);
+
+  // Calculate unrealized PnL for this wallet
+  const calculateUnrealizedPnL = () => {
+    if (!priceData || priceData.priceNative <= 0 || netAmount <= 0) {
+      return 0;
+    }
+    
+    const currentValue = netAmount * priceData.priceNative;
+    const unrealizedPnL = currentValue - wallet.solSpent;
+    return unrealizedPnL;
+  };
+
+  const unrealizedPnL = calculateUnrealizedPnL();
+  const unrealizedColor = unrealizedPnL > 0 ? 'text-green-600' : 
+                         unrealizedPnL < 0 ? 'text-red-600' : 'text-gray-600';
 
   // Function to open token chart with wallet as maker in GMGN
   const openGmgnTokenWithMaker = () => {
@@ -54,11 +99,26 @@ function WalletPill({ wallet, tokenMint }) {
             </svg>
           </button>
         </div>
-        <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+        <div className="text-[10px] text-gray-500">
+          {wallet.txBuys} buys · {wallet.txSells} sells
+        </div>
+        <div className="text-[9px] text-gray-400">
+          Tokens: {netAmount.toFixed(2)}
+        </div>
       </div>
       <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
+        <div className={`text-xs font-semibold ${pnlColor}`}>
+          {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL
+        </div>
+        <div className="text-[9px] text-gray-400">
+          spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}
+        </div>
+        <div className={`text-[9px] font-medium ${unrealizedColor}`}>
+          {priceData && unrealizedPnL !== 0 ? 
+            `Unrealized: ${unrealizedPnL > 0 ? '+' : ''}${unrealizedPnL.toFixed(4)} SOL` : 
+            'Unrealized: --'
+          }
+        </div>
       </div>
     </div>
   );
