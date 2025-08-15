@@ -98,6 +98,403 @@ const startWebSocketService = async () => {
 
 setTimeout(startWebSocketService, 2000);
 
+const PriceService = {
+  dexScreener: new DexScreenerService(),
+  
+  async fetchTokenPrices(mints) {
+    try {
+      return await this.dexScreener.getTokenPricesInSol(mints);
+    } catch (error) {
+      console.error('Error fetching token prices:', error);
+      return new Map();
+    }
+  },
+
+  async updateTokenPricesInDb(db, prices) {
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      for (const [mint, priceData] of prices) {
+        await client.query(`
+          INSERT INTO token_prices (mint, price_usd, price_sol, volume_24h, liquidity_usd, dex_id, pair_address, source, last_updated)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+          ON CONFLICT (mint) DO UPDATE SET
+            price_usd = EXCLUDED.price_usd,
+            price_sol = EXCLUDED.price_sol,
+            volume_24h = EXCLUDED.volume_24h,
+            liquidity_usd = EXCLUDED.liquidity_usd,
+            dex_id = EXCLUDED.dex_id,
+            pair_address = EXCLUDED.pair_address,
+            source = EXCLUDED.source,
+            last_updated = EXCLUDED.last_updated
+        `, [
+          mint, 
+          priceData.priceUsd, 
+          priceData.priceSol,
+          priceData.volume24h || 0,
+          priceData.liquidity || 0,
+          priceData.dexId || null,
+          priceData.pairAddress || null,
+          priceData.source || 'dexscreener'
+        ]);
+      }
+      
+      await client.query('COMMIT');
+      console.log(`[${new Date().toISOString()}] ✅ Updated ${prices.size} token prices in database`);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error updating token prices in database:', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  // Получение одного токена по mint с fallback поиском
+  async fetchSingleTokenPrice(mint) {
+    try {
+      const prices = await this.dexScreener.getTokenPricesInSol([mint]);
+      return prices.get(mint) || null;
+    } catch (error) {
+      console.error(`Error fetching single token price for ${mint}:`, error.message);
+      return null;
+    }
+  },
+
+  // Поиск токенов
+  async searchTokens(query, limit = 10) {
+    try {
+      return await this.dexScreener.searchTokens(query, limit);
+    } catch (error) {
+      console.error('Error searching tokens:', error.message);
+      return [];
+    }
+  },
+
+  // Получение статистики API
+  getApiStats() {
+    return this.dexScreener.getApiStats();
+  }
+};
+
+app.get('/api/tokens/tracker-with-pnl', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const groupId = req.query.groupId || null;
+    
+    console.log(`[${new Date().toISOString()}] 🔍 Token tracker with PnL request: hours=${hours}, groupId=${groupId}`);
+    
+    // Получаем базовые данные по токенам
+    const query = `SELECT * FROM get_token_wallet_aggregates_with_pnl($1, $2)`;
+    const result = await db.pool.query(query, [hours, groupId]);
+    
+    console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${result.rows.length} wallet-token combinations`);
+
+    if (result.rows.length === 0) {
+      return res.json([]);
+    }
+
+    // Группируем по токенам
+    const byToken = new Map();
+    const allMints = new Set();
+    
+    for (const row of result.rows) {
+      allMints.add(row.mint);
+      
+      if (!byToken.has(row.mint)) {
+        byToken.set(row.mint, {
+          mint: row.mint,
+          symbol: row.symbol,
+          name: row.name,
+          decimals: row.decimals,
+          wallets: [],
+          summary: {
+            uniqueWallets: 0,
+            totalBuys: 0,
+            totalSells: 0,
+            totalSpentSOL: 0,
+            totalReceivedSOL: 0,
+            totalTokensBought: 0,
+            totalTokensSold: 0,
+            totalTokensHeld: 0,
+            totalCostBasis: 0,
+            totalRealizedPnL: 0,
+            currentPrice: 0,
+            currentValue: 0,
+            totalUnrealizedPnL: 0,
+            totalPnL: 0,
+          },
+        });
+      }
+      
+      const token = byToken.get(row.mint);
+      
+      const wallet = {
+        address: row.wallet_address,
+        name: row.wallet_name,
+        groupId: row.group_id,
+        groupName: row.group_name,
+        txBuys: Number(row.tx_buys) || 0,
+        txSells: Number(row.tx_sells) || 0,
+        solSpent: Number(row.sol_spent) || 0,
+        solReceived: Number(row.sol_received) || 0,
+        tokensBought: Number(row.tokens_bought) || 0,
+        tokensSold: Number(row.tokens_sold) || 0,
+        tokensHeld: Number(row.tokens_held) || 0,
+        avgBuyPrice: Number(row.avg_buy_price) || 0,
+        realizedPnL: Number(row.realized_pnl) || 0,
+        costBasis: Number(row.cost_basis) || 0,
+        unrealizedPnL: 0, // Будет вычислено после получения цен
+        totalPnL: 0, // Будет вычислено после получения цен
+        lastActivity: row.last_activity,
+      };
+      
+      token.wallets.push(wallet);
+      
+      // Обновляем summary
+      token.summary.uniqueWallets += 1;
+      token.summary.totalBuys += wallet.txBuys;
+      token.summary.totalSells += wallet.txSells;
+      token.summary.totalSpentSOL += wallet.solSpent;
+      token.summary.totalReceivedSOL += wallet.solReceived;
+      token.summary.totalTokensBought += wallet.tokensBought;
+      token.summary.totalTokensSold += wallet.tokensSold;
+      token.summary.totalTokensHeld += wallet.tokensHeld;
+      token.summary.totalCostBasis += wallet.costBasis;
+      token.summary.totalRealizedPnL += wallet.realizedPnL;
+    }
+
+    // Получаем текущие цены токенов
+    console.log(`[${new Date().toISOString()}] 💰 Fetching prices for ${allMints.size} tokens`);
+    const prices = await PriceService.fetchTokenPrices(allMints);
+    
+    // Обновляем цены в базе данных
+    if (prices.size > 0) {
+      await PriceService.updateTokenPricesInDb(db, prices);
+    }
+
+    // Вычисляем unrealized PnL для каждого кошелька и токена
+    const result_array = Array.from(byToken.values()).map((token) => {
+      const currentPrice = prices.get(token.mint)?.priceSol || 0;
+      token.summary.currentPrice = currentPrice;
+      
+      // Обновляем каждый кошелек
+      token.wallets.forEach((wallet) => {
+        // Unrealized PnL = (текущая цена - средняя цена покупки) * количество токенов в наличии
+        if (wallet.tokensHeld > 0 && currentPrice > 0 && wallet.avgBuyPrice > 0) {
+          wallet.unrealizedPnL = (currentPrice - wallet.avgBuyPrice) * wallet.tokensHeld;
+        }
+        
+        // Total PnL = Realized + Unrealized
+        wallet.totalPnL = wallet.realizedPnL + wallet.unrealizedPnL;
+        
+        // Обновляем summary
+        token.summary.currentValue += wallet.tokensHeld * currentPrice;
+        token.summary.totalUnrealizedPnL += wallet.unrealizedPnL;
+      });
+      
+      // Финальные расчеты для summary
+      token.summary.totalPnL = token.summary.totalRealizedPnL + token.summary.totalUnrealizedPnL;
+      token.summary.netSOL = token.summary.totalReceivedSOL - token.summary.totalSpentSOL;
+      
+      return token;
+    });
+
+    // Сортируем по абсолютному значению total PnL
+    result_array.sort((a, b) => Math.abs(b.summary.totalPnL) - Math.abs(a.summary.totalPnL));
+
+    console.log(`[${new Date().toISOString()}] 📈 Returning ${result_array.length} tokens with PnL data`);
+    res.json(result_array);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error building token tracker with PnL:`, error);
+    res.status(500).json({ error: 'Failed to build token tracker with PnL' });
+  }
+})
+
+app.get('/api/portfolio/summary', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const groupId = req.query.groupId || null;
+    
+    const query = `SELECT * FROM get_portfolio_summary($1, $2)`;
+    const result = await db.pool.query(query, [hours, groupId]);
+    
+    if (result.rows.length === 0) {
+      return res.json({
+        totalTokens: 0,
+        totalWallets: 0,
+        totalSpentSOL: 0,
+        totalReceivedSOL: 0,
+        totalCostBasisUSD: 0,
+        totalCurrentValueUSD: 0,
+        totalRealizedPnLSOL: 0,
+        totalUnrealizedPnLUSD: 0,
+        totalPnLUSD: 0,
+        portfolioReturnPercentage: 0
+      });
+    }
+    
+    const summary = result.rows[0];
+    res.json({
+      totalTokens: Number(summary.total_tokens) || 0,
+      totalWallets: Number(summary.total_wallets) || 0,
+      totalSpentSOL: Number(summary.total_spent_sol) || 0,
+      totalReceivedSOL: Number(summary.total_received_sol) || 0,
+      totalCostBasisUSD: Number(summary.total_cost_basis_usd) || 0,
+      totalCurrentValueUSD: Number(summary.total_current_value_usd) || 0,
+      totalRealizedPnLSOL: Number(summary.total_realized_pnl_sol) || 0,
+      totalUnrealizedPnLUSD: Number(summary.total_unrealized_pnl_usd) || 0,
+      totalPnLUSD: Number(summary.total_pnl_usd) || 0,
+      portfolioReturnPercentage: Number(summary.portfolio_return_percentage) || 0
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting portfolio summary:`, error);
+    res.status(500).json({ error: 'Failed to get portfolio summary' });
+  }
+});
+
+// API endpoint для обновления цен токенов
+app.post('/api/tokens/update-prices', async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+    
+    console.log(`[${new Date().toISOString()}] 💰 Updating prices for ${mints.length} tokens`);
+    
+    const prices = await PriceService.fetchTokenPrices(new Set(mints));
+    await PriceService.updateTokenPricesInDb(db, prices);
+    
+    res.json({
+      success: true,
+      updatedPrices: prices.size,
+      message: `Updated prices for ${prices.size} tokens`
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error updating token prices:`, error);
+    res.status(500).json({ error: 'Failed to update token prices' });
+  }
+});
+
+// API endpoint для получения топ токенов по PnL
+app.get('/api/tokens/top-pnl', async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const groupId = req.query.groupId || null;
+    const limit = parseInt(req.query.limit) || 10;
+    const sortBy = req.query.sortBy || 'total_pnl'; // total_pnl, realized_pnl, unrealized_pnl, return_percentage
+    
+    const query = `
+      SELECT * FROM calculate_token_pnl_with_prices($1, $2)
+      ORDER BY ABS(${sortBy}) DESC
+      LIMIT $3
+    `;
+    
+    const result = await db.pool.query(query, [hours, groupId, limit]);
+    
+    const tokens = result.rows.map(row => ({
+      mint: row.mint,
+      symbol: row.symbol,
+      name: row.name,
+      walletAddress: row.wallet_address,
+      walletName: row.wallet_name,
+      tokensHeld: Number(row.tokens_held) || 0,
+      avgBuyPrice: Number(row.avg_buy_price) || 0,
+      currentPriceUSD: Number(row.current_price_usd) || 0,
+      costBasis: Number(row.cost_basis) || 0,
+      currentValueUSD: Number(row.current_value_usd) || 0,
+      realizedPnLSOL: Number(row.realized_pnl_sol) || 0,
+      unrealizedPnLUSD: Number(row.unrealized_pnl_usd) || 0,
+      totalPnLUSD: Number(row.total_pnl_usd) || 0,
+      returnPercentage: Number(row.return_percentage) || 0
+    }));
+    
+    res.json(tokens);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting top PnL tokens:`, error);
+    res.status(500).json({ error: 'Failed to get top PnL tokens' });
+  }
+});
+
+// API endpoint для поиска токенов
+app.get('/api/tokens/search', async (req, res) => {
+  try {
+    const { q: query, limit = 10 } = req.query;
+    
+    if (!query || query.trim().length === 0) {
+      return res.status(400).json({ error: 'Search query is required' });
+    }
+    
+    console.log(`[${new Date().toISOString()}] 🔍 Searching tokens for: ${query}`);
+    
+    const results = await PriceService.searchTokens(query.trim(), parseInt(limit));
+    
+    res.json({
+      query: query.trim(),
+      results: results
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error searching tokens:`, error);
+    res.status(500).json({ error: 'Failed to search tokens' });
+  }
+});
+
+// API endpoint для получения статистики DexScreener API
+app.get('/api/dexscreener/stats', (req, res) => {
+  try {
+    const stats = PriceService.getApiStats();
+    res.json(stats);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting API stats:`, error);
+    res.status(500).json({ error: 'Failed to get API stats' });
+  }
+});
+
+// Background task для периодического обновления цен
+const startPriceUpdateTask = () => {
+  const updateInterval = 3 * 60 * 1000; // 3 минуты для DexScreener
+  
+  setInterval(async () => {
+    try {
+      console.log(`[${new Date().toISOString()}] 🔄 Starting scheduled price update`);
+      
+      // Получаем уникальные токены из последних транзакций
+      const query = `
+        SELECT DISTINCT tk.mint 
+        FROM tokens tk
+        JOIN token_operations to_ ON tk.id = to_.token_id
+        JOIN transactions t ON to_.transaction_id = t.id
+        WHERE t.block_time >= NOW() - INTERVAL '6 hours'
+        ORDER BY t.block_time DESC
+        LIMIT 50
+      `;
+      
+      const result = await db.pool.query(query);
+      const mints = new Set(result.rows.map(row => row.mint));
+      
+      if (mints.size > 0) {
+        const prices = await PriceService.fetchTokenPrices(mints);
+        await PriceService.updateTokenPricesInDb(db, prices);
+        console.log(`[${new Date().toISOString()}] ✅ Updated prices for ${prices.size} tokens`);
+        
+        // Логируем статистику API
+        const apiStats = PriceService.getApiStats();
+        console.log(`[${new Date().toISOString()}] 📊 API Stats: ${apiStats.requests}/${apiStats.maxRequests} requests used`);
+      }
+    } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in scheduled price update:`, error.message);
+    }
+  }, updateInterval);
+  
+  console.log(`[${new Date().toISOString()}] ⏰ DexScreener price update task started (every ${updateInterval / 60000} minutes)`);
+};
+
+// Запускаем задачу обновления цен
+setTimeout(startPriceUpdateTask, 10000);
+
 app.get('/api/transactions/stream', (req, res) => {
   // ИСПРАВЛЕНО: НЕ парсим groupId как число, оставляем как строку (UUID)
   const groupId = req.query.groupId || null;
