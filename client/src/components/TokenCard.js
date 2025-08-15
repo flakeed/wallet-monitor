@@ -107,14 +107,14 @@ const TokenCard = memo(({ token, onOpenChart }) => {
             {token.summary.totalTokensHeld.toLocaleString()} {token.symbol}
           </span>
         </div>
-        {token.summary.currentPrice > 0 && token.summary.totalSpentSOL > 0 && (
+        {/* {token.summary.currentPrice > 0 && token.summary.totalSpentSOL > 0 && (
           <div className="flex justify-between items-center text-xs mt-1">
             <span className="text-gray-600">Performance:</span>
             <span className={`font-semibold ${token.summary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {formatPercentage(token.summary.currentValue, token.summary.totalSpentSOL)}
             </span>
           </div>
-        )}
+        )} */}
       </div>
 
       {/* Wallet breakdown - фиксированная минимальная высота */}
