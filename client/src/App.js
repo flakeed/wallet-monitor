@@ -7,6 +7,7 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
+import PortfolioDashboard from './components/PortfolioDashboard';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
@@ -19,7 +20,7 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
-  const [view, setView] = useState('tokens');
+  const [view, setView] = useState('portfolio'); // Changed default to portfolio
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
 
@@ -219,30 +220,6 @@ function App() {
     }
   };
 
-  // const addWalletsBulk = async (wallets, groupId) => {
-  //   try {
-  //     const response = await fetch(`${API_BASE}/wallets/bulk`, {
-  //       method: 'POST',
-  //       headers: { 'Content-Type': 'application/json' },
-  //       body: JSON.stringify({ 
-  //         wallets, 
-  //         groupId
-  //       }),
-  //     });
-
-  //     const data = await response.json();
-
-  //     if (!response.ok) {
-  //       throw new Error(data.error || 'Failed to import wallets');
-  //     }
-
-  //     setRefreshKey((prev) => prev + 1);
-  //     return { success: true, message: data.message, results: data.results };
-  //   } catch (err) {
-  //     throw new Error(err.message);
-  //   }
-  // };
-
   const handleAddWalletsBulk = async (wallets, groupId, progressCallback) => {
     const MAX_RETRIES = 3;
     const RETRY_DELAY = 2000;
@@ -267,13 +244,13 @@ function App() {
           }),
           signal: controller.signal
         });
-  
+
         clearTimeout(timeoutId);
-  
+
         // Детальная проверка ответа
         console.log(`Response status: ${response.status}`);
         console.log(`Response headers:`, Object.fromEntries(response.headers.entries()));
-  
+
         const contentType = response.headers.get('Content-Type');
         
         if (!response.ok) {
@@ -301,22 +278,22 @@ function App() {
           
           throw new Error(errorMessage);
         }
-  
+
         // Проверяем, что ответ действительно JSON
         if (!contentType || !contentType.includes('application/json')) {
           const responseText = await response.text();
           console.error('Unexpected response format:', responseText.substring(0, 200));
           throw new Error(`Expected JSON response but got: ${contentType}`);
         }
-  
+
         const result = await response.json();
         
         if (!result.success && !result.results) {
           throw new Error(result.error || 'Unknown server error');
         }
-  
+
         return result;
-  
+
       } catch (error) {
         console.error(`Chunk ${chunkIndex + 1} attempt ${attempt} failed:`, error.message);
         
@@ -338,7 +315,7 @@ function App() {
         throw error;
       }
     };
-  
+
     try {
       // Адаптивный размер чанка в зависимости от количества кошельков
       let CHUNK_SIZE;
@@ -351,14 +328,14 @@ function App() {
       } else {
         CHUNK_SIZE = 500;
       }
-  
+
       const chunks = [];
       for (let i = 0; i < wallets.length; i += CHUNK_SIZE) {
         chunks.push(wallets.slice(i, i + CHUNK_SIZE));
       }
-  
+
       console.log(`Processing ${wallets.length} wallets in ${chunks.length} chunks (${CHUNK_SIZE} wallets per chunk)`);
-  
+
       let totalResults = {
         total: wallets.length,
         successful: 0,
@@ -366,7 +343,7 @@ function App() {
         errors: [],
         successfulWallets: []
       };
-  
+
       // Обрабатываем чанки последовательно
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
         const chunk = chunks[chunkIndex];
@@ -378,7 +355,7 @@ function App() {
             batch: chunkIndex + 1
           });
         }
-  
+
         try {
           const chunkResult = await sendChunkWithRetry(chunk, chunkIndex, chunks.length);
           
@@ -393,9 +370,9 @@ function App() {
           if (chunkResult.results.successfulWallets) {
             totalResults.successfulWallets.push(...chunkResult.results.successfulWallets);
           }
-  
+
           console.log(`Chunk ${chunkIndex + 1}/${chunks.length} completed: +${chunkResult.results.successful} successful, +${chunkResult.results.failed} failed`);
-  
+
         } catch (chunkError) {
           console.error(`Chunk ${chunkIndex + 1} failed completely:`, chunkError.message);
           
@@ -407,13 +384,13 @@ function App() {
             walletCount: chunk.length
           });
         }
-  
+
         // Пауза между чанками
         if (chunkIndex < chunks.length - 1) {
           await sleep(200);
         }
       }
-  
+
       if (progressCallback) {
         progressCallback({
           current: wallets.length,
@@ -421,16 +398,16 @@ function App() {
           batch: chunks.length
         });
       }
-  
+
       const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
       console.log(`Bulk import completed: ${totalResults.successful}/${totalResults.total} successful (${successRate}%)`);
-  
+
       return {
         success: totalResults.successful > 0,
         message: `Bulk import completed: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
         results: totalResults
       };
-  
+
     } catch (error) {
       console.error('Bulk import failed:', error);
       throw new Error(`Bulk import failed: ${error.message}`);
@@ -518,6 +495,8 @@ function App() {
         <Header />
         {error && <ErrorMessage error={error} />}
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
+        
+        {/* Main Controls */}
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -539,7 +518,15 @@ function App() {
                 </span>
               )}
             </div>
+            
+            {/* View Tabs */}
             <div className="flex items-center space-x-3">
+              <button
+                className={`text-sm px-3 py-1 rounded ${view === 'portfolio' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                onClick={() => setView('portfolio')}
+              >
+                Portfolio
+              </button>
               <button
                 className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
                 onClick={() => setView('tokens')}
@@ -553,6 +540,8 @@ function App() {
                 Recent Transactions
               </button>
             </div>
+            
+            {/* Transaction Controls - only show for transactions view */}
             {view === 'transactions' && (
               <div className="flex items-center space-x-4">
                 <div className="flex items-center space-x-2">
@@ -582,6 +571,8 @@ function App() {
               </div>
             )}
           </div>
+          
+          {/* Transaction Stats - only show for transactions view */}
           {view === 'transactions' && (
             <div className="mt-4 grid grid-cols-3 gap-4">
               <div className="bg-blue-50 rounded-lg p-3">
@@ -605,17 +596,22 @@ function App() {
             </div>
           )}
         </div>
+
         <WalletManager onAddWallet={addWallet} onAddWalletsBulk={handleAddWalletsBulk} onCreateGroup={createGroup} groups={groups} />
+        
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-          <WalletList
-  wallets={wallets}
-  onRemoveWallet={removeWallet}
-  onRemoveAllWallets={removeAllWallets}
-/>
+            <WalletList
+              wallets={wallets}
+              onRemoveWallet={removeWallet}
+              onRemoveAllWallets={removeAllWallets}
+            />
           </div>
+          
           <div className="lg:col-span-2">
-            {view === 'tokens' ? (
+            {view === 'portfolio' ? (
+              <PortfolioDashboard groupId={selectedGroup} timeframe={timeframe} />
+            ) : view === 'tokens' ? (
               <TokenTracker groupId={selectedGroup} transactions={transactions} timeframe={timeframe} />
             ) : (
               <TransactionFeed
