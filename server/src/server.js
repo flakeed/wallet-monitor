@@ -7,7 +7,7 @@ const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
-
+const DexScreenerService = require('./services/dexScreenerService');
 const app = express();
 const port = process.env.PORT || 5001;
 
