@@ -1,4 +1,4 @@
-// SOL Price Service - добавить в client/src/services/solPriceService.js
+// client/src/services/solPriceService.js
 
 class SolPriceService {
     constructor() {
@@ -23,9 +23,9 @@ class SolPriceService {
       try {
         // Пробуем несколько источников для получения цены SOL
         const sources = [
-          this.getCoinGeckoPrice,
-          this.getDexScreenerPrice,
-          this.getJupiterPrice
+          this.getCoinGeckoPrice.bind(this),
+          this.getDexScreenerPrice.bind(this),
+          this.getJupiterPrice.bind(this)
         ];
   
         for (const getPrice of sources) {
@@ -50,6 +50,7 @@ class SolPriceService {
   
     async getCoinGeckoPrice() {
       const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+      if (!response.ok) throw new Error('CoinGecko API error');
       const data = await response.json();
       return data.solana?.usd;
     }
@@ -57,6 +58,7 @@ class SolPriceService {
     async getDexScreenerPrice() {
       // SOL/USDC pair на Raydium
       const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
+      if (!response.ok) throw new Error('DexScreener API error');
       const data = await response.json();
       
       if (data.pairs && data.pairs.length > 0) {
@@ -76,6 +78,7 @@ class SolPriceService {
     async getJupiterPrice() {
       // Jupiter Price API
       const response = await fetch('https://price.jup.ag/v4/price?ids=SOL');
+      if (!response.ok) throw new Error('Jupiter API error');
       const data = await response.json();
       return data.data?.SOL?.price;
     }

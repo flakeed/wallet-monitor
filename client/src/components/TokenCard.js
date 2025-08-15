@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
-import solPriceService from '../../../server/src/services/solPriceService';
+import solPriceService from './server/src/services/solPriceService.js';
 
 function TokenCard({ token, onOpenChart }) {
   const [tokenPrice, setTokenPrice] = useState(null);
