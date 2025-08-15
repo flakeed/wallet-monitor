@@ -163,22 +163,21 @@ class SolanaWebSocketService {
         console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}`);
     }
 
-    async subscribeToWallet(walletAddress) {
-        if (this.subscriptions.size >= this.maxSubscriptions) {
-            throw new Error(`Maximum subscription limit of ${this.maxSubscriptions} reached`);
-        }
-        try {
-            console.log(`[${new Date().toISOString()}] 🔔 Subscribing to wallet ${walletAddress.slice(0, 8)}...`);
-            const logsSubscriptionId = await this.sendRequest('logsSubscribe', [
-                { mentions: [walletAddress] },
-                { commitment: 'confirmed' },
-            ], 'logsSubscribe');
-            this.subscriptions.set(walletAddress, { logs: logsSubscriptionId });
-            console.log(`[${new Date().toISOString()}] ✅ Subscribed to wallet ${walletAddress.slice(0, 8)}... (logs: ${logsSubscriptionId})`);
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error subscribing to wallet ${walletAddress}:`, error.message);
-        }
+async subscribeToWallet(walletAddress) {
+    if (this.subscriptions.has(walletAddress)) {
+        console.log(`[${new Date().toISOString()}] ℹ️ Wallet ${walletAddress} already subscribed`);
+        return;
     }
+    if (this.subscriptions.size >= this.maxSubscriptions) {
+        throw new Error(`Maximum subscription limit of ${this.maxSubscriptions} reached`);
+    }
+    const logsSubscriptionId = await this.sendRequest('logsSubscribe', [
+        { mentions: [walletAddress] },
+        { commitment: 'confirmed' },
+    ], 'logsSubscribe');
+    this.subscriptions.set(walletAddress, { logs: logsSubscriptionId });
+    console.log(`[${new Date().toISOString()}] ✅ Subscribed to wallet ${walletAddress} (logs: ${logsSubscriptionId})`);
+}
 
     async unsubscribeFromWallet(walletAddress) {
         const subData = this.subscriptions.get(walletAddress);

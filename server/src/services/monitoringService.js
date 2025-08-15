@@ -229,62 +229,29 @@ class WalletMonitoringService {
     }
 
     async analyzeTokenChanges(meta, transactionType) {
-        const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const tokenChanges = [];
         const mints = new Set();
-    
-        console.log(`[${new Date().toISOString()}] 🔍 Analyzing token changes for transactionType: ${transactionType}`);
-    
-        // Собираем все изменения токенов
+        console.log(`[${new Date().toISOString()}] 🔍 Analyzing token changes for signature ${meta.transaction.signature}`);
         for (const post of meta.postTokenBalances || []) {
             const pre = meta.preTokenBalances?.find((p) => p.mint === post.mint && p.accountIndex === post.accountIndex);
-            if (!pre || post.mint === WRAPPED_SOL_MINT) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Skipping token: mint=${post.mint}, no pre-balance or wrapped SOL`);
-                continue;
-            }
-    
+            if (!pre || post.mint === WRAPPED_SOL_MINT) continue;
             const rawChange = Number(post.uiTokenAmount.amount) - Number(pre.uiTokenAmount.amount);
-            console.log(`[${new Date().toISOString()}] ℹ️ Token ${post.mint}: rawChange=${rawChange}`);
-    
-            if (rawChange === 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Token ${post.mint}: no balance change`);
-                continue;
-            }
-    
+            if (rawChange === 0) continue;
             mints.add(post.mint);
             tokenChanges.push({
                 mint: post.mint,
                 rawChange,
                 decimals: post.uiTokenAmount.decimals,
+                changeType: rawChange > 0 ? 'buy' : 'sell',
             });
         }
-    
-        if (tokenChanges.length === 0) {
-            console.log(`[${new Date().toISOString()}] ⚠️ No token changes detected`);
-            return [];
-        }
-    
-        // Получаем метаданные токенов
+        console.log(`[${new Date().toISOString()}] ℹ️ Token changes:`, tokenChanges);
         const tokenInfos = await this.batchFetchTokenMetadata([...mints]);
-        const result = tokenChanges.map((change) => {
-            const tokenInfo = tokenInfos.get(change.mint) || {
-                symbol: 'Unknown',
-                name: 'Unknown Token',
-                decimals: change.decimals,
-            };
-    
-            return {
-                mint: change.mint,
-                rawChange: Math.abs(change.rawChange),
-                decimals: change.decimals,
-                symbol: tokenInfo.symbol,
-                name: tokenInfo.name,
-                changeType: change.rawChange > 0 ? 'buy' : 'sell', // Определяем тип изменения
-            };
-        });
-    
-        console.log(`[${new Date().toISOString()}] ✅ Detected ${result.length} token changes:`, result);
-        return result;
+        return tokenChanges.map((change) => ({
+            ...change,
+            symbol: tokenInfos.get(change.mint)?.symbol || 'Unknown',
+            name: tokenInfos.get(change.mint)?.name || 'Unknown Token',
+        }));
     }
 
     async batchFetchTokenMetadata(mints) {
@@ -332,11 +299,7 @@ class WalletMonitoringService {
     async saveTokenOperationInTransaction(client, transactionId, tokenChange, transactionType) {
         try {
             const tokenInfo = await fetchTokenMetadata(tokenChange.mint, this.connection);
-            if (!tokenInfo) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ No metadata for token ${tokenChange.mint}`);
-                return;
-            }
-
+            if (!tokenInfo) return;
             const tokenUpsertQuery = `
                 INSERT INTO tokens (mint, symbol, name, decimals) 
                 VALUES ($1, $2, $3, $4)
@@ -353,18 +316,16 @@ class WalletMonitoringService {
                 tokenInfo.name,
                 tokenInfo.decimals,
             ]);
-
             const tokenId = tokenResult.rows[0].id;
             const amount = tokenChange.rawChange / Math.pow(10, tokenChange.decimals);
-
             const operationQuery = `
                 INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
                 VALUES ($1, $2, $3, $4)
+                ON CONFLICT DO NOTHING
             `;
             await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error saving token operation:`, error.message);
-            throw error;
         }
     }
 

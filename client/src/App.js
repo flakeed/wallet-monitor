@@ -88,46 +88,34 @@ function App() {
 
     eventSource.onmessage = (event) => {
       try {
-        const newTransaction = JSON.parse(event.data);
-        console.log('New transaction received via SSE:', newTransaction);
-
-        const now = new Date();
-        const txTime = new Date(newTransaction.timestamp);
-        const hoursDiff = (now - txTime) / (1000 * 60 * 60);
-        const matchesTimeframe = hoursDiff <= parseInt(timeframe);
-        const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
-        const matchesGroup = !selectedGroup || newTransaction.groupId === selectedGroup;
-
-        console.log('Filter check:', { matchesTimeframe, matchesType, matchesGroup });
-
-        if (matchesTimeframe && matchesType && matchesGroup) {
+          const newTransaction = JSON.parse(event.data);
           setTransactions((prev) => {
-            if (prev.some((tx) => tx.signature === newTransaction.signature)) {
-              return prev;
-            }
-            const formattedTransaction = {
-              signature: newTransaction.signature,
-              time: newTransaction.timestamp,
-              transactionType: newTransaction.transactionType,
-              solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
-              solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
-              wallet: {
-                address: newTransaction.walletAddress,
-                name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
-                group_id: newTransaction.groupId,
-                group_name: newTransaction.groupName,
-              },
-              tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
-              tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
-            };
-            return [formattedTransaction, ...prev].slice(0, 400);
+              const signatureKey = `${newTransaction.signature}:${newTransaction.transactionType}`;
+              if (prev.some((tx) => `${tx.signature}:${tx.transactionType}` === signatureKey)) {
+                  console.log(`[${new Date().toISOString()}] ℹ️ Skipping duplicate transaction: ${signatureKey}`);
+                  return prev;
+              }
+              const formattedTransaction = {
+                  signature: newTransaction.signature,
+                  time: newTransaction.timestamp,
+                  transactionType: newTransaction.transactionType,
+                  solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
+                  solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
+                  wallet: {
+                      address: newTransaction.walletAddress,
+                      name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
+                      group_id: newTransaction.groupId,
+                      group_name: newTransaction.groupName,
+                  },
+                  tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
+                  tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
+              };
+              return [formattedTransaction, ...prev].slice(0, 400);
           });
-        }
       } catch (err) {
-        console.error('Error parsing SSE message:', err);
-        console.error('Event data:', event.data);
+          console.error('Error parsing SSE message:', err);
       }
-    };
+  };
 
     eventSource.onerror = () => {
       console.error('SSE connection error');
