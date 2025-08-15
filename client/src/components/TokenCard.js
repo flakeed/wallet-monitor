@@ -1,8 +1,8 @@
 // client/src/components/TokenCard.js
-import React from 'react';
+import React, { memo } from 'react';
 import WalletPill from './WalletPill';
 
-function TokenCard({ token, onOpenChart }) {
+const TokenCard = memo(({ token, onOpenChart }) => {
   const netColor = token.summary.totalPnL > 0 ? 'text-green-700' : token.summary.totalPnL < 0 ? 'text-red-700' : 'text-gray-700';
 
   // Function to copy text to clipboard
@@ -34,8 +34,8 @@ function TokenCard({ token, onOpenChart }) {
   };
 
   return (
-    <div className="border rounded-lg p-4 bg-gray-50">
-      <div className="flex items-center justify-between mb-3">
+    <div className="border rounded-lg p-4 bg-gray-50 transition-all duration-150" style={{ minHeight: '200px' }}>
+      <div className="flex items-start justify-between mb-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center space-x-2 mb-1">
             <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">
@@ -47,7 +47,7 @@ function TokenCard({ token, onOpenChart }) {
             <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
             <button
               onClick={() => copyToClipboard(token.mint)}
-              className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
+              className="text-gray-400 hover:text-blue-600 p-0.5 rounded transition-colors"
               title="Copy address"
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -63,7 +63,7 @@ function TokenCard({ token, onOpenChart }) {
         </div>
         
         {/* Enhanced stats section */}
-        <div className="text-right">
+        <div className="text-right ml-4" style={{ minWidth: '140px' }}>
           <div className={`text-base font-bold ${netColor} mb-1`}>
             Total PnL: {token.summary.totalPnL > 0 ? '+' : ''}{token.summary.totalPnL.toFixed(4)} SOL
           </div>
@@ -99,8 +99,8 @@ function TokenCard({ token, onOpenChart }) {
         </div>
       </div>
 
-      {/* Holdings summary */}
-      <div className="mb-3 p-2 bg-white rounded border">
+      {/* Holdings summary - фиксированная высота */}
+      <div className="mb-3 p-2 bg-white rounded border" style={{ minHeight: '48px' }}>
         <div className="flex justify-between items-center text-xs">
           <span className="text-gray-600">Total Holdings:</span>
           <span className="font-semibold">
@@ -117,30 +117,34 @@ function TokenCard({ token, onOpenChart }) {
         )}
       </div>
 
-      {/* Wallet breakdown */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-        {token.wallets.map((w) => (
-          <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
-        ))}
+      {/* Wallet breakdown - фиксированная минимальная высота */}
+      <div className="mb-3" style={{ minHeight: '60px' }}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {token.wallets.map((w) => (
+            <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
+          ))}
+        </div>
       </div>
 
       {/* Action buttons */}
       <div className="flex space-x-2">
         <button
           onClick={onOpenChart}
-          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition text-sm"
+          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition-colors text-sm"
         >
           Open Chart
         </button>
         <button
           onClick={openGmgnChartInNewWindow}
-          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition text-sm"
+          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition-colors text-sm"
         >
           Open in New Window
         </button>
       </div>
     </div>
   );
-}
+});
+
+TokenCard.displayName = 'TokenCard';
 
 export default TokenCard;
