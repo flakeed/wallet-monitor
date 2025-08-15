@@ -68,21 +68,21 @@ const TokenCard = memo(({ token, onOpenChart }) => {
             Total PnL: {token.summary.totalPnL > 0 ? '+' : ''}{token.summary.totalPnL.toFixed(4)} SOL
           </div>
           
-          {/* Price and percentage change */}
+          {/* Price and percentage change
           {token.summary.currentPrice > 0 && (
             <div className="text-xs text-gray-600 mb-1">
               Price: ${token.summary.currentPrice.toFixed(6)}
             </div>
-          )}
+          )} */}
           
           {/* Holdings info */}
           <div className="text-xs text-gray-500 space-y-1">
             <div>
               Spent: {token.summary.totalSpentSOL.toFixed(4)} SOL
             </div>
-            <div>
+            {/* <div>
               Current Value: {token.summary.currentValue.toFixed(4)} SOL
-            </div>
+            </div> */}
             <div className="grid grid-cols-2 gap-2 text-[10px]">
               <div className={`${token.summary.totalRealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                 Realized: {token.summary.totalRealizedPnL >= 0 ? '+' : ''}{token.summary.totalRealizedPnL.toFixed(4)}

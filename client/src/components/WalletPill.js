@@ -77,11 +77,11 @@ function WalletPill({ wallet, tokenMint }) {
               Holding: {holdingTokens.toLocaleString()} tokens
             </div>
           )}
-          {wallet.avgBuyPrice > 0 && (
+          {/* {wallet.avgBuyPrice > 0 && (
             <div className="text-gray-400">
               Avg: {wallet.avgBuyPrice.toFixed(6)} SOL
             </div>
-          )}
+          )} */}
         </div>
       </div>
       
@@ -91,12 +91,12 @@ function WalletPill({ wallet, tokenMint }) {
           {pnl > 0 ? '+' : ''}{pnl.toFixed(4)} SOL
         </div>
         
-        {/* Return percentage */}
+        {/* Return percentage
         {formatReturnPercentage() && (
           <div className={`text-[9px] ${pnlColor}`}>
             {formatReturnPercentage()}
           </div>
-        )}
+        )} */}
         
         {/* Breakdown of PnL components */}
         {wallet.realizedPnL !== undefined && wallet.unrealizedPnL !== undefined && (

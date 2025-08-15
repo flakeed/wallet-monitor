@@ -382,12 +382,12 @@ function TokenTracker({ groupId, transactions, timeframe }) {
               {totalStats.totalSpentSOL.toFixed(4)} SOL
             </div>
           </div>
-          <div className="text-center">
+          {/* <div className="text-center">
             <div className="text-sm text-gray-600">Current Value</div>
             <div className="text-lg font-semibold text-blue-600">
               {totalStats.totalCurrentValue.toFixed(4)} SOL
             </div>
-          </div>
+          </div> */}
           <div className="text-center">
             <div className="text-sm text-gray-600">Realized PnL</div>
             <div className={`text-lg font-semibold ${totalStats.totalRealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
