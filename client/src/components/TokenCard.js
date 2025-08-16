@@ -1,5 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import { Line } from 'react-chartjs-2';
 import WalletPill from './WalletPill';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js';
+
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
 function TokenCard({ token, onOpenChart }) {
   const [priceData, setPriceData] = useState(null);
@@ -9,7 +22,6 @@ function TokenCard({ token, onOpenChart }) {
 
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
-  // Fetch SOL price from DexScreener
   const fetchSolPrice = async () => {
     try {
       const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
@@ -29,7 +41,6 @@ function TokenCard({ token, onOpenChart }) {
     }
   };
 
-  // Fetch token price data from DexScreener
   const fetchTokenPrice = async () => {
     if (!token.mint || loadingPrice) return;
     
@@ -58,7 +69,6 @@ function TokenCard({ token, onOpenChart }) {
     }
   };
 
-  // Calculate group PnL with real SOL price
   const calculateGroupPnL = () => {
     if (!priceData || !priceData.price || !solPrice) return null;
 
@@ -147,13 +157,38 @@ function TokenCard({ token, onOpenChart }) {
   };
 
   // Sample data for the chart (simulated price over 24 hours)
-  const chartData = [
-    { x: 0, y: 0.01 },
-    { x: 6, y: 0.015 },
-    { x: 12, y: 0.02 },
-    { x: 18, y: 0.018 },
-    { x: 24, y: 0.025 }
-  ];
+  const chartData = {
+    labels: [0, 6, 12, 18, 24],
+    datasets: [
+      {
+        label: 'Price (USD)',
+        data: [0.01, 0.015, 0.02, 0.018, 0.025],
+        fill: false,
+        borderColor: '#3b82f6',
+        backgroundColor: '#3b82f6',
+        tension: 0.1,
+        pointRadius: 0,
+      },
+    ],
+  };
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      x: {
+        title: { display: false },
+        ticks: { display: false },
+      },
+      y: {
+        title: { display: false },
+        ticks: { display: false },
+      },
+    },
+    plugins: {
+      legend: { display: false },
+    },
+  };
 
   return (
     <div className="border rounded-lg p-4 bg-gray-50">
@@ -257,41 +292,7 @@ function TokenCard({ token, onOpenChart }) {
 
       {/* Small chart added in the empty space */}
       <div className="mt-2 w-full h-20">
-        <chartjs type="line">
-          {
-            {
-              "data": {
-                "labels": chartData.map(d => d.x),
-                "datasets": [{
-                  "label": "Price (USD)",
-                  "data": chartData.map(d => d.y),
-                  "fill": false,
-                  "borderColor": "#3b82f6",
-                  "backgroundColor": "#3b82f6",
-                  "tension": 0.1,
-                  "pointRadius": 0
-                }]
-              },
-              "options": {
-                "responsive": true,
-                "maintainAspectRatio": false,
-                "scales": {
-                  "x": {
-                    "title": { "display": false },
-                    "ticks": { "display": false }
-                  },
-                  "y": {
-                    "title": { "display": false },
-                    "ticks": { "display": false }
-                  }
-                },
-                "plugins": {
-                  "legend": { "display": false }
-                }
-              }
-            }
-          }
-        </chartjs>
+        <Line data={chartData} options={chartOptions} />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
