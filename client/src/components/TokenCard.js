@@ -1,18 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Line } from 'react-chartjs-2';
 import WalletPill from './WalletPill';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-} from 'chart.js';
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
 function TokenCard({ token, onOpenChart }) {
   const [priceData, setPriceData] = useState(null);
@@ -156,40 +143,6 @@ function TokenCard({ token, onOpenChart }) {
     return `$${formatNumber(num)}`;
   };
 
-  // Sample data for the chart (simulated price over 24 hours)
-  const chartData = {
-    labels: [0, 6, 12, 18, 24],
-    datasets: [
-      {
-        label: 'Price (USD)',
-        data: [0.01, 0.015, 0.02, 0.018, 0.025],
-        fill: false,
-        borderColor: '#3b82f6',
-        backgroundColor: '#3b82f6',
-        tension: 0.1,
-        pointRadius: 0,
-      },
-    ],
-  };
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    scales: {
-      x: {
-        title: { display: false },
-        ticks: { display: false },
-      },
-      y: {
-        title: { display: false },
-        ticks: { display: false },
-      },
-    },
-    plugins: {
-      legend: { display: false },
-    },
-  };
-
   return (
     <div className="border rounded-lg p-4 bg-gray-50">
       <div className="flex items-center justify-between mb-3">
@@ -225,8 +178,20 @@ function TokenCard({ token, onOpenChart }) {
         </div>
       </div>
 
+      {/* DexScreener chart iframe in the empty space */}
+      <div className="mt-2 w-full h-32 border border-gray-200 rounded-lg overflow-hidden">
+        <iframe
+          src={`https://dexscreener.com/solana/${token.mint}?embed=1&theme=dark`}
+          title="DexScreener Chart"
+          width="100%"
+          height="100%"
+          frameBorder="0"
+          scrolling="no"
+        ></iframe>
+      </div>
+
       {groupPnL && (
-        <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+        <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200 mt-4">
           <div className="flex items-center justify-between mb-2">
             <h4 className="text-sm font-semibold text-blue-900">Group PnL Summary</h4>
             <div className="text-xs text-gray-600">
@@ -288,13 +253,8 @@ function TokenCard({ token, onOpenChart }) {
             </div>
           )}
         </div>
-      )}
-
-      {/* Small chart added in the empty space */}
-      <div className="mt-2 w-full h-20">
-        <Line data={chartData} options={chartOptions} />
-      </div>
-
+  )
+}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {token.wallets.map((w) => (
           <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
