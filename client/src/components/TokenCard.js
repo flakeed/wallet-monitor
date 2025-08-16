@@ -167,14 +167,14 @@ function TokenCard({ token, onOpenChart }) {
           <div className="flex items-center space-x-2">
             <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
             <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
-            {priceData && (
+            {/* {priceData && (
               <div className="flex items-center space-x-1">
                 <span className="text-xs text-gray-500">{formatCurrency(priceData.price)}</span>
                 <span className={`text-xs ${priceData.change24h >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {priceData.change24h >= 0 ? '+' : ''}{priceData.change24h.toFixed(2)}%
                 </span>
               </div>
-            )}
+            )} */}
           </div>
           <div className="flex items-center space-x-1">
             <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
@@ -203,12 +203,12 @@ function TokenCard({ token, onOpenChart }) {
       {/* Group PnL Summary */}
       {groupPnL && (
         <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-          <div className="flex items-center justify-between mb-2">
+          {/* <div className="flex items-center justify-between mb-2">
             <h4 className="text-sm font-semibold text-blue-900">Group PnL Summary</h4>
             <div className="text-xs text-gray-600">
               {loadingPrice ? 'Loading...' : `SOL: ${solPrice?.toFixed(2) || '150'}`}
             </div>
-          </div>
+          </div> */}
           
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="space-y-1">
