@@ -89,14 +89,12 @@ function TokenCard({ token, onOpenChart }) {
       ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOL : 0;
     const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
     const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
+    const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
     
-    // Total PnL in USD
+    // Total PnL
     const realizedPnLUSD = realizedPnLSOL * solPrice;
     const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
-
-    // Calculate average buy price
-    const averageBuyPriceUSD = totalTokensBought > 0 ? 
-      (totalSpentSOL * solPrice) / totalTokensBought : 0;
+    const totalPnLSOL = totalPnLUSD / solPrice;
 
     return {
       totalTokensBought,
@@ -106,11 +104,12 @@ function TokenCard({ token, onOpenChart }) {
       totalReceivedSOL,
       realizedPnLSOL,
       realizedPnLUSD,
+      unrealizedPnLSOL,
       unrealizedPnLUSD,
+      totalPnLSOL,
       totalPnLUSD,
       currentTokenValueUSD,
       remainingCostBasisUSD,
-      averageBuyPriceUSD,
       currentPriceUSD: priceData.price,
       solPrice
     };
@@ -217,14 +216,6 @@ function TokenCard({ token, onOpenChart }) {
                 <span className="text-gray-600">Holdings:</span>
                 <span className="font-medium">{formatNumber(groupPnL.currentHoldings, 0)} tokens</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Value:</span>
-                <span className="font-medium">{formatCurrency(groupPnL.currentTokenValueUSD)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Avg Buy:</span>
-                <span className="font-medium">{formatCurrency(groupPnL.averageBuyPriceUSD)}</span>
-              </div>
             </div>
             
             <div className="space-y-1">
@@ -241,15 +232,25 @@ function TokenCard({ token, onOpenChart }) {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Unrealized PnL:</span>
-                <span className={`font-medium ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {groupPnL.unrealizedPnLUSD >= 0 ? '+' : ''}{formatCurrency(groupPnL.unrealizedPnLUSD)}
-                </span>
+                <div className="text-right">
+                  <div className={`font-medium ${groupPnL.unrealizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
+                  </div>
+                  <div className={`text-xs ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(groupPnL.unrealizedPnLUSD)}
+                  </div>
+                </div>
               </div>
               <div className="flex justify-between border-t border-blue-300 pt-1">
                 <span className="text-gray-600 font-medium">Total PnL:</span>
-                <span className={`font-bold ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {groupPnL.totalPnLUSD >= 0 ? '+' : ''}{formatCurrency(groupPnL.totalPnLUSD)}
-                </span>
+                <div className="text-right">
+                  <div className={`font-bold ${groupPnL.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL
+                  </div>
+                  <div className={`text-xs ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(groupPnL.totalPnLUSD)}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
