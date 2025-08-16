@@ -129,6 +129,26 @@ AS $$
     ) g ON w.group_id = g.group_id;
 $$;
 
+WITH duplicates AS (
+    SELECT id, 
+           ROW_NUMBER() OVER (PARTITION BY signature, wallet_id ORDER BY created_at) as row_num
+    FROM transactions
+)
+DELETE FROM transactions 
+WHERE id IN (
+    SELECT id FROM duplicates WHERE row_num > 1
+);
+
+-- Добавляем уникальное ограничение
+ALTER TABLE transactions 
+ADD CONSTRAINT uk_transactions_signature_wallet 
+UNIQUE (signature, wallet_id);
+
+-- Создаем индекс для быстрого поиска
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_signature_wallet 
+ON transactions(signature, wallet_id);
+
+
 -- 5. Процедура очистки и оптимизации после массового импорта
 CREATE OR REPLACE FUNCTION optimize_after_bulk_import()
 RETURNS void
