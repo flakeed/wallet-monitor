@@ -131,184 +131,175 @@ class WalletMonitoringService {
         }
     }
 
-    async processTransaction(sig, wallet) {
-        const startTime = Date.now();
-        
-        try {
-            console.log(`[${new Date().toISOString()}] 🔄 Starting to process transaction ${sig.signature} for wallet ${wallet.address.slice(0,8)}...`);
-            
-            if (!sig.signature || !sig.blockTime) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Invalid signature object:`, sig);
-                return null;
-            }
-    
-            // Проверяем существование транзакции
-            const existingTx = await this.db.pool.query(
-                'SELECT id FROM transactions WHERE signature = $1',
-                [sig.signature]
-            );
-            if (existingTx.rows.length > 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed`);
-                return null;
-            }
-    
-            console.log(`[${new Date().toISOString()}] 📡 Fetching transaction from blockchain: ${sig.signature}`);
-            
-            const tx = await this.connection.getParsedTransaction(sig.signature, {
-                maxSupportedTransactionVersion: 0,
-                commitment: 'confirmed',
-            });
-    
-            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Invalid transaction ${sig.signature}`);
-                return null;
-            }
-    
-            console.log(`[${new Date().toISOString()}] ⚖️ Analyzing balances for ${sig.signature}`);
-            console.log(`Pre-balance: ${tx.meta.preBalances[0] / 1e9} SOL, Post-balance: ${tx.meta.postBalances[0] / 1e9} SOL`);
-            
-            // Анализируем токены СНАЧАЛА
-            console.log(`[${new Date().toISOString()}] 🪙 Analyzing token changes for ${sig.signature}`);
-            const tokenChanges = await this.analyzeTokenChanges(tx.meta);
-            
-            console.log(`[${new Date().toISOString()}] 📊 Found ${tokenChanges.length} token changes:`);
-            tokenChanges.forEach((tc, i) => {
-                console.log(`  ${i+1}. ${tc.symbol} (${tc.mint.slice(0,8)}...): ${tc.change > 0 ? '+' : ''}${tc.change}`);
-            });
-    
-            if (tokenChanges.length === 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
-                return null;
-            }
-    
-            // ИСПРАВЛЕННАЯ ЛОГИКА определения типа транзакции
-            console.log(`[${new Date().toISOString()}] 🔍 Determining transaction type for ${sig.signature}`);
-    
-            const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
-            console.log(`[${new Date().toISOString()}] 💰 SOL change: ${solChange} SOL`);
-    
-            let transactionType, solAmount;
-    
-            // ✅ ИСПРАВЛЕНО: Более точная логика определения типа
-            if (solChange < -0.000001) {
-                // SOL уменьшилось = потратили SOL = BUY
-                transactionType = 'buy';
-                solAmount = Math.abs(solChange);
-                console.log(`[${new Date().toISOString()}] ✅ BUY: Spent ${solAmount} SOL`);
-                
-            } else if (solChange > 0.000001) {
-                // SOL увеличилось = получили SOL = SELL  
-                transactionType = 'sell';
-                solAmount = solChange;
-                console.log(`[${new Date().toISOString()}] ✅ SELL: Received ${solAmount} SOL`);
-                
-            } else {
-                // Минимальное изменение SOL - определяем по токенам
-                const tokensBought = tokenChanges.filter(tc => tc.change > 0); // Получили токены
-                const tokensSold = tokenChanges.filter(tc => tc.change < 0);   // Потеряли токены
-                
-                console.log(`[${new Date().toISOString()}] 🔍 Minimal SOL change (${solChange}). Tokens: +${tokensBought.length}, -${tokensSold.length}`);
-                
-                if (tokensBought.length > 0 && tokensSold.length === 0) {
-                    // Только получили токены = BUY
-                    transactionType = 'buy';
-                    solAmount = 0.000001;
-                    console.log(`[${new Date().toISOString()}] ✅ BUY: Got ${tokensBought.length} tokens (minimal SOL)`);
-                    
-                } else if (tokensSold.length > 0 && tokensBought.length === 0) {
-                    // Только потеряли токены = SELL
-                    transactionType = 'sell'; 
-                    solAmount = 0.000001;
-                    console.log(`[${new Date().toISOString()}] ✅ SELL: Lost ${tokensSold.length} tokens (minimal SOL)`);
-                    
-                } else if (tokensBought.length > 0 && tokensSold.length > 0) {
-                    // Свап - берем тот тип, где больше токенов изменилось
-                    const buyVolume = tokensBought.reduce((sum, t) => sum + Math.abs(t.change), 0);
-                    const sellVolume = tokensSold.reduce((sum, t) => sum + Math.abs(t.change), 0);
-                    
-                    if (buyVolume >= sellVolume) {
-                        transactionType = 'buy';
-                        console.log(`[${new Date().toISOString()}] ✅ SWAP->BUY: Buy volume ${buyVolume} >= Sell volume ${sellVolume}`);
-                    } else {
-                        transactionType = 'sell';
-                        console.log(`[${new Date().toISOString()}] ✅ SWAP->SELL: Sell volume ${sellVolume} > Buy volume ${buyVolume}`);
-                    }
-                    solAmount = Math.abs(solChange) || 0.000001;
-                    
-                } else {
-                    console.log(`[${new Date().toISOString()}] ❓ Cannot determine transaction type for ${sig.signature}`);
-                    return null;
-                }
-            }
-    
-            console.log(`[${new Date().toISOString()}] 💾 Starting database transaction for ${sig.signature}`);
-    
-            // Сохраняем в базу данных
-            const result = await this.db.withTransaction(async (client) => {
-                try {
-                    console.log(`[${new Date().toISOString()}] 📝 Inserting transaction record for ${sig.signature}`);
-                    
-                    const query = `
-                        INSERT INTO transactions (
-                            wallet_id, signature, block_time, transaction_type,
-                            sol_spent, sol_received
-                        ) 
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        RETURNING id, signature, transaction_type
-                    `;
-                    const result = await client.query(query, [
-                        wallet.id,
-                        sig.signature,
-                        new Date(sig.blockTime * 1000).toISOString(),
-                        transactionType,
-                        transactionType === 'buy' ? solAmount : 0,
-                        transactionType === 'sell' ? solAmount : 0,
-                    ]);
-    
-                    const transaction = result.rows[0];
-                    console.log(`[${new Date().toISOString()}] ✅ Transaction record created with ID: ${transaction.id}`);
-    
-                    console.log(`[${new Date().toISOString()}] 🪙 Saving ${tokenChanges.length} token operations`);
-                    
-                    // Сохраняем токены по одному с обработкой ошибок
-                    for (let i = 0; i < tokenChanges.length; i++) {
-                        const tokenChange = tokenChanges[i];
-                        try {
-                            console.log(`[${new Date().toISOString()}] 💾 Saving token ${i+1}/${tokenChanges.length}: ${tokenChange.symbol}`);
-                            await this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType);
-                            console.log(`[${new Date().toISOString()}] ✅ Token ${tokenChange.symbol} saved successfully`);
-                        } catch (tokenError) {
-                            console.error(`[${new Date().toISOString()}] ❌ Error saving token ${tokenChange.symbol}:`, tokenError.message);
-                            throw tokenError; // Прерываем транзакцию
-                        }
-                    }
-    
-                    console.log(`[${new Date().toISOString()}] ✅ All token operations saved for ${sig.signature}`);
-    
-                    return {
-                        signature: sig.signature,
-                        type: transactionType,
-                        solAmount,
-                        tokensChanged: tokenChanges,
-                    };
-                } catch (dbError) {
-                    console.error(`[${new Date().toISOString()}] ❌ Database transaction error for ${sig.signature}:`, dbError.message);
-                    throw dbError;
-                }
-            });
-    
-            const duration = Date.now() - startTime;
-            console.log(`[${new Date().toISOString()}] 🎉 Successfully processed transaction ${sig.signature} in ${duration}ms`);
-            
-            return result;
-    
-        } catch (error) {
-            const duration = Date.now() - startTime;
-            console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature} after ${duration}ms:`, error.message);
-            console.error(`Full error:`, error);
+    // Замените processTransaction в server/src/services/monitoringService.js
+
+async processTransaction(sig, wallet) {
+    try {
+        if (!sig.signature || !sig.blockTime) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Invalid signature object:`, sig);
             return null;
         }
+
+        // Проверяем существование транзакции
+        const existingTx = await this.db.pool.query(
+            'SELECT id FROM transactions WHERE signature = $1',
+            [sig.signature]
+        );
+        if (existingTx.rows.length > 0) {
+            console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed`);
+            return null;
+        }
+
+        const tx = await this.connection.getParsedTransaction(sig.signature, {
+            maxSupportedTransactionVersion: 0,
+            commitment: 'confirmed',
+        });
+
+        if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Invalid transaction ${sig.signature}`);
+            return null;
+        }
+
+        // Анализируем токены
+        const tokenChanges = await this.analyzeTokenChanges(tx.meta);
+        if (tokenChanges.length === 0) {
+            console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
+            return null;
+        }
+
+        // Определяем тип транзакции
+        const solChange = (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / 1e9;
+        let transactionType, solAmount;
+
+        if (solChange < -0.000001) {
+            transactionType = 'buy';
+            solAmount = Math.abs(solChange);
+        } else if (solChange > 0.000001) {
+            transactionType = 'sell';
+            solAmount = solChange;
+        } else {
+            // Определяем по токенам
+            const tokensBought = tokenChanges.filter(tc => tc.change > 0);
+            const tokensSold = tokenChanges.filter(tc => tc.change < 0);
+            
+            if (tokensBought.length > 0 && tokensSold.length === 0) {
+                transactionType = 'buy';
+                solAmount = 0.000001;
+            } else if (tokensSold.length > 0 && tokensBought.length === 0) {
+                transactionType = 'sell';
+                solAmount = 0.000001;
+            } else {
+                console.log(`[${new Date().toISOString()}] ❓ Cannot determine transaction type for ${sig.signature}`);
+                return null;
+            }
+        }
+
+        console.log(`[${new Date().toISOString()}] ✅ Processing ${transactionType.toUpperCase()} transaction ${sig.signature}: ${solAmount} SOL, ${tokenChanges.length} tokens`);
+
+        // Сохраняем в базу данных
+        return await this.db.withTransaction(async (client) => {
+            // 1. Создаем транзакцию
+            const txQuery = `
+                INSERT INTO transactions (
+                    wallet_id, signature, block_time, transaction_type,
+                    sol_spent, sol_received
+                ) 
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, signature, transaction_type
+            `;
+            const txResult = await client.query(txQuery, [
+                wallet.id,
+                sig.signature,
+                new Date(sig.blockTime * 1000).toISOString(),
+                transactionType,
+                transactionType === 'buy' ? solAmount : 0,
+                transactionType === 'sell' ? solAmount : 0,
+            ]);
+
+            const transaction = txResult.rows[0];
+            console.log(`[${new Date().toISOString()}] ✅ Transaction record created with ID: ${transaction.id}`);
+
+            // 2. Сохраняем токены БЕЗ ДУБЛИКАТОВ
+            for (const tokenChange of tokenChanges) {
+                await this.saveTokenOperationSafe(client, transaction.id, tokenChange, transactionType);
+            }
+
+            console.log(`[${new Date().toISOString()}] ✅ All ${tokenChanges.length} token operations saved for ${sig.signature}`);
+
+            return {
+                signature: sig.signature,
+                type: transactionType,
+                solAmount,
+                tokensChanged: tokenChanges,
+            };
+        });
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature}:`, error.message);
+        return null;
     }
+}
+
+async saveTokenOperationSafe(client, transactionId, tokenChange, transactionType) {
+    try {
+        // 1. Создаем/обновляем токен
+        const tokenUpsertQuery = `
+            INSERT INTO tokens (mint, symbol, name, decimals) 
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (mint) DO UPDATE SET
+                symbol = EXCLUDED.symbol,
+                name = EXCLUDED.name,
+                decimals = EXCLUDED.decimals,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id
+        `;
+        
+        const tokenResult = await client.query(tokenUpsertQuery, [
+            tokenChange.mint,
+            tokenChange.symbol || 'Unknown',
+            tokenChange.name || 'Unknown Token',
+            tokenChange.decimals || 6,
+        ]);
+
+        const tokenId = tokenResult.rows[0].id;
+        const amount = Math.abs(tokenChange.change);
+
+        // 2. ПРОВЕРЯЕМ НА ДУБЛИКАТЫ перед вставкой
+        const existingOpQuery = `
+            SELECT id FROM token_operations 
+            WHERE transaction_id = $1 AND token_id = $2 AND operation_type = $3 AND amount = $4
+        `;
+        
+        const existingOp = await client.query(existingOpQuery, [
+            transactionId, tokenId, transactionType, amount
+        ]);
+
+        if (existingOp.rows.length > 0) {
+            console.log(`[${new Date().toISOString()}] ℹ️ Token operation already exists, skipping: ${tokenChange.symbol}`);
+            return;
+        }
+
+        // 3. Создаем операцию только если её нет
+        const operationQuery = `
+            INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+        `;
+        
+        const operationResult = await client.query(operationQuery, [
+            transactionId, 
+            tokenId, 
+            amount, 
+            transactionType  // Всегда равен transaction_type!
+        ]);
+        
+        console.log(`[${new Date().toISOString()}] ✅ Token operation created: ${transactionType} ${amount} ${tokenChange.symbol}`);
+        
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error saving token operation:`, error.message);
+        throw error;
+    }
+}
 
     determineTransactionType(meta, tokenChanges) {
         const solChange = (meta.postBalances[0] - meta.preBalances[0]) / 1e9;
