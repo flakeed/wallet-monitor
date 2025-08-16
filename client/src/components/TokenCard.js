@@ -16,17 +16,16 @@ function TokenCard({ token, onOpenChart }) {
       const data = await response.json();
       
       if (data.pairs && data.pairs.length > 0) {
-        // Find the most liquid SOL pair
         const bestPair = data.pairs.reduce((prev, current) => 
           (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
         );
-        setSolPrice(parseFloat(bestPair.priceUsd || 150)); // fallback to 150
+        setSolPrice(parseFloat(bestPair.priceUsd || 150));
       } else {
-        setSolPrice(150); // fallback price
+        setSolPrice(150);
       }
     } catch (error) {
       console.error('Error fetching SOL price:', error);
-      setSolPrice(150); // fallback price
+      setSolPrice(150);
     }
   };
 
@@ -40,7 +39,6 @@ function TokenCard({ token, onOpenChart }) {
       const data = await response.json();
       
       if (data.pairs && data.pairs.length > 0) {
-        // Find the most liquid pair (highest volume)
         const bestPair = data.pairs.reduce((prev, current) => 
           (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
         );
@@ -69,7 +67,6 @@ function TokenCard({ token, onOpenChart }) {
     let totalSpentSOL = 0;
     let totalReceivedSOL = 0;
 
-    // Sum up all wallet data
     token.wallets.forEach(wallet => {
       totalTokensBought += wallet.tokensBought || 0;
       totalTokensSold += wallet.tokensSold || 0;
@@ -79,11 +76,9 @@ function TokenCard({ token, onOpenChart }) {
 
     const currentHoldings = totalTokensBought - totalTokensSold;
     
-    // Calculate realized PnL (from sold tokens)
     const realizedPnLSOL = totalReceivedSOL - (totalTokensSold > 0 && totalTokensBought > 0 ? 
       (totalTokensSold / totalTokensBought) * totalSpentSOL : 0);
     
-    // Calculate unrealized PnL (from current holdings)
     const currentTokenValueUSD = currentHoldings * priceData.price;
     const remainingCostBasisSOL = totalTokensBought > 0 ? 
       ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOL : 0;
@@ -91,7 +86,6 @@ function TokenCard({ token, onOpenChart }) {
     const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
     const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
     
-    // Total PnL
     const realizedPnLUSD = realizedPnLSOL * solPrice;
     const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
     const totalPnLSOL = totalPnLUSD / solPrice;
@@ -116,7 +110,6 @@ function TokenCard({ token, onOpenChart }) {
   };
 
   useEffect(() => {
-    // Fetch both SOL price and token price
     fetchSolPrice();
     fetchTokenPrice();
   }, [token.mint]);
@@ -127,25 +120,18 @@ function TokenCard({ token, onOpenChart }) {
     }
   }, [priceData, solPrice, token.wallets]);
 
-  // Function to copy text to clipboard
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
-      .then(() => {
-        console.log('Address copied to clipboard:', text);
-      })
-      .catch((err) => {
-        console.error('Failed to copy address:', err);
-      });
+      .then(() => console.log('Address copied to clipboard:', text))
+      .catch((err) => console.error('Failed to copy address:', err));
   };
 
-  // Function to open chart in new window
   const openDexScreenerChart = () => {
     if (!token.mint) {
       console.warn('No mint address available for chart');
       return;
     }
-    const dexScreenerUrl = `https://dexscreener.com/solana/${token.mint}`;
-    window.open(dexScreenerUrl, '_blank');
+    window.open(`https://dexscreener.com/solana/${token.mint}`, '_blank');
   };
 
   const formatNumber = (num, decimals = 2) => {
@@ -160,6 +146,15 @@ function TokenCard({ token, onOpenChart }) {
     return `$${formatNumber(num)}`;
   };
 
+  // Sample data for the chart (simulated price over 24 hours)
+  const chartData = [
+    { x: 0, y: 0.01 },
+    { x: 6, y: 0.015 },
+    { x: 12, y: 0.02 },
+    { x: 18, y: 0.018 },
+    { x: 24, y: 0.025 }
+  ];
+
   return (
     <div className="border rounded-lg p-4 bg-gray-50">
       <div className="flex items-center justify-between mb-3">
@@ -167,14 +162,14 @@ function TokenCard({ token, onOpenChart }) {
           <div className="flex items-center space-x-2">
             <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
             <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
-            {/* {priceData && (
+            {priceData && (
               <div className="flex items-center space-x-1">
                 <span className="text-xs text-gray-500">{formatCurrency(priceData.price)}</span>
                 <span className={`text-xs ${priceData.change24h >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                   {priceData.change24h >= 0 ? '+' : ''}{priceData.change24h.toFixed(2)}%
                 </span>
               </div>
-            )} */}
+            )}
           </div>
           <div className="flex items-center space-x-1">
             <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
@@ -184,12 +179,7 @@ function TokenCard({ token, onOpenChart }) {
               title="Copy address"
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             </button>
           </div>
@@ -200,15 +190,14 @@ function TokenCard({ token, onOpenChart }) {
         </div>
       </div>
 
-      {/* Group PnL Summary */}
       {groupPnL && (
         <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-          {/* <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-2">
             <h4 className="text-sm font-semibold text-blue-900">Group PnL Summary</h4>
             <div className="text-xs text-gray-600">
               {loadingPrice ? 'Loading...' : `SOL: ${solPrice?.toFixed(2) || '150'}`}
             </div>
-          </div> */}
+          </div>
           
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="space-y-1">
@@ -265,6 +254,45 @@ function TokenCard({ token, onOpenChart }) {
           )}
         </div>
       )}
+
+      {/* Small chart added in the empty space */}
+      <div className="mt-2 w-full h-20">
+        <chartjs type="line">
+          {
+            {
+              "data": {
+                "labels": chartData.map(d => d.x),
+                "datasets": [{
+                  "label": "Price (USD)",
+                  "data": chartData.map(d => d.y),
+                  "fill": false,
+                  "borderColor": "#3b82f6",
+                  "backgroundColor": "#3b82f6",
+                  "tension": 0.1,
+                  "pointRadius": 0
+                }]
+              },
+              "options": {
+                "responsive": true,
+                "maintainAspectRatio": false,
+                "scales": {
+                  "x": {
+                    "title": { "display": false },
+                    "ticks": { "display": false }
+                  },
+                  "y": {
+                    "title": { "display": false },
+                    "ticks": { "display": false }
+                  }
+                },
+                "plugins": {
+                  "legend": { "display": false }
+                }
+              }
+            }
+          }
+        </chartjs>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {token.wallets.map((w) => (
