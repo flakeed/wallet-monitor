@@ -109,22 +109,44 @@ class SolanaWebSocketService {
     async handleLogsNotification(params) {
         const { result, subscription } = params;
         const walletAddress = this.findWalletBySubscription(subscription);
+        
         if (!walletAddress) {
             console.warn(`[${new Date().toISOString()}] ⚠️ No wallet found for subscription ${subscription}`);
             return;
         }
-
+    
         if (result.value && result.value.signature) {
-            console.log(`[${new Date().toISOString()}] 🔍 New transaction detected: ${result.value.signature}`);
+            console.log(`[${new Date().toISOString()}] 🔍 New transaction detected for wallet ${walletAddress.slice(0, 8)}...: ${result.value.signature}`);
+            
+            // ✅ ДОБАВЛЕНО: Проверяем логи транзакции на предмет токенов
+            if (result.value.logs) {
+                const hasTokenProgram = result.value.logs.some(log => 
+                    log.includes('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') ||
+                    log.includes('Program log: Instruction: Transfer') ||
+                    log.includes('Program log: Instruction: MintTo') ||
+                    log.includes('Program log: Instruction: Burn')
+                );
+                
+                console.log(`[${new Date().toISOString()}] 📋 Transaction ${result.value.signature} has token operations: ${hasTokenProgram}`);
+                
+                if (hasTokenProgram) {
+                    console.log(`[${new Date().toISOString()}] 📄 Transaction logs:`, result.value.logs.slice(0, 5));
+                }
+            }
+            
             const wallet = await this.db.getWalletByAddress(walletAddress);
             if (!wallet) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
+                console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found in database`);
                 return;
             }
+            
             if (this.activeGroupId && wallet.group_id !== this.activeGroupId) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress} (not in active group ${this.activeGroupId})`);
                 return;
             }
+            
+            console.log(`[${new Date().toISOString()}] ➡️ Processing transaction ${result.value.signature} for wallet ${wallet.name || walletAddress.slice(0, 8)}...`);
+            
             await this.monitoringService.processWebhookMessage({
                 signature: result.value.signature,
                 walletAddress,
