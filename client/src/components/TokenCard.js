@@ -6,7 +6,7 @@ function TokenCard({ token, onOpenChart }) {
   const [solPrice, setSolPrice] = useState(null);
   const [loadingPrice, setLoadingPrice] = useState(false);
   const [groupPnL, setGroupPnL] = useState(null);
-
+  console.log("token",token)
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   // Fetch SOL price from DexScreener
