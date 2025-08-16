@@ -399,7 +399,6 @@ class WalletMonitoringService {
     async analyzeTokenChangesVersioned(meta, transactionType, accountKeys) {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const tokenChanges = [];
-        const processedMints = new Set(); // <- ДОБАВЛЯЕМ ЭТО для предотвращения дубликатов
     
         console.log(`[${new Date().toISOString()}] 🔍 Analyzing versioned transaction token changes`);
         
@@ -408,35 +407,32 @@ class WalletMonitoringService {
             return [];
         }
     
-        // Создаем карту изменений токенов по аккаунтам
-        const tokenBalanceChanges = new Map();
+        // Создаем карту изменений токенов по mint (НЕ по accountIndex!)
+        const mintChanges = new Map();
+    
+        // Собираем все изменения по mint'ам
+        const allBalanceChanges = new Map();
     
         // Обрабатываем pre-balances
         for (const preBalance of meta.preTokenBalances) {
             const key = `${preBalance.mint}-${preBalance.accountIndex}`;
-            if (!tokenBalanceChanges.has(key)) {
-                tokenBalanceChanges.set(key, {
-                    mint: preBalance.mint,
-                    accountIndex: preBalance.accountIndex,
-                    owner: preBalance.owner,
-                    preAmount: preBalance.uiTokenAmount.amount,
-                    preUiAmount: preBalance.uiTokenAmount.uiAmount,
-                    decimals: preBalance.uiTokenAmount.decimals,
-                    postAmount: '0',
-                    postUiAmount: 0
-                });
-            } else {
-                const existing = tokenBalanceChanges.get(key);
-                existing.preAmount = preBalance.uiTokenAmount.amount;
-                existing.preUiAmount = preBalance.uiTokenAmount.uiAmount;
-            }
+            allBalanceChanges.set(key, {
+                mint: preBalance.mint,
+                accountIndex: preBalance.accountIndex,
+                owner: preBalance.owner,
+                preAmount: preBalance.uiTokenAmount.amount,
+                preUiAmount: preBalance.uiTokenAmount.uiAmount,
+                decimals: preBalance.uiTokenAmount.decimals,
+                postAmount: '0',
+                postUiAmount: 0
+            });
         }
     
         // Обрабатываем post-balances
         for (const postBalance of meta.postTokenBalances) {
             const key = `${postBalance.mint}-${postBalance.accountIndex}`;
-            if (!tokenBalanceChanges.has(key)) {
-                tokenBalanceChanges.set(key, {
+            if (!allBalanceChanges.has(key)) {
+                allBalanceChanges.set(key, {
                     mint: postBalance.mint,
                     accountIndex: postBalance.accountIndex,
                     owner: postBalance.owner,
@@ -447,24 +443,18 @@ class WalletMonitoringService {
                     postUiAmount: postBalance.uiTokenAmount.uiAmount
                 });
             } else {
-                const existing = tokenBalanceChanges.get(key);
+                const existing = allBalanceChanges.get(key);
                 existing.postAmount = postBalance.uiTokenAmount.amount;
                 existing.postUiAmount = postBalance.uiTokenAmount.uiAmount;
             }
         }
     
-        console.log(`[${new Date().toISOString()}] 📊 Found ${tokenBalanceChanges.size} token balance changes`);
+        console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} token balance changes`);
     
-        // Анализируем каждое изменение
-        for (const [key, change] of tokenBalanceChanges) {
+        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ
+        for (const [key, change] of allBalanceChanges) {
             if (change.mint === WRAPPED_SOL_MINT) {
                 console.log(`[${new Date().toISOString()}] ⏭️ Skipping WSOL`);
-                continue;
-            }
-    
-            // ПРОВЕРЯЕМ, НЕ ОБРАБОТАН ЛИ УЖЕ ЭТОТ MINT
-            if (processedMints.has(change.mint)) {
-                console.log(`[${new Date().toISOString()}] ⏭️ Skipping already processed mint: ${change.mint}`);
                 continue;
             }
     
@@ -489,41 +479,54 @@ class WalletMonitoringService {
                 console.log(`[${new Date().toISOString()}] ✅ Valid SELL: token balance decreased`);
             } else {
                 console.log(`[${new Date().toISOString()}] ⏭️ Skipping: change direction doesn't match transaction type`);
+                continue;
             }
     
             if (isValidChange) {
-                processedMints.add(change.mint); // <- ПОМЕЧАЕМ MINT КАК ОБРАБОТАННЫЙ
+                // АГРЕГИРУЕМ ПО MINT - суммируем изменения для одного токена
+                if (mintChanges.has(change.mint)) {
+                    const existing = mintChanges.get(change.mint);
+                    existing.totalRawChange += Math.abs(rawChange);
+                    console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalRawChange} total`);
+                } else {
+                    mintChanges.set(change.mint, {
+                        mint: change.mint,
+                        decimals: change.decimals,
+                        totalRawChange: Math.abs(rawChange)
+                    });
+                    console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${Math.abs(rawChange)}`);
+                }
             }
         }
     
-        if (processedMints.size === 0) {
+        if (mintChanges.size === 0) {
             console.log(`[${new Date().toISOString()}] ⚠️ No valid token changes found`);
             return [];
         }
     
+        console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
+    
         // Получаем метаданные токенов
-        const tokenInfos = await this.batchFetchTokenMetadata([...processedMints]);
+        const mints = Array.from(mintChanges.keys());
+        const tokenInfos = await this.batchFetchTokenMetadata(mints);
     
-        // Создаем финальный список изменений ТОЛЬКО для обработанных mint'ов
-        for (const [key, change] of tokenBalanceChanges) {
-            if (!processedMints.has(change.mint)) continue;
-    
-            const rawChange = Number(change.postAmount) - Number(change.preAmount);
-            const tokenInfo = tokenInfos.get(change.mint) || {
+        // Создаем финальный список изменений - ОДИН НА MINT
+        for (const [mint, aggregatedChange] of mintChanges) {
+            const tokenInfo = tokenInfos.get(mint) || {
                 symbol: 'Unknown',
                 name: 'Unknown Token',
-                decimals: change.decimals,
+                decimals: aggregatedChange.decimals,
             };
     
             tokenChanges.push({
-                mint: change.mint,
-                rawChange: Math.abs(rawChange),
-                decimals: change.decimals,
+                mint: mint,
+                rawChange: aggregatedChange.totalRawChange,
+                decimals: aggregatedChange.decimals,
                 symbol: tokenInfo.symbol,
                 name: tokenInfo.name,
             });
     
-            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol}`);
+            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (${aggregatedChange.totalRawChange} total raw units)`);
         }
     
         console.log(`[${new Date().toISOString()}] 🎯 Final result: ${tokenChanges.length} unique token changes`);
@@ -533,18 +536,17 @@ class WalletMonitoringService {
     async analyzeTokenChanges(meta, transactionType) {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const tokenChanges = [];
-        const processedMints = new Set(); // <- ДОБАВЛЯЕМ ЭТО для предотвращения дубликатов
     
         console.log(`[${new Date().toISOString()}] 🔍 Analyzing token changes for ${transactionType} transaction`);
         console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
     
         // Создаем карту изменений по mint + accountIndex
-        const balanceChanges = new Map();
+        const allBalanceChanges = new Map();
     
         // Инициализируем с pre-balances
         for (const pre of meta.preTokenBalances || []) {
             const key = `${pre.mint}-${pre.accountIndex}`;
-            balanceChanges.set(key, {
+            allBalanceChanges.set(key, {
                 mint: pre.mint,
                 accountIndex: pre.accountIndex,
                 owner: pre.owner,
@@ -559,12 +561,12 @@ class WalletMonitoringService {
         // Обновляем/добавляем post-balances
         for (const post of meta.postTokenBalances || []) {
             const key = `${post.mint}-${post.accountIndex}`;
-            if (balanceChanges.has(key)) {
-                const existing = balanceChanges.get(key);
+            if (allBalanceChanges.has(key)) {
+                const existing = allBalanceChanges.get(key);
                 existing.postAmount = post.uiTokenAmount.amount;
                 existing.postUiAmount = post.uiTokenAmount.uiAmount;
             } else {
-                balanceChanges.set(key, {
+                allBalanceChanges.set(key, {
                     mint: post.mint,
                     accountIndex: post.accountIndex,
                     owner: post.owner,
@@ -577,18 +579,15 @@ class WalletMonitoringService {
             }
         }
     
-        console.log(`[${new Date().toISOString()}] 📊 Found ${balanceChanges.size} balance changes to analyze`);
+        console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} balance changes to analyze`);
     
-        // Анализируем каждое изменение
-        for (const [key, change] of balanceChanges) {
+        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ
+        const mintChanges = new Map();
+    
+        // Анализируем каждое изменение и группируем по mint
+        for (const [key, change] of allBalanceChanges) {
             if (change.mint === WRAPPED_SOL_MINT) {
                 console.log(`[${new Date().toISOString()}] ⏭️ Skipping WSOL`);
-                continue;
-            }
-    
-            // ПРОВЕРЯЕМ, НЕ ОБРАБОТАН ЛИ УЖЕ ЭТОТ MINT
-            if (processedMints.has(change.mint)) {
-                console.log(`[${new Date().toISOString()}] ⏭️ Skipping already processed mint: ${change.mint}`);
                 continue;
             }
     
@@ -623,28 +622,59 @@ class WalletMonitoringService {
                 }
             }
     
-            // Добавляем изменение только если оно валидно и mint еще не обработан
+            // АГРЕГИРУЕМ ПО MINT
             if (isValidChange) {
-                processedMints.add(change.mint); // <- ПОМЕЧАЕМ MINT КАК ОБРАБОТАННЫЙ
-                
-                // Получаем метаданные токена
-                const tokenInfo = await this.batchFetchTokenMetadata([change.mint]);
-                const tokenMetadata = tokenInfo.get(change.mint) || {
-                    symbol: 'Unknown',
-                    name: 'Unknown Token',
-                    decimals: change.decimals,
-                };
-    
-                tokenChanges.push({
-                    mint: change.mint,
-                    rawChange: Math.abs(rawChange), // Всегда положительное значение
-                    decimals: change.decimals,
-                    symbol: tokenMetadata.symbol,
-                    name: tokenMetadata.name,
-                });
-    
-                console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenMetadata.symbol} (${Math.abs(rawChange)} raw units)`);
+                if (mintChanges.has(change.mint)) {
+                    const existing = mintChanges.get(change.mint);
+                    existing.totalRawChange += Math.abs(rawChange);
+                    console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalRawChange} total`);
+                } else {
+                    mintChanges.set(change.mint, {
+                        mint: change.mint,
+                        decimals: change.decimals,
+                        totalRawChange: Math.abs(rawChange)
+                    });
+                    console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${Math.abs(rawChange)}`);
+                }
             }
+        }
+    
+        if (mintChanges.size === 0) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No valid token changes found for ${transactionType} transaction`);
+            
+            // Дополнительная диагностика
+            console.log(`[${new Date().toISOString()}] 🔍 Debug: All balance changes:`);
+            for (const [key, change] of allBalanceChanges) {
+                const rawChange = Number(change.postAmount) - Number(change.preAmount);
+                console.log(`  - ${change.mint}: ${rawChange} (${change.mint === WRAPPED_SOL_MINT ? 'WSOL' : 'TOKEN'})`);
+            }
+            
+            return [];
+        }
+    
+        console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
+    
+        // Получаем метаданные токенов
+        const mints = Array.from(mintChanges.keys());
+        const tokenInfos = await this.batchFetchTokenMetadata(mints);
+    
+        // Создаем финальный список изменений токенов - ОДИН НА MINT
+        for (const [mint, aggregatedChange] of mintChanges) {
+            const tokenInfo = tokenInfos.get(mint) || {
+                symbol: 'Unknown',
+                name: 'Unknown Token',
+                decimals: aggregatedChange.decimals,
+            };
+    
+            tokenChanges.push({
+                mint: mint,
+                rawChange: aggregatedChange.totalRawChange, // Суммарное изменение
+                decimals: aggregatedChange.decimals,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+            });
+    
+            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (${aggregatedChange.totalRawChange} total raw units)`);
         }
     
         console.log(`[${new Date().toISOString()}] 🎯 Final result: ${tokenChanges.length} unique token changes`);
