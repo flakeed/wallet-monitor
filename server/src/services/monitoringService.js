@@ -131,6 +131,59 @@ class WalletMonitoringService {
         }
     }
 
+    async fetchTransactionWithRetry(signature, maxRetries = 3) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                console.log(`[${new Date().toISOString()}] 🔄 Fetching transaction ${signature} (attempt ${attempt}/${maxRetries})`);
+                
+                // Пробуем разные уровни commitment и версии
+                const options = {
+                    maxSupportedTransactionVersion: 0, // Поддержка versioned transactions
+                    commitment: 'confirmed',
+                };
+    
+                const tx = await this.connection.getParsedTransaction(signature, options);
+                
+                if (!tx) {
+                    console.warn(`[${new Date().toISOString()}] ⚠️ Transaction ${signature} not found (attempt ${attempt})`);
+                    if (attempt < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        continue;
+                    }
+                    return null;
+                }
+    
+                // Проверяем успешность транзакции
+                if (tx.meta?.err) {
+                    console.warn(`[${new Date().toISOString()}] ⚠️ Transaction ${signature} failed:`, tx.meta.err);
+                    return null;
+                }
+    
+                console.log(`[${new Date().toISOString()}] ✅ Successfully fetched transaction ${signature}`);
+                console.log(`[${new Date().toISOString()}] 📊 Transaction info:`);
+                console.log(`  - Version: ${tx.version || 'legacy'}`);
+                console.log(`  - Status: ${tx.meta?.err ? 'Failed' : 'Success'}`);
+                console.log(`  - Fee: ${(tx.meta?.fee || 0) / 1e9} SOL`);
+                console.log(`  - Account keys: ${tx.transaction?.message?.accountKeys?.length || 0}`);
+                console.log(`  - Instructions: ${tx.transaction?.message?.instructions?.length || 0}`);
+                console.log(`  - Pre-token balances: ${tx.meta?.preTokenBalances?.length || 0}`);
+                console.log(`  - Post-token balances: ${tx.meta?.postTokenBalances?.length || 0}`);
+    
+                return tx;
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error fetching transaction ${signature} (attempt ${attempt}):`, error.message);
+                
+                if (attempt < maxRetries) {
+                    console.log(`[${new Date().toISOString()}] ⏳ Waiting before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                }
+            }
+        }
+        
+        console.error(`[${new Date().toISOString()}] ❌ Failed to fetch transaction ${signature} after ${maxRetries} attempts`);
+        return null;
+    }
+
     async processTransaction(sig, wallet) {
         try {
             if (!sig.signature || !sig.blockTime) {
@@ -479,6 +532,127 @@ class WalletMonitoringService {
         }
     
         console.log(`[${new Date().toISOString()}] 🎯 Final result: ${tokenChanges.length} token changes`);
+        return tokenChanges;
+    }
+
+    async analyzeTokenChangesVersioned(meta, transactionType, accountKeys) {
+        const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
+        const tokenChanges = [];
+        const mints = new Set();
+    
+        console.log(`[${new Date().toISOString()}] 🔍 Analyzing versioned transaction token changes`);
+        
+        if (!meta.preTokenBalances || !meta.postTokenBalances) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No token balance data in transaction`);
+            return [];
+        }
+    
+        // Создаем карту изменений токенов по аккаунтам
+        const tokenBalanceChanges = new Map();
+    
+        // Обрабатываем pre-balances
+        for (const preBalance of meta.preTokenBalances) {
+            const key = `${preBalance.mint}-${preBalance.accountIndex}`;
+            if (!tokenBalanceChanges.has(key)) {
+                tokenBalanceChanges.set(key, {
+                    mint: preBalance.mint,
+                    accountIndex: preBalance.accountIndex,
+                    owner: preBalance.owner,
+                    preAmount: preBalance.uiTokenAmount.amount,
+                    preUiAmount: preBalance.uiTokenAmount.uiAmount,
+                    decimals: preBalance.uiTokenAmount.decimals,
+                    postAmount: '0',
+                    postUiAmount: 0
+                });
+            } else {
+                const existing = tokenBalanceChanges.get(key);
+                existing.preAmount = preBalance.uiTokenAmount.amount;
+                existing.preUiAmount = preBalance.uiTokenAmount.uiAmount;
+            }
+        }
+    
+        // Обрабатываем post-balances
+        for (const postBalance of meta.postTokenBalances) {
+            const key = `${postBalance.mint}-${postBalance.accountIndex}`;
+            if (!tokenBalanceChanges.has(key)) {
+                tokenBalanceChanges.set(key, {
+                    mint: postBalance.mint,
+                    accountIndex: postBalance.accountIndex,
+                    owner: postBalance.owner,
+                    preAmount: '0',
+                    preUiAmount: 0,
+                    decimals: postBalance.uiTokenAmount.decimals,
+                    postAmount: postBalance.uiTokenAmount.amount,
+                    postUiAmount: postBalance.uiTokenAmount.uiAmount
+                });
+            } else {
+                const existing = tokenBalanceChanges.get(key);
+                existing.postAmount = postBalance.uiTokenAmount.amount;
+                existing.postUiAmount = postBalance.uiTokenAmount.uiAmount;
+            }
+        }
+    
+        console.log(`[${new Date().toISOString()}] 📊 Found ${tokenBalanceChanges.size} token balance changes`);
+    
+        // Анализируем каждое изменение
+        for (const [key, change] of tokenBalanceChanges) {
+            if (change.mint === WRAPPED_SOL_MINT) {
+                console.log(`[${new Date().toISOString()}] ⏭️ Skipping WSOL`);
+                continue;
+            }
+    
+            const rawChange = Number(change.postAmount) - Number(change.preAmount);
+            const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
+    
+            console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
+            console.log(`  - Account Index: ${change.accountIndex}`);
+            console.log(`  - Owner: ${change.owner}`);
+            console.log(`  - Raw change: ${rawChange}`);
+            console.log(`  - UI change: ${uiChange}`);
+            console.log(`  - Decimals: ${change.decimals}`);
+    
+            // Проверяем правильность изменения для типа транзакции
+            if (transactionType === 'buy' && rawChange > 0) {
+                mints.add(change.mint);
+                console.log(`[${new Date().toISOString()}] ✅ Valid BUY: token balance increased`);
+            } else if (transactionType === 'sell' && rawChange < 0) {
+                mints.add(change.mint);
+                console.log(`[${new Date().toISOString()}] ✅ Valid SELL: token balance decreased`);
+            } else {
+                console.log(`[${new Date().toISOString()}] ⏭️ Skipping: change direction doesn't match transaction type`);
+            }
+        }
+    
+        if (mints.size === 0) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No valid token changes found`);
+            return [];
+        }
+    
+        // Получаем метаданные токенов
+        const tokenInfos = await this.batchFetchTokenMetadata([...mints]);
+    
+        // Создаем финальный список изменений
+        for (const [key, change] of tokenBalanceChanges) {
+            if (!mints.has(change.mint)) continue;
+    
+            const rawChange = Number(change.postAmount) - Number(change.preAmount);
+            const tokenInfo = tokenInfos.get(change.mint) || {
+                symbol: 'Unknown',
+                name: 'Unknown Token',
+                decimals: change.decimals,
+            };
+    
+            tokenChanges.push({
+                mint: change.mint,
+                rawChange: Math.abs(rawChange),
+                decimals: change.decimals,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+            });
+    
+            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol}`);
+        }
+    
         return tokenChanges;
     }
 
