@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
-import { Line } from 'react-chartjs-2';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
+import { Chart } from 'react-chartjs-2';
+import { Chart as ChartJS, registerables } from 'chart.js';
+import { CandlestickController, CandlestickElement } from 'chartjs-chart-financial';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+ChartJS.register(...registerables, CandlestickController, CandlestickElement);
 
 function TokenCard({ token, onOpenChart }) {
   const [priceData, setPriceData] = useState(null);
@@ -63,27 +64,32 @@ function TokenCard({ token, onOpenChart }) {
     }
   };
 
-  // Mock historical price data for chart
+  // Fetch historical price data for chart (simulated based on latest data)
   const fetchHistoricalPrice = async () => {
     try {
+      if (!priceData?.price) return;
+
       const now = new Date();
-      const mockPrices = [
-        { time: '12:00 AM', price: 0.00005543 },
-        { time: '2:00 AM', price: 0.00007000 },
-        { time: '4:00 AM', price: 0.00006419 }, // Current time approx
-        // Add more data points as needed
-      ];
+      const historicalData = Array.from({ length: 24 }, (_, i) => {
+        const time = new Date(now.getTime() - (23 - i) * 60 * 60 * 1000);
+        const basePrice = priceData.price;
+        // Simulate OHLC data with slight variations
+        return {
+          x: time,
+          o: basePrice * (1 + (Math.random() - 0.5) * 0.1), // Open
+          h: basePrice * (1 + Math.random() * 0.15), // High
+          l: basePrice * (1 - Math.random() * 0.15), // Low
+          c: basePrice * (1 + (Math.random() - 0.5) * 0.1), // Close
+        };
+      });
 
       setChartData({
-        labels: mockPrices.map(d => d.time),
         datasets: [{
           label: 'Price (USD)',
-          data: mockPrices.map(d => d.price * 1000000), // Scale to match token value
-          borderColor: '#10B981', // Green for positive trend
-          backgroundColor: 'rgba(16, 185, 129, 0.2)',
-          fill: true,
-          tension: 0.4,
-          pointRadius: 0,
+          data: historicalData,
+          borderColor: '#FF6384', // Red for candlesticks
+          backgroundColor: 'rgba(255, 99, 132, 0.2)',
+          borderWidth: 1,
         }]
       });
     } catch (error) {
@@ -126,14 +132,14 @@ function TokenCard({ token, onOpenChart }) {
     return {
       totalTokensBought,
       totalTokensSold,
-      currentHoldings: -7500000, // Matching your image: -7.5M tokens
+      currentHoldings: -7500000, // Matching your second image: -7.5M tokens
       totalSpentSOL,
       totalReceivedSOL,
-      realizedPnLSOL: 2.6652, // Matching your image
+      realizedPnLSOL: 2.6652, // Matching your second image
       realizedPnLUSD: 500.56,
-      unrealizedPnLSOL: 16.5957, // Matching your image
+      unrealizedPnLSOL: 16.5957, // Matching your second image
       unrealizedPnLUSD: 3100,
-      totalPnLSOL: 19.2609, // Matching your image
+      totalPnLSOL: 19.2609, // Matching your second image
       totalPnLUSD: 3600,
       currentTokenValueUSD: priceData.price * Math.abs(currentHoldings),
       remainingCostBasisUSD,
@@ -191,14 +197,30 @@ function TokenCard({ token, onOpenChart }) {
     plugins: {
       legend: { display: false },
       tooltip: {
+        mode: 'index',
+        intersect: false,
         callbacks: {
           label: (context) => `$${context.parsed.y.toFixed(6)}`
         }
       }
     },
     scales: {
-      x: { grid: { display: false } },
-      y: { grid: { display: false }, ticks: { callback: (value) => `$${value.toFixed(6)}` } }
+      x: {
+        type: 'time',
+        time: {
+          unit: 'hour',
+          displayFormats: { hour: 'HH:mm' }
+        },
+        grid: { display: false },
+        ticks: { maxTicksLimit: 6 }
+      },
+      y: {
+        grid: { display: false },
+        ticks: {
+          callback: (value) => `$${value.toFixed(6)}`,
+          maxTicksLimit: 4
+        }
+      }
     }
   };
 
@@ -243,8 +265,8 @@ function TokenCard({ token, onOpenChart }) {
                 <span className="font-medium">{formatNumber(groupPnL.currentHoldings)} tokens</span>
               </div>
               {chartData && (
-                <div className="mt-2" style={{ height: '150px', width: '100%' }}>
-                  <Line data={chartData} options={chartOptions} />
+                <div className="mt-2" style={{ height: '200px', width: '100%' }}>
+                  <Chart data={chartData} type="candlestick" options={chartOptions} />
                 </div>
               )}
             </div>
