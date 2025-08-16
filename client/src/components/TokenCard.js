@@ -1,8 +1,132 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
+  const [priceData, setPriceData] = useState(null);
+  const [solPrice, setSolPrice] = useState(null);
+  const [loadingPrice, setLoadingPrice] = useState(false);
+  const [groupPnL, setGroupPnL] = useState(null);
+
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
+  // Fetch SOL price from DexScreener
+  const fetchSolPrice = async () => {
+    try {
+      const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
+      const data = await response.json();
+      
+      if (data.pairs && data.pairs.length > 0) {
+        // Find the most liquid SOL pair
+        const bestPair = data.pairs.reduce((prev, current) => 
+          (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
+        );
+        setSolPrice(parseFloat(bestPair.priceUsd || 150)); // fallback to 150
+      } else {
+        setSolPrice(150); // fallback price
+      }
+    } catch (error) {
+      console.error('Error fetching SOL price:', error);
+      setSolPrice(150); // fallback price
+    }
+  };
+
+  // Fetch token price data from DexScreener
+  const fetchTokenPrice = async () => {
+    if (!token.mint || loadingPrice) return;
+    
+    setLoadingPrice(true);
+    try {
+      const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token.mint}`);
+      const data = await response.json();
+      
+      if (data.pairs && data.pairs.length > 0) {
+        // Find the most liquid pair (highest volume)
+        const bestPair = data.pairs.reduce((prev, current) => 
+          (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
+        );
+        setPriceData({
+          price: parseFloat(bestPair.priceUsd || 0),
+          change24h: parseFloat(bestPair.priceChange?.h24 || 0),
+          volume24h: parseFloat(bestPair.volume?.h24 || 0),
+          liquidity: parseFloat(bestPair.liquidity?.usd || 0),
+          dexId: bestPair.dexId,
+          pairAddress: bestPair.pairAddress
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching token price:', error);
+    } finally {
+      setLoadingPrice(false);
+    }
+  };
+
+  // Calculate group PnL with real SOL price
+  const calculateGroupPnL = () => {
+    if (!priceData || !priceData.price || !solPrice) return null;
+
+    let totalTokensBought = 0;
+    let totalTokensSold = 0;
+    let totalSpentSOL = 0;
+    let totalReceivedSOL = 0;
+
+    // Sum up all wallet data
+    token.wallets.forEach(wallet => {
+      totalTokensBought += wallet.tokensBought || 0;
+      totalTokensSold += wallet.tokensSold || 0;
+      totalSpentSOL += wallet.solSpent || 0;
+      totalReceivedSOL += wallet.solReceived || 0;
+    });
+
+    const currentHoldings = totalTokensBought - totalTokensSold;
+    
+    // Calculate realized PnL (from sold tokens)
+    const realizedPnLSOL = totalReceivedSOL - (totalTokensSold > 0 && totalTokensBought > 0 ? 
+      (totalTokensSold / totalTokensBought) * totalSpentSOL : 0);
+    
+    // Calculate unrealized PnL (from current holdings)
+    const currentTokenValueUSD = currentHoldings * priceData.price;
+    const remainingCostBasisSOL = totalTokensBought > 0 ? 
+      ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOL : 0;
+    const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
+    const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
+    
+    // Total PnL in USD
+    const realizedPnLUSD = realizedPnLSOL * solPrice;
+    const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
+
+    // Calculate average buy price
+    const averageBuyPriceUSD = totalTokensBought > 0 ? 
+      (totalSpentSOL * solPrice) / totalTokensBought : 0;
+
+    return {
+      totalTokensBought,
+      totalTokensSold,
+      currentHoldings,
+      totalSpentSOL,
+      totalReceivedSOL,
+      realizedPnLSOL,
+      realizedPnLUSD,
+      unrealizedPnLUSD,
+      totalPnLUSD,
+      currentTokenValueUSD,
+      remainingCostBasisUSD,
+      averageBuyPriceUSD,
+      currentPriceUSD: priceData.price,
+      solPrice
+    };
+  };
+
+  useEffect(() => {
+    // Fetch both SOL price and token price
+    fetchSolPrice();
+    fetchTokenPrice();
+  }, [token.mint]);
+
+  useEffect(() => {
+    if (priceData && solPrice) {
+      setGroupPnL(calculateGroupPnL());
+    }
+  }, [priceData, solPrice, token.wallets]);
 
   // Function to copy text to clipboard
   const copyToClipboard = (text) => {
@@ -16,13 +140,25 @@ function TokenCard({ token, onOpenChart }) {
   };
 
   // Function to open chart in new window
-  const openGmgnChartInNewWindow = () => {
+  const openDexScreenerChart = () => {
     if (!token.mint) {
       console.warn('No mint address available for chart');
       return;
     }
-    const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(token.mint)}`;
-    window.open(gmgnUrl, '_blank');
+    const dexScreenerUrl = `https://dexscreener.com/solana/${token.mint}`;
+    window.open(dexScreenerUrl, '_blank');
+  };
+
+  const formatNumber = (num, decimals = 2) => {
+    if (num === null || num === undefined) return '0';
+    if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
+    if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
+    return num.toFixed(decimals);
+  };
+
+  const formatCurrency = (num) => {
+    if (num === null || num === undefined) return '$0';
+    return `$${formatNumber(num)}`;
   };
 
   return (
@@ -32,6 +168,14 @@ function TokenCard({ token, onOpenChart }) {
           <div className="flex items-center space-x-2">
             <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
             <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
+            {priceData && (
+              <div className="flex items-center space-x-1">
+                <span className="text-xs text-gray-500">{formatCurrency(priceData.price)}</span>
+                <span className={`text-xs ${priceData.change24h >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {priceData.change24h >= 0 ? '+' : ''}{priceData.change24h.toFixed(2)}%
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex items-center space-x-1">
             <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
@@ -56,11 +200,77 @@ function TokenCard({ token, onOpenChart }) {
           <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
         </div>
       </div>
+
+      {/* Group PnL Summary */}
+      {groupPnL && (
+        <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-semibold text-blue-900">Group PnL Summary</h4>
+            <div className="text-xs text-gray-600">
+              {loadingPrice ? 'Loading...' : `SOL: ${solPrice?.toFixed(2) || '150'}`}
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Holdings:</span>
+                <span className="font-medium">{formatNumber(groupPnL.currentHoldings, 0)} tokens</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Value:</span>
+                <span className="font-medium">{formatCurrency(groupPnL.currentTokenValueUSD)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Avg Buy:</span>
+                <span className="font-medium">{formatCurrency(groupPnL.averageBuyPriceUSD)}</span>
+              </div>
+            </div>
+            
+            <div className="space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Realized PnL:</span>
+                <div className="text-right">
+                  <div className={`font-medium ${groupPnL.realizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
+                  </div>
+                  <div className={`text-xs ${groupPnL.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {formatCurrency(groupPnL.realizedPnLUSD)}
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Unrealized PnL:</span>
+                <span className={`font-medium ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {groupPnL.unrealizedPnLUSD >= 0 ? '+' : ''}{formatCurrency(groupPnL.unrealizedPnLUSD)}
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-blue-300 pt-1">
+                <span className="text-gray-600 font-medium">Total PnL:</span>
+                <span className={`font-bold ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {groupPnL.totalPnLUSD >= 0 ? '+' : ''}{formatCurrency(groupPnL.totalPnLUSD)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {priceData && (
+            <div className="mt-2 text-xs text-gray-600 border-t border-blue-200 pt-2">
+              <div className="flex justify-between items-center">
+                <span>24h Volume: {formatCurrency(priceData.volume24h)}</span>
+                <span>Liquidity: {formatCurrency(priceData.liquidity)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {token.wallets.map((w) => (
           <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
         ))}
       </div>
+      
       <div className="mt-2 flex space-x-2">
         <button
           onClick={onOpenChart}
@@ -69,10 +279,10 @@ function TokenCard({ token, onOpenChart }) {
           Open Chart
         </button>
         <button
-          onClick={openGmgnChartInNewWindow}
-          className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+          onClick={openDexScreenerChart}
+          className="flex-1 bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
         >
-          Open in New Window
+          DexScreener
         </button>
       </div>
     </div>
