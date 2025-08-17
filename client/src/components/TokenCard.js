@@ -248,14 +248,14 @@ function TokenCard({ token, onOpenChart }) {
             </div>
           </div>
 
-          {priceData && (
+          {/* {priceData && (
             <div className="mt-2 text-xs text-gray-600 border-t border-blue-200 pt-2">
               <div className="flex justify-between items-center">
                 <span>24h Volume: {formatCurrency(priceData.volume24h)}</span>
                 <span>Liquidity: {formatCurrency(priceData.liquidity)}</span>
               </div>
             </div>
-          )}
+          )} */}
         </div>
       )}
 
