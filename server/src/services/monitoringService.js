@@ -360,6 +360,8 @@ class WalletMonitoringService {
         };
         
         const NATIVE_SOL_CHANGE_THRESHOLD = 0.01; // 0.01 SOL минимум для считывания как SOL транзакция
+        const STABLECOIN_THRESHOLD = 0.1; // 0.1 USD минимум для стейблкоин операций
+        const TOKEN_THRESHOLD = 0.001; // Минимальное изменение токена
         
         // Анализируем изменение нативного SOL
         const preBalance = meta.preBalances[walletIndex] || 0;
@@ -386,21 +388,32 @@ class WalletMonitoringService {
         
         console.log(`[${new Date().toISOString()}] 📊 Analysis: ${stablecoinChanges.length} stablecoin changes, ${tokenOnlyChanges.length} token changes`);
         
+        // Выводим детальную информацию о всех изменениях
+        console.log(`[${new Date().toISOString()}] 📋 Detailed changes:`);
+        stablecoinChanges.forEach(sc => {
+            console.log(`  💰 ${sc.stablecoinInfo.symbol}: ${sc.change > 0 ? '+' : ''}${sc.change.toFixed(6)}`);
+        });
+        tokenOnlyChanges.forEach(tc => {
+            console.log(`  🪙 ${tc.symbol}: ${tc.change > 0 ? '+' : ''}${tc.change.toFixed(6)}`);
+        });
+        
         // ========== СЦЕНАРИЙ 1: ТРАДИЦИОННАЯ SOL ТОРГОВЛЯ ==========
         if (Math.abs(nativeSolChange) >= NATIVE_SOL_CHANGE_THRESHOLD) {
             console.log(`[${new Date().toISOString()}] 🔄 Traditional SOL trading detected`);
             
-            if (nativeSolChange < -NATIVE_SOL_CHANGE_THRESHOLD && tokenOnlyChanges.some(tc => tc.change > 0)) {
+            if (nativeSolChange < -NATIVE_SOL_CHANGE_THRESHOLD && tokenOnlyChanges.some(tc => tc.change > TOKEN_THRESHOLD)) {
                 // SOL потрачен + токены получены = покупка за SOL
-                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change > 0);
+                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change > TOKEN_THRESHOLD);
+                console.log(`[${new Date().toISOString()}] ✅ SOL BUY detected: ${Math.abs(nativeSolChange).toFixed(6)} SOL → ${relevantTokens.length} tokens`);
                 return {
                     transactionType: 'buy',
                     solAmount: Math.abs(nativeSolChange),
                     relevantTokenChanges: relevantTokens
                 };
-            } else if (nativeSolChange > NATIVE_SOL_CHANGE_THRESHOLD && tokenOnlyChanges.some(tc => tc.change < 0)) {
+            } else if (nativeSolChange > NATIVE_SOL_CHANGE_THRESHOLD && tokenOnlyChanges.some(tc => tc.change < -TOKEN_THRESHOLD)) {
                 // SOL получен + токены потрачены = продажа за SOL
-                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change < 0);
+                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change < -TOKEN_THRESHOLD);
+                console.log(`[${new Date().toISOString()}] ✅ SOL SELL detected: ${relevantTokens.length} tokens → ${nativeSolChange.toFixed(6)} SOL`);
                 return {
                     transactionType: 'sell',
                     solAmount: nativeSolChange,
@@ -418,13 +431,14 @@ class WalletMonitoringService {
                 Math.abs(current.change) > Math.abs(max.change) ? current : max
             );
             
-            console.log(`[${new Date().toISOString()}] 💰 Primary trading currency: ${primaryStablecoin.symbol} change: ${primaryStablecoin.change.toFixed(6)}`);
+            console.log(`[${new Date().toISOString()}] 💰 Primary trading currency: ${primaryStablecoin.stablecoinInfo.symbol} change: ${primaryStablecoin.change.toFixed(6)}`);
             
-            if (primaryStablecoin.change < -0.001) { // Стейблкоин потрачен
+            if (primaryStablecoin.change < -STABLECOIN_THRESHOLD) { // Стейблкоин потрачен
                 // Покупка токенов за стейблкоин
-                const boughtTokens = tokenOnlyChanges.filter(tc => tc.change > 0);
+                const boughtTokens = tokenOnlyChanges.filter(tc => tc.change > TOKEN_THRESHOLD);
                 if (boughtTokens.length > 0) {
                     const solEquivalent = this.convertToSolEquivalent(Math.abs(primaryStablecoin.change), primaryStablecoin.stablecoinInfo.symbol);
+                    console.log(`[${new Date().toISOString()}] ✅ STABLECOIN BUY detected: ${Math.abs(primaryStablecoin.change).toFixed(6)} ${primaryStablecoin.stablecoinInfo.symbol} → ${boughtTokens.length} tokens (${solEquivalent.toFixed(6)} SOL equiv)`);
                     return {
                         transactionType: 'buy',
                         solAmount: solEquivalent,
@@ -432,11 +446,12 @@ class WalletMonitoringService {
                         primaryCurrency: primaryStablecoin.stablecoinInfo.symbol
                     };
                 }
-            } else if (primaryStablecoin.change > 0.001) { // Стейблкоин получен
+            } else if (primaryStablecoin.change > STABLECOIN_THRESHOLD) { // Стейблкоин получен
                 // Продажа токенов за стейблкоин
-                const soldTokens = tokenOnlyChanges.filter(tc => tc.change < 0);
+                const soldTokens = tokenOnlyChanges.filter(tc => tc.change < -TOKEN_THRESHOLD);
                 if (soldTokens.length > 0) {
                     const solEquivalent = this.convertToSolEquivalent(primaryStablecoin.change, primaryStablecoin.stablecoinInfo.symbol);
+                    console.log(`[${new Date().toISOString()}] ✅ STABLECOIN SELL detected: ${soldTokens.length} tokens → ${primaryStablecoin.change.toFixed(6)} ${primaryStablecoin.stablecoinInfo.symbol} (${solEquivalent.toFixed(6)} SOL equiv)`);
                     return {
                         transactionType: 'sell',
                         solAmount: solEquivalent,
@@ -452,17 +467,19 @@ class WalletMonitoringService {
         if (wsolChange && tokenOnlyChanges.length > 0 && Math.abs(nativeSolChange) < NATIVE_SOL_CHANGE_THRESHOLD) {
             console.log(`[${new Date().toISOString()}] 🔄 Wrapped SOL trading detected`);
             
-            if (wsolChange.change < -0.001 && tokenOnlyChanges.some(tc => tc.change > 0)) {
+            if (wsolChange.change < -TOKEN_THRESHOLD && tokenOnlyChanges.some(tc => tc.change > TOKEN_THRESHOLD)) {
                 // WSOL потрачен + токены получены = покупка
-                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change > 0);
+                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change > TOKEN_THRESHOLD);
+                console.log(`[${new Date().toISOString()}] ✅ WSOL BUY detected: ${Math.abs(wsolChange.change).toFixed(6)} WSOL → ${relevantTokens.length} tokens`);
                 return {
                     transactionType: 'buy',
                     solAmount: Math.abs(wsolChange.change),
                     relevantTokenChanges: relevantTokens
                 };
-            } else if (wsolChange.change > 0.001 && tokenOnlyChanges.some(tc => tc.change < 0)) {
+            } else if (wsolChange.change > TOKEN_THRESHOLD && tokenOnlyChanges.some(tc => tc.change < -TOKEN_THRESHOLD)) {
                 // WSOL получен + токены потрачены = продажа
-                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change < 0);
+                const relevantTokens = tokenOnlyChanges.filter(tc => tc.change < -TOKEN_THRESHOLD);
+                console.log(`[${new Date().toISOString()}] ✅ WSOL SELL detected: ${relevantTokens.length} tokens → ${wsolChange.change.toFixed(6)} WSOL`);
                 return {
                     transactionType: 'sell',
                     solAmount: wsolChange.change,
@@ -472,6 +489,7 @@ class WalletMonitoringService {
         }
         
         console.log(`[${new Date().toISOString()}] ❓ No clear trading pattern detected`);
+        console.log(`[${new Date().toISOString()}] 🔍 Summary: SOL change: ${nativeSolChange.toFixed(6)}, Stablecoins: ${stablecoinChanges.length}, Tokens: ${tokenOnlyChanges.length}`);
         return null;
     }
 
@@ -492,126 +510,171 @@ class WalletMonitoringService {
     }
 
     // Новый метод для анализа ВСЕХ изменений токенов
-    async analyzeAllTokenChanges(meta, walletIndex) {
-        const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
-        const tokenChanges = [];
+   async analyzeAllTokenChanges(meta, walletIndex) {
+    const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
+    const tokenChanges = [];
 
-        console.log(`[${new Date().toISOString()}] 🔍 Analyzing ALL token changes (including stablecoins)`);
-        console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
+    console.log(`[${new Date().toISOString()}] 🔍 Analyzing ALL token changes (including stablecoins)`);
+    console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
 
-        // Создаем карту изменений по mint + accountIndex
-        const allBalanceChanges = new Map();
+    // Получаем адрес целевого кошелька из accountKeys
+    let targetWalletAddress = null;
+    if (walletIndex >= 0 && meta.preBalances && meta.postBalances) {
+        // Извлекаем адрес кошелька из transaction.message.accountKeys по индексу
+        const tx = meta; // Предполагаем, что meta содержит полную информацию о транзакции
+        // Этот адрес будет передан в функцию отдельно
+    }
 
-        // Инициализируем с pre-balances
-        for (const pre of meta.preTokenBalances || []) {
-            const key = `${pre.mint}-${pre.accountIndex}`;
+    // Создаем карту изменений по mint + accountIndex
+    const allBalanceChanges = new Map();
+
+    // Инициализируем с pre-balances
+    for (const pre of meta.preTokenBalances || []) {
+        const key = `${pre.mint}-${pre.accountIndex}`;
+        allBalanceChanges.set(key, {
+            mint: pre.mint,
+            accountIndex: pre.accountIndex,
+            owner: pre.owner,
+            preAmount: pre.uiTokenAmount.amount,
+            preUiAmount: pre.uiTokenAmount.uiAmount,
+            postAmount: '0',
+            postUiAmount: 0,
+            decimals: pre.uiTokenAmount.decimals
+        });
+    }
+
+    // Обновляем/добавляем post-balances
+    for (const post of meta.postTokenBalances || []) {
+        const key = `${post.mint}-${post.accountIndex}`;
+        if (allBalanceChanges.has(key)) {
+            const existing = allBalanceChanges.get(key);
+            existing.postAmount = post.uiTokenAmount.amount;
+            existing.postUiAmount = post.uiTokenAmount.uiAmount;
+        } else {
             allBalanceChanges.set(key, {
-                mint: pre.mint,
-                accountIndex: pre.accountIndex,
-                owner: pre.owner,
-                preAmount: pre.uiTokenAmount.amount,
-                preUiAmount: pre.uiTokenAmount.uiAmount,
-                postAmount: '0',
-                postUiAmount: 0,
-                decimals: pre.uiTokenAmount.decimals
+                mint: post.mint,
+                accountIndex: post.accountIndex,
+                owner: post.owner,
+                preAmount: '0',
+                preUiAmount: 0,
+                postAmount: post.uiTokenAmount.amount,
+                postUiAmount: post.uiTokenAmount.uiAmount,
+                decimals: post.uiTokenAmount.decimals
+            });
+        }
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} balance changes to analyze`);
+
+    // ГРУППИРУЕМ ПО MINT И АНАЛИЗИРУЕМ ИЗМЕНЕНИЯ ПО КОШЕЛЬКУ
+    const mintChanges = new Map();
+
+    // Анализируем каждое изменение
+    for (const [key, change] of allBalanceChanges) {
+        const rawChange = Number(change.postAmount) - Number(change.preAmount);
+        const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
+        
+        console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
+        console.log(`  - Account Index: ${change.accountIndex}`);
+        console.log(`  - Owner: ${change.owner}`);
+        console.log(`  - Raw change: ${rawChange}`);
+        console.log(`  - UI change: ${uiChange}`);
+        console.log(`  - Decimals: ${change.decimals}`);
+
+        // Пропускаем изменения равные нулю
+        if (Math.abs(uiChange) < 0.000001) {
+            console.log(`[${new Date().toISOString()}] ⏭️ Skipping zero change for ${change.mint}`);
+            continue;
+        }
+
+        // НОВАЯ ЛОГИКА: сохраняем информацию о каждом изменении отдельно
+        // и агрегируем только значимые изменения
+        if (!mintChanges.has(change.mint)) {
+            mintChanges.set(change.mint, {
+                mint: change.mint,
+                decimals: change.decimals,
+                changes: [] // Массив всех изменений для этого токена
             });
         }
 
-        // Обновляем/добавляем post-balances
-        for (const post of meta.postTokenBalances || []) {
-            const key = `${post.mint}-${post.accountIndex}`;
-            if (allBalanceChanges.has(key)) {
-                const existing = allBalanceChanges.get(key);
-                existing.postAmount = post.uiTokenAmount.amount;
-                existing.postUiAmount = post.uiTokenAmount.uiAmount;
-            } else {
-                allBalanceChanges.set(key, {
-                    mint: post.mint,
-                    accountIndex: post.accountIndex,
-                    owner: post.owner,
-                    preAmount: '0',
-                    preUiAmount: 0,
-                    postAmount: post.uiTokenAmount.amount,
-                    postUiAmount: post.uiTokenAmount.uiAmount,
-                    decimals: post.uiTokenAmount.decimals
-                });
+        mintChanges.get(change.mint).changes.push({
+            owner: change.owner,
+            accountIndex: change.accountIndex,
+            uiChange: uiChange,
+            rawChange: rawChange
+        });
+    }
+
+    if (mintChanges.size === 0) {
+        console.log(`[${new Date().toISOString()}] ⚠️ No token changes found`);
+        return [];
+    }
+
+    console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
+
+    // Получаем метаданные токенов
+    const mints = Array.from(mintChanges.keys());
+    const tokenInfos = await this.batchFetchTokenMetadata(mints);
+
+    // Создаем финальный список изменений токенов
+    for (const [mint, tokenData] of mintChanges) {
+        const tokenInfo = tokenInfos.get(mint) || {
+            symbol: mint === WRAPPED_SOL_MINT ? 'WSOL' : 'Unknown',
+            name: mint === WRAPPED_SOL_MINT ? 'Wrapped SOL' : 'Unknown Token',
+            decimals: tokenData.decimals,
+        };
+
+        // НОВАЯ ЛОГИКА АГРЕГАЦИИ: ищем максимальное по модулю изменение
+        // которое представляет реальную торговую операцию
+        let significantChange = null;
+        let maxAbsChange = 0;
+
+        for (const change of tokenData.changes) {
+            const absChange = Math.abs(change.uiChange);
+            if (absChange > maxAbsChange && absChange > 0.001) { // Минимальный порог значимости
+                maxAbsChange = absChange;
+                significantChange = change;
             }
         }
 
-        console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} balance changes to analyze`);
-
-        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ
-        const mintChanges = new Map();
-
-        // Анализируем каждое изменение и группируем по mint
-        for (const [key, change] of allBalanceChanges) {
-            const rawChange = Number(change.postAmount) - Number(change.preAmount);
-            const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
-            
-            console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
-            console.log(`  - Account Index: ${change.accountIndex}`);
-            console.log(`  - Owner: ${change.owner}`);
-            console.log(`  - Raw change: ${rawChange}`);
-            console.log(`  - UI change: ${uiChange}`);
-            console.log(`  - Decimals: ${change.decimals}`);
-
-            // Пропускаем изменения равные нулю
-            if (Math.abs(uiChange) < 0.000001) {
-                console.log(`[${new Date().toISOString()}] ⏭️ Skipping zero change for ${change.mint}`);
-                continue;
-            }
-
-            // АГРЕГИРУЕМ ПО MINT (включая стейблкоины)
-            if (mintChanges.has(change.mint)) {
-                const existing = mintChanges.get(change.mint);
-                existing.totalChange += uiChange;
-                existing.totalRawChange += rawChange;
-                console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalChange} total`);
-            } else {
-                mintChanges.set(change.mint, {
-                    mint: change.mint,
-                    decimals: change.decimals,
-                    totalChange: uiChange,
-                    totalRawChange: rawChange
-                });
-                console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${uiChange}`);
-            }
-        }
-
-        if (mintChanges.size === 0) {
-            console.log(`[${new Date().toISOString()}] ⚠️ No token changes found`);
-            return [];
-        }
-
-        console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
-
-        // Получаем метаданные токенов
-        const mints = Array.from(mintChanges.keys());
-        const tokenInfos = await this.batchFetchTokenMetadata(mints);
-
-        // Создаем финальный список изменений токенов - включая ВСЕ токены
-        for (const [mint, aggregatedChange] of mintChanges) {
-            const tokenInfo = tokenInfos.get(mint) || {
-                symbol: mint === WRAPPED_SOL_MINT ? 'WSOL' : 'Unknown',
-                name: mint === WRAPPED_SOL_MINT ? 'Wrapped SOL' : 'Unknown Token',
-                decimals: aggregatedChange.decimals,
-            };
-
+        if (significantChange) {
             tokenChanges.push({
                 mint: mint,
-                change: aggregatedChange.totalChange,
-                rawChange: aggregatedChange.totalRawChange,
-                decimals: aggregatedChange.decimals,
+                change: significantChange.uiChange,
+                rawChange: significantChange.rawChange,
+                decimals: tokenData.decimals,
                 symbol: tokenInfo.symbol,
                 name: tokenInfo.name,
+                owner: significantChange.owner,
+                accountIndex: significantChange.accountIndex
             });
 
-            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} = ${aggregatedChange.totalChange.toFixed(6)}`);
-        }
+            console.log(`[${new Date().toISOString()}] ✅ Added significant token change: ${tokenInfo.symbol} = ${significantChange.uiChange.toFixed(6)} (owner: ${significantChange.owner})`);
+        } else {
+            // Если нет значимых изменений, берем суммарное изменение
+            const totalChange = tokenData.changes.reduce((sum, ch) => sum + ch.uiChange, 0);
+            const totalRawChange = tokenData.changes.reduce((sum, ch) => sum + ch.rawChange, 0);
+            
+            if (Math.abs(totalChange) > 0.001) {
+                tokenChanges.push({
+                    mint: mint,
+                    change: totalChange,
+                    rawChange: totalRawChange,
+                    decimals: tokenData.decimals,
+                    symbol: tokenInfo.symbol,
+                    name: tokenInfo.name,
+                });
 
-        console.log(`[${new Date().toISOString()}] 🎯 Final result: ${tokenChanges.length} total token changes`);
-        return tokenChanges;
+                console.log(`[${new Date().toISOString()}] ✅ Added aggregated token change: ${tokenInfo.symbol} = ${totalChange.toFixed(6)}`);
+            } else {
+                console.log(`[${new Date().toISOString()}] ⏭️ Skipping insignificant changes for ${tokenInfo.symbol} (total: ${totalChange.toFixed(6)})`);
+            }
+        }
     }
+
+    console.log(`[${new Date().toISOString()}] 🎯 Final result: ${tokenChanges.length} significant token changes`);
+    return tokenChanges;
+}
 
     async analyzeTokenChanges(meta, transactionType) {
         console.log(`[${new Date().toISOString()}] ⚠️ Using legacy analyzeTokenChanges - consider using analyzeAllTokenChanges instead`);
