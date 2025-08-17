@@ -238,68 +238,99 @@ class WalletMonitoringService {
         console.log(`  - Other tokens increased: ${tokensIncreased.length}`);
         console.log(`  - Other tokens decreased: ${tokensDecreased.length}`);
         
+        // ПРАВИЛЬНАЯ ЛОГИКА: анализируем что реально произошло
+        
+        // Считаем изменения стейблкоинов
+        let totalStablecoinIncrease = 0;  // Получили стейблкоинов
+        let totalStablecoinDecrease = 0;  // Потеряли стейблкоинов
+        
+        stablecoinsIncreased.forEach(stable => {
+            totalStablecoinIncrease += stable.uiChange;
+            console.log(`  - GAINED ${stable.uiChange} ${STABLECOIN_INFO[stable.mint]?.symbol || 'STABLE'}`);
+        });
+        
+        stablecoinsDecreased.forEach(stable => {
+            totalStablecoinDecrease += stable.uiChange;
+            console.log(`  - LOST ${stable.uiChange} ${STABLECOIN_INFO[stable.mint]?.symbol || 'STABLE'}`);
+        });
+        
+        const netStablecoinChange = totalStablecoinIncrease - totalStablecoinDecrease;
+        
+        console.log(`  - Net stablecoin change: ${netStablecoinChange >= 0 ? '+' : ''}${netStablecoinChange.toFixed(6)}`);
+        console.log(`  - Total stablecoin gained: ${totalStablecoinIncrease.toFixed(6)}`);
+        console.log(`  - Total stablecoin lost: ${totalStablecoinDecrease.toFixed(6)}`);
+        
         let detectedType = null;
         let validTokens = [];
-        let solEquivalentAmount = Math.abs(solChange); // Начинаем с изменения SOL
+        let solEquivalentAmount = Math.abs(solChange);
         
-        // Определяем тип транзакции и рассчитываем SOL эквивалент
-        if (stablecoinsDecreased.length > 0 && tokensIncreased.length > 0) {
-            // Покупка за стейблкоины
+        // ИСПРАВЛЕННАЯ ЛОГИКА определения типа транзакции
+        if (totalStablecoinDecrease > 0.01 && tokensIncreased.length > 0) {
+            // ПОКУПКА: потеряли стейблкоины И получили токены
             detectedType = 'buy';
             validTokens = tokensIncreased;
             
-            // Рассчитываем SOL эквивалент потраченных стейблкоинов
-            let totalStablecoinSpent = 0;
-            for (const stable of stablecoinsDecreased) {
-                totalStablecoinSpent += stable.uiChange;
-                console.log(`  - Spent ${stable.uiChange} ${STABLECOIN_INFO[stable.mint]?.symbol || 'STABLE'}`);
-            }
+            // Используем количество потерянных стейблкоинов
+            solEquivalentAmount = await this.convertStablecoinToSOL(totalStablecoinDecrease, stablecoinsDecreased[0]?.mint);
             
-            solEquivalentAmount = await this.convertStablecoinToSOL(totalStablecoinSpent, stablecoinsDecreased[0].mint);
-            console.log(`[${new Date().toISOString()}] ✅ Detected stablecoin BUY: ${totalStablecoinSpent} STABLE = ${solEquivalentAmount.toFixed(6)} SOL equiv`);
+            console.log(`[${new Date().toISOString()}] ✅ Detected stablecoin BUY: spent ${totalStablecoinDecrease.toFixed(6)} STABLE = ${solEquivalentAmount.toFixed(6)} SOL equiv`);
             
-        } else if (tokensDecreased.length > 0 && stablecoinsIncreased.length > 0) {
-            // Продажа за стейблкоины
+        } else if (totalStablecoinIncrease > 0.01 && tokensDecreased.length > 0) {
+            // ПРОДАЖА: получили стейблкоины И потеряли токены
             detectedType = 'sell';
             validTokens = tokensDecreased;
             
-            // Рассчитываем SOL эквивалент полученных стейблкоинов
-            let totalStablecoinReceived = 0;
-            for (const stable of stablecoinsIncreased) {
-                totalStablecoinReceived += stable.uiChange;
-                console.log(`  - Received ${stable.uiChange} ${STABLECOIN_INFO[stable.mint]?.symbol || 'STABLE'}`);
-            }
+            // Используем количество полученных стейблкоинов
+            solEquivalentAmount = await this.convertStablecoinToSOL(totalStablecoinIncrease, stablecoinsIncreased[0]?.mint);
             
-            solEquivalentAmount = await this.convertStablecoinToSOL(totalStablecoinReceived, stablecoinsIncreased[0].mint);
-            console.log(`[${new Date().toISOString()}] ✅ Detected stablecoin SELL: ${totalStablecoinReceived} STABLE = ${solEquivalentAmount.toFixed(6)} SOL equiv`);
+            console.log(`[${new Date().toISOString()}] ✅ Detected stablecoin SELL: received ${totalStablecoinIncrease.toFixed(6)} STABLE = ${solEquivalentAmount.toFixed(6)} SOL equiv`);
             
         } else if (solChange < -0.01 && tokensIncreased.length > 0) {
-            // Покупка за SOL
+            // Покупка за SOL (классическая логика)
             detectedType = 'buy';
             validTokens = tokensIncreased;
             solEquivalentAmount = Math.abs(solChange);
             console.log(`[${new Date().toISOString()}] ✅ Detected SOL BUY: ${solEquivalentAmount.toFixed(6)} SOL`);
             
         } else if (solChange > 0.001 && tokensDecreased.length > 0) {
-            // Продажа за SOL
+            // Продажа за SOL (классическая логика)
             detectedType = 'sell';
             validTokens = tokensDecreased;
             solEquivalentAmount = solChange;
             console.log(`[${new Date().toISOString()}] ✅ Detected SOL SELL: ${solEquivalentAmount.toFixed(6)} SOL`);
             
         } else if (tokensDecreased.length > 0 && tokensIncreased.length > 0) {
-            // Токен-токен свап
-            if (tokensDecreased.length === 1 && tokensIncreased.length === 1) {
-                detectedType = 'sell';
-                validTokens = tokensDecreased;
-                // Для токен-токен свапа используем минимальную комиссию
-                solEquivalentAmount = Math.abs(solChange) || 0.000005;
-                console.log(`[${new Date().toISOString()}] ✅ Detected token SWAP (as sell): ${tokensDecreased[0].mint} -> ${tokensIncreased[0].mint}`);
+            // Токен-токен свап - анализируем по стейблкоинам если есть
+            
+            if (Math.abs(netStablecoinChange) > 0.01) {
+                if (netStablecoinChange > 0) {
+                    // Получили больше стейблкоинов = продажа
+                    detectedType = 'sell';
+                    validTokens = tokensDecreased;
+                    solEquivalentAmount = await this.convertStablecoinToSOL(totalStablecoinIncrease, 
+                        stablecoinsIncreased[0]?.mint || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+                    console.log(`[${new Date().toISOString()}] ✅ Detected token SWAP as SELL (gained ${totalStablecoinIncrease.toFixed(6)} stables)`);
+                } else {
+                    // Потеряли стейблкоины = покупка
+                    detectedType = 'buy';
+                    validTokens = tokensIncreased;
+                    solEquivalentAmount = await this.convertStablecoinToSOL(totalStablecoinDecrease, 
+                        stablecoinsDecreased[0]?.mint || 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+                    console.log(`[${new Date().toISOString()}] ✅ Detected token SWAP as BUY (lost ${totalStablecoinDecrease.toFixed(6)} stables)`);
+                }
             } else {
-                detectedType = 'buy';
-                validTokens = tokensIncreased;
-                solEquivalentAmount = Math.abs(solChange) || 0.000005;
-                console.log(`[${new Date().toISOString()}] ✅ Detected complex token SWAP (as buy)`);
+                // Простой токен-токен свап без значительных изменений стейблкоинов
+                if (tokensDecreased.length === 1 && tokensIncreased.length === 1) {
+                    detectedType = 'sell';
+                    validTokens = tokensDecreased;
+                    solEquivalentAmount = Math.abs(solChange) || 0.000005;
+                    console.log(`[${new Date().toISOString()}] ✅ Detected simple token SWAP (as sell): ${tokensDecreased[0].mint} -> ${tokensIncreased[0].mint}`);
+                } else {
+                    detectedType = 'buy';
+                    validTokens = tokensIncreased;
+                    solEquivalentAmount = Math.abs(solChange) || 0.000005;
+                    console.log(`[${new Date().toISOString()}] ✅ Detected complex token SWAP (as buy)`);
+                }
             }
         }
         
@@ -316,7 +347,10 @@ class WalletMonitoringService {
                 solEquivalentAmount = solChange;
                 console.log(`[${new Date().toISOString()}] ⚠️ Fallback to SOL-based SELL`);
             } else {
-                console.log(`[${new Date().toISOString()}] ❌ Cannot determine transaction type`);
+                console.log(`[${new Date().toISOString()}] ❌ Cannot determine transaction type - no significant changes detected`);
+                console.log(`  - SOL change too small: ${solChange.toFixed(6)}`);
+                console.log(`  - Stablecoin net change: ${netStablecoinChange.toFixed(6)}`);
+                console.log(`  - Tokens increased: ${tokensIncreased.length}, decreased: ${tokensDecreased.length}`);
                 return null;
             }
         }
@@ -367,7 +401,7 @@ class WalletMonitoringService {
         return { 
             detectedType, 
             tokenChanges: finalTokenChanges,
-            solEquivalentAmount // Возвращаем рассчитанный SOL эквивалент
+            solEquivalentAmount
         };
     }
 
