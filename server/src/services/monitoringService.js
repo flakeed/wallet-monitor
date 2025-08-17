@@ -387,11 +387,19 @@ class WalletMonitoringService {
         let stablecoinReceived = 0;
         let tokensReceived = [];
         let tokensSold = [];
+        let hasTokenActivity = false; // Флаг активности с токенами
+    
+        console.log(`[${new Date().toISOString()}] 🔍 Analyzing ${tokenChanges.length} token changes...`);
     
         // Анализируем изменения токенов
         for (const change of tokenChanges) {
             const isStablecoin = STABLECOINS[change.mint];
             const amount = Math.abs(change.rawChange) / Math.pow(10, change.decimals);
+    
+            // Если есть хоть какое-то изменение токенов - это активность
+            if (Math.abs(change.rawChange) > 0) {
+                hasTokenActivity = true;
+            }
     
             if (isStablecoin) {
                 if (change.rawChange < 0) {
@@ -404,6 +412,7 @@ class WalletMonitoringService {
                     console.log(`[${new Date().toISOString()}] 💰 Received ${amount.toFixed(6)} ${isStablecoin.symbol}`);
                 }
             } else {
+                // Для обычных токенов учитываем направление изменений
                 if (change.rawChange > 0) {
                     // Обычный токен получен
                     tokensReceived.push(change);
@@ -413,6 +422,8 @@ class WalletMonitoringService {
                     tokensSold.push(change);
                     console.log(`[${new Date().toISOString()}] 🪙 Sold ${amount.toFixed(6)} ${change.symbol}`);
                 }
+                // ВАЖНО: даже если итоговое изменение = 0, но есть активность со стейблкоинами,
+                // это может быть swap
             }
         }
     
@@ -420,28 +431,64 @@ class WalletMonitoringService {
         let transactionType = null;
         let equivalentSolAmount = 0;
     
-        // Проверяем различные сценарии
+        console.log(`[${new Date().toISOString()}] 📊 Transaction analysis:`);
+        console.log(`  - Stablecoin spent: ${stablecoinSpent.toFixed(6)}`);
+        console.log(`  - Stablecoin received: ${stablecoinReceived.toFixed(6)}`);
+        console.log(`  - Tokens received: ${tokensReceived.length}`);
+        console.log(`  - Tokens sold: ${tokensSold.length}`);
+        console.log(`  - SOL change: ${solChange.toFixed(6)}`);
+        console.log(`  - Has token activity: ${hasTokenActivity}`);
+    
+        // УЛУЧШЕННАЯ ЛОГИКА: Проверяем различные сценарии
+    
+        // 1. Классические stablecoin покупки/продажи
         if (stablecoinSpent > 0 && tokensReceived.length > 0) {
             // Потратили стейблкоин и получили токены = ПОКУПКА
             transactionType = 'buy';
-            equivalentSolAmount = stablecoinSpent; // Используем потраченный стейблкоин как эквивалент
-            console.log(`[${new Date().toISOString()}] 🛒 Stablecoin buy detected: spent ${stablecoinSpent.toFixed(6)} stablecoin for tokens`);
-        } else if (tokensSold.length > 0 && stablecoinReceived > 0) {
+            equivalentSolAmount = stablecoinSpent;
+            console.log(`[${new Date().toISOString()}] 🛒 Stablecoin buy detected: spent ${stablecoinSpent.toFixed(6)} stablecoin for ${tokensReceived.length} tokens`);
+        } 
+        else if (tokensSold.length > 0 && stablecoinReceived > 0) {
             // Продали токены и получили стейблкоин = ПРОДАЖА
             transactionType = 'sell';
-            equivalentSolAmount = stablecoinReceived; // Используем полученный стейблкоин как эквивалент
-            console.log(`[${new Date().toISOString()}] 💸 Stablecoin sell detected: sold tokens for ${stablecoinReceived.toFixed(6)} stablecoin`);
-        } else if (solChange < -FEE_THRESHOLD && tokensReceived.length > 0) {
+            equivalentSolAmount = stablecoinReceived;
+            console.log(`[${new Date().toISOString()}] 💸 Stablecoin sell detected: sold ${tokensSold.length} tokens for ${stablecoinReceived.toFixed(6)} stablecoin`);
+        }
+        // 2. НОВАЯ ЛОГИКА: Swap с активностью токенов + получение стейблкоина (но без явной продажи)
+        else if (hasTokenActivity && stablecoinReceived > 0 && Math.abs(solChange) > FEE_THRESHOLD) {
+            // Есть активность с токенами + получили стейблкоин + SOL уменьшился значительно = ПРОДАЖА
+            transactionType = 'sell';
+            equivalentSolAmount = stablecoinReceived;
+            console.log(`[${new Date().toISOString()}] 💸 Complex sell detected: token activity + received ${stablecoinReceived.toFixed(6)} stablecoin + SOL change ${solChange.toFixed(6)}`);
+        }
+        // 3. НОВАЯ ЛОГИКА: Swap с активностью токенов + потрата стейблкоина (но без явной покупки)
+        else if (hasTokenActivity && stablecoinSpent > 0) {
+            // Есть активность с токенами + потратили стейблкоин = ПОКУПКА
+            transactionType = 'buy';
+            equivalentSolAmount = stablecoinSpent;
+            console.log(`[${new Date().toISOString()}] 🛒 Complex buy detected: token activity + spent ${stablecoinSpent.toFixed(6)} stablecoin`);
+        }
+        // 4. Классические SOL покупки/продажи
+        else if (solChange < -FEE_THRESHOLD && tokensReceived.length > 0) {
             // Классическая SOL покупка
             transactionType = 'buy';
             equivalentSolAmount = Math.abs(solChange);
-            console.log(`[${new Date().toISOString()}] 🛒 Classic SOL buy detected: spent ${equivalentSolAmount.toFixed(6)} SOL`);
-        } else if (solChange > 0.001 && tokensSold.length > 0) {
+            console.log(`[${new Date().toISOString()}] 🛒 Classic SOL buy detected: spent ${equivalentSolAmount.toFixed(6)} SOL for ${tokensReceived.length} tokens`);
+        } 
+        else if (solChange > 0.001 && tokensSold.length > 0) {
             // Классическая SOL продажа
             transactionType = 'sell';
             equivalentSolAmount = solChange;
-            console.log(`[${new Date().toISOString()}] 💸 Classic SOL sell detected: received ${equivalentSolAmount.toFixed(6)} SOL`);
-        } else if (stablecoinSpent > 0 && stablecoinReceived > 0) {
+            console.log(`[${new Date().toISOString()}] 💸 Classic SOL sell detected: sold ${tokensSold.length} tokens for ${equivalentSolAmount.toFixed(6)} SOL`);
+        }
+        // 5. НОВАЯ ЛОГИКА: Получили стейблкоин + SOL уменьшился (вероятно продажа через пулы)
+        else if (stablecoinReceived > 0 && solChange < -FEE_THRESHOLD && hasTokenActivity) {
+            transactionType = 'sell';
+            equivalentSolAmount = stablecoinReceived;
+            console.log(`[${new Date().toISOString()}] 💸 Pool sell detected: received ${stablecoinReceived.toFixed(6)} stablecoin, SOL decreased by ${Math.abs(solChange).toFixed(6)}`);
+        }
+        // 6. Swaps между стейблкоинами
+        else if (stablecoinSpent > 0 && stablecoinReceived > 0) {
             // Swap между стейблкоинами - определяем по количеству
             if (stablecoinSpent > stablecoinReceived) {
                 transactionType = 'buy';
@@ -460,6 +507,8 @@ class WalletMonitoringService {
             console.log(`  - Stablecoin received: ${stablecoinReceived.toFixed(6)}`);
             console.log(`  - Tokens received: ${tokensReceived.length}`);
             console.log(`  - Tokens sold: ${tokensSold.length}`);
+            console.log(`  - Has token activity: ${hasTokenActivity}`);
+            console.log(`  - Token changes detail:`, tokenChanges.map(t => `${t.symbol}: ${t.rawChange}`));
             return null;
         }
     
@@ -479,7 +528,7 @@ class WalletMonitoringService {
             return [];
         }
     
-        // Создаем карту изменений токенов по mint (НЕ по accountIndex!)
+        // Создаем карту изменений токенов по mint
         const mintChanges = new Map();
     
         // Собираем все изменения по mint'ам
@@ -523,7 +572,7 @@ class WalletMonitoringService {
     
         console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} token balance changes`);
     
-        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ с сохранением направления
+        // УЛУЧШЕННАЯ ЛОГИКА: ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ с отслеживанием активности
         for (const [key, change] of allBalanceChanges) {
             const rawChange = Number(change.postAmount) - Number(change.preAmount);
             const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
@@ -537,18 +586,29 @@ class WalletMonitoringService {
     
             // Включаем ВСЕ значимые изменения
             if (Math.abs(rawChange) > 0) {
-                if (mintChanges.has(change.mint)) {
-                    const existing = mintChanges.get(change.mint);
-                    existing.totalRawChange += rawChange; // Сохраняем направление
-                    console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalRawChange} total`);
-                } else {
+                if (!mintChanges.has(change.mint)) {
                     mintChanges.set(change.mint, {
                         mint: change.mint,
                         decimals: change.decimals,
-                        totalRawChange: rawChange // Сохраняем направление
+                        totalRawChange: 0,
+                        positiveChanges: 0,
+                        negativeChanges: 0,
+                        hasActivity: false
                     });
-                    console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${rawChange}`);
                 }
+    
+                const existing = mintChanges.get(change.mint);
+                existing.totalRawChange += rawChange;
+                existing.hasActivity = true;
+    
+                // Отдельно трекаем положительные и отрицательные изменения
+                if (rawChange > 0) {
+                    existing.positiveChanges += rawChange;
+                } else {
+                    existing.negativeChanges += Math.abs(rawChange);
+                }
+    
+                console.log(`[${new Date().toISOString()}] 📈 Updated versioned mint ${change.mint}: total=${existing.totalRawChange}, pos=${existing.positiveChanges}, neg=${existing.negativeChanges}`);
             }
         }
     
@@ -563,7 +623,7 @@ class WalletMonitoringService {
         const mints = Array.from(mintChanges.keys());
         const tokenInfos = await this.batchFetchTokenMetadata(mints);
     
-        // Создаем финальный список изменений - ОДИН НА MINT с направлением
+        // УЛУЧШЕННАЯ ЛОГИКА: Создаем записи для значимых изменений
         for (const [mint, aggregatedChange] of mintChanges) {
             const tokenInfo = tokenInfos.get(mint) || {
                 symbol: 'Unknown',
@@ -571,138 +631,203 @@ class WalletMonitoringService {
                 decimals: aggregatedChange.decimals,
             };
     
-            tokenChanges.push({
-                mint: mint,
-                rawChange: aggregatedChange.totalRawChange, // Сохраняем направление
-                decimals: aggregatedChange.decimals,
-                symbol: tokenInfo.symbol,
-                name: tokenInfo.name,
-            });
+            // НОВАЯ ЛОГИКА: Если есть значимая активность, создаем запись
+            const hasSignificantActivity = aggregatedChange.positiveChanges > 0 || aggregatedChange.negativeChanges > 0;
+            const netChange = aggregatedChange.totalRawChange;
     
-            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (${aggregatedChange.totalRawChange} raw units with direction)`);
+            if (hasSignificantActivity) {
+                // Определяем направление на основе доминирующего движения
+                let finalChange = netChange;
+                
+                // Если итоговое изменение близко к нулю, но есть активность,
+                // используем доминирующее направление
+                if (Math.abs(netChange) < Math.max(aggregatedChange.positiveChanges, aggregatedChange.negativeChanges) * 0.1) {
+                    // Итоговое изменение мало по сравнению с активностью - вероятно swap
+                    if (aggregatedChange.negativeChanges > aggregatedChange.positiveChanges) {
+                        // Больше продали - это продажа
+                        finalChange = -aggregatedChange.negativeChanges;
+                    } else {
+                        // Больше купили - это покупка  
+                        finalChange = aggregatedChange.positiveChanges;
+                    }
+                    console.log(`[${new Date().toISOString()}] 🔄 Detected versioned swap activity for ${tokenInfo.symbol}: using direction ${finalChange > 0 ? 'buy' : 'sell'}`);
+                }
+    
+                tokenChanges.push({
+                    mint: mint,
+                    rawChange: finalChange,
+                    decimals: aggregatedChange.decimals,
+                    symbol: tokenInfo.symbol,
+                    name: tokenInfo.name,
+                    hasActivity: aggregatedChange.hasActivity,
+                    positiveChanges: aggregatedChange.positiveChanges,
+                    negativeChanges: aggregatedChange.negativeChanges
+                });
+    
+                console.log(`[${new Date().toISOString()}] ✅ Added versioned token change: ${tokenInfo.symbol} (final: ${finalChange}, pos: ${aggregatedChange.positiveChanges}, neg: ${aggregatedChange.negativeChanges})`);
+            }
         }
     
-        console.log(`[${new Date().toISOString()}] 🎯 Enhanced versioned result: ${tokenChanges.length} token changes with directions`);
+        console.log(`[${new Date().toISOString()}] 🎯 Enhanced versioned result: ${tokenChanges.length} token changes with activity detection`);
         return tokenChanges;
     }
 
     async analyzeTokenChangesEnhanced(meta, walletIndex) {
-        const tokenChanges = [];
-    
-        console.log(`[${new Date().toISOString()}] 🔍 Enhanced analysis of token changes`);
-        console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
-    
-        if (!meta.preTokenBalances || !meta.postTokenBalances) {
-            console.log(`[${new Date().toISOString()}] ⚠️ No token balance data in transaction`);
-            return [];
-        }
-    
-        // Создаем карту изменений по mint + accountIndex, НО учитываем владельца
-        const allBalanceChanges = new Map();
-    
-        // Инициализируем с pre-balances
-        for (const pre of meta.preTokenBalances || []) {
-            const key = `${pre.mint}-${pre.accountIndex}`;
+    const tokenChanges = [];
+
+    console.log(`[${new Date().toISOString()}] 🔍 Enhanced analysis of token changes`);
+    console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
+
+    if (!meta.preTokenBalances || !meta.postTokenBalances) {
+        console.log(`[${new Date().toISOString()}] ⚠️ No token balance data in transaction`);
+        return [];
+    }
+
+    // Создаем карту изменений по mint + accountIndex
+    const allBalanceChanges = new Map();
+
+    // Инициализируем с pre-balances
+    for (const pre of meta.preTokenBalances || []) {
+        const key = `${pre.mint}-${pre.accountIndex}`;
+        allBalanceChanges.set(key, {
+            mint: pre.mint,
+            accountIndex: pre.accountIndex,
+            owner: pre.owner,
+            preAmount: pre.uiTokenAmount.amount,
+            preUiAmount: pre.uiTokenAmount.uiAmount,
+            postAmount: '0',
+            postUiAmount: 0,
+            decimals: pre.uiTokenAmount.decimals
+        });
+    }
+
+    // Обновляем/добавляем post-balances
+    for (const post of meta.postTokenBalances || []) {
+        const key = `${post.mint}-${post.accountIndex}`;
+        if (allBalanceChanges.has(key)) {
+            const existing = allBalanceChanges.get(key);
+            existing.postAmount = post.uiTokenAmount.amount;
+            existing.postUiAmount = post.uiTokenAmount.uiAmount;
+        } else {
             allBalanceChanges.set(key, {
-                mint: pre.mint,
-                accountIndex: pre.accountIndex,
-                owner: pre.owner,
-                preAmount: pre.uiTokenAmount.amount,
-                preUiAmount: pre.uiTokenAmount.uiAmount,
-                postAmount: '0',
-                postUiAmount: 0,
-                decimals: pre.uiTokenAmount.decimals
+                mint: post.mint,
+                accountIndex: post.accountIndex,
+                owner: post.owner,
+                preAmount: '0',
+                preUiAmount: 0,
+                postAmount: post.uiTokenAmount.amount,
+                postUiAmount: post.uiTokenAmount.uiAmount,
+                decimals: post.uiTokenAmount.decimals
             });
         }
-    
-        // Обновляем/добавляем post-balances
-        for (const post of meta.postTokenBalances || []) {
-            const key = `${post.mint}-${post.accountIndex}`;
-            if (allBalanceChanges.has(key)) {
-                const existing = allBalanceChanges.get(key);
-                existing.postAmount = post.uiTokenAmount.amount;
-                existing.postUiAmount = post.uiTokenAmount.uiAmount;
-            } else {
-                allBalanceChanges.set(key, {
-                    mint: post.mint,
-                    accountIndex: post.accountIndex,
-                    owner: post.owner,
-                    preAmount: '0',
-                    preUiAmount: 0,
-                    postAmount: post.uiTokenAmount.amount,
-                    postUiAmount: post.uiTokenAmount.uiAmount,
-                    decimals: post.uiTokenAmount.decimals
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} balance changes to analyze`);
+
+    // УЛУЧШЕННАЯ ЛОГИКА: Анализируем и группируем по mint, но учитываем значимые движения
+    const mintChanges = new Map();
+
+    // Анализируем каждое изменение и группируем по mint
+    for (const [key, change] of allBalanceChanges) {
+        const rawChange = Number(change.postAmount) - Number(change.preAmount);
+        const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
+        
+        console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
+        console.log(`  - Account Index: ${change.accountIndex}`);
+        console.log(`  - Owner: ${change.owner}`);
+        console.log(`  - Raw change: ${rawChange}`);
+        console.log(`  - UI change: ${uiChange}`);
+        console.log(`  - Decimals: ${change.decimals}`);
+
+        // Включаем ВСЕ значимые изменения (кроме нулевых)
+        if (Math.abs(rawChange) > 0) {
+            if (!mintChanges.has(change.mint)) {
+                mintChanges.set(change.mint, {
+                    mint: change.mint,
+                    decimals: change.decimals,
+                    totalRawChange: 0,
+                    positiveChanges: 0, // Сумма положительных изменений
+                    negativeChanges: 0, // Сумма отрицательных изменений
+                    hasActivity: false
                 });
             }
-        }
-    
-        console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} balance changes to analyze`);
-    
-        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ
-        const mintChanges = new Map();
-    
-        // Анализируем каждое изменение и группируем по mint
-        for (const [key, change] of allBalanceChanges) {
-            const rawChange = Number(change.postAmount) - Number(change.preAmount);
-            const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
-            
-            console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
-            console.log(`  - Account Index: ${change.accountIndex}`);
-            console.log(`  - Owner: ${change.owner}`);
-            console.log(`  - Raw change: ${rawChange}`);
-            console.log(`  - UI change: ${uiChange}`);
-            console.log(`  - Decimals: ${change.decimals}`);
-    
-            // Включаем ВСЕ значимые изменения (кроме нулевых)
-            if (Math.abs(rawChange) > 0) {
-                if (mintChanges.has(change.mint)) {
-                    const existing = mintChanges.get(change.mint);
-                    existing.totalRawChange += rawChange; // НЕ берем abs, сохраняем направление
-                    console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalRawChange} total`);
-                } else {
-                    mintChanges.set(change.mint, {
-                        mint: change.mint,
-                        decimals: change.decimals,
-                        totalRawChange: rawChange // НЕ берем abs, сохраняем направление
-                    });
-                    console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${rawChange}`);
-                }
+
+            const existing = mintChanges.get(change.mint);
+            existing.totalRawChange += rawChange;
+            existing.hasActivity = true;
+
+            // Отдельно трекаем положительные и отрицательные изменения
+            if (rawChange > 0) {
+                existing.positiveChanges += rawChange;
+            } else {
+                existing.negativeChanges += Math.abs(rawChange);
             }
+
+            console.log(`[${new Date().toISOString()}] 📈 Updated mint ${change.mint}: total=${existing.totalRawChange}, pos=${existing.positiveChanges}, neg=${existing.negativeChanges}`);
         }
-    
-        if (mintChanges.size === 0) {
-            console.log(`[${new Date().toISOString()}] ⚠️ No significant token changes found`);
-            return [];
-        }
-    
-        console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
-    
-        // Получаем метаданные токенов
-        const mints = Array.from(mintChanges.keys());
-        const tokenInfos = await this.batchFetchTokenMetadata(mints);
-    
-        // Создаем финальный список изменений токенов - ОДИН НА MINT с сохранением направления
-        for (const [mint, aggregatedChange] of mintChanges) {
-            const tokenInfo = tokenInfos.get(mint) || {
-                symbol: 'Unknown',
-                name: 'Unknown Token',
-                decimals: aggregatedChange.decimals,
-            };
-    
+    }
+
+    if (mintChanges.size === 0) {
+        console.log(`[${new Date().toISOString()}] ⚠️ No significant token changes found`);
+        return [];
+    }
+
+    console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
+
+    // Получаем метаданные токенов
+    const mints = Array.from(mintChanges.keys());
+    const tokenInfos = await this.batchFetchTokenMetadata(mints);
+
+    // УЛУЧШЕННАЯ ЛОГИКА: Создаем записи для значимых изменений
+    for (const [mint, aggregatedChange] of mintChanges) {
+        const tokenInfo = tokenInfos.get(mint) || {
+            symbol: 'Unknown',
+            name: 'Unknown Token',
+            decimals: aggregatedChange.decimals,
+        };
+
+        // НОВАЯ ЛОГИКА: Если есть значимая активность, создаем запись
+        // даже если итоговое изменение близко к нулю
+        const hasSignificantActivity = aggregatedChange.positiveChanges > 0 || aggregatedChange.negativeChanges > 0;
+        const netChange = aggregatedChange.totalRawChange;
+
+        if (hasSignificantActivity) {
+            // Определяем направление на основе доминирующего движения
+            let finalChange = netChange;
+            
+            // Если итоговое изменение близко к нулю, но есть активность,
+            // используем доминирующее направление
+            if (Math.abs(netChange) < Math.max(aggregatedChange.positiveChanges, aggregatedChange.negativeChanges) * 0.1) {
+                // Итоговое изменение мало по сравнению с активностью - вероятно swap
+                // Используем направление с большей активностью, но с учетом контекста
+                if (aggregatedChange.negativeChanges > aggregatedChange.positiveChanges) {
+                    // Больше продали - это продажа
+                    finalChange = -aggregatedChange.negativeChanges;
+                } else {
+                    // Больше купили - это покупка
+                    finalChange = aggregatedChange.positiveChanges;
+                }
+                console.log(`[${new Date().toISOString()}] 🔄 Detected swap activity for ${tokenInfo.symbol}: using direction ${finalChange > 0 ? 'buy' : 'sell'}`);
+            }
+
             tokenChanges.push({
                 mint: mint,
-                rawChange: aggregatedChange.totalRawChange, // Сохраняем направление (+ или -)
+                rawChange: finalChange,
                 decimals: aggregatedChange.decimals,
                 symbol: tokenInfo.symbol,
                 name: tokenInfo.name,
+                hasActivity: aggregatedChange.hasActivity,
+                positiveChanges: aggregatedChange.positiveChanges,
+                negativeChanges: aggregatedChange.negativeChanges
             });
-    
-            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (${aggregatedChange.totalRawChange} raw units with direction)`);
+
+            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (final: ${finalChange}, pos: ${aggregatedChange.positiveChanges}, neg: ${aggregatedChange.negativeChanges})`);
         }
-    
-        console.log(`[${new Date().toISOString()}] 🎯 Enhanced result: ${tokenChanges.length} token changes with directions`);
-        return tokenChanges;
     }
+
+    console.log(`[${new Date().toISOString()}] 🎯 Enhanced result: ${tokenChanges.length} token changes with activity detection`);
+    return tokenChanges;
+}
 
     async analyzeTokenChangesVersioned(meta, transactionType, accountKeys) {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
