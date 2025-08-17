@@ -139,6 +139,10 @@ WHERE id IN (
     SELECT id FROM duplicates WHERE row_num > 1
 );
 
+ALTER TABLE transactions
+ADD COLUMN stablecoin_spent DECIMAL(20,9) DEFAULT 0,
+ADD COLUMN stablecoin_received DECIMAL(20,9) DEFAULT 0;
+
 -- Добавляем уникальное ограничение
 ALTER TABLE transactions 
 ADD CONSTRAINT uk_transactions_signature_wallet 
