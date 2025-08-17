@@ -31,15 +31,12 @@ app.use('/api/wallets/bulk', (req, res, next) => {
   console.log(`- Content-Length: ${req.get('Content-Length')}`);
   console.log(`- Content-Type: ${req.get('Content-Type')}`);
   
-  // Устанавливаем увеличенные таймауты именно для этого endpoint
-  req.setTimeout(600000); // 10 минут
-  res.setTimeout(600000); // 10 минут
+  req.setTimeout(600000);
+  res.setTimeout(600000);
   
   next();
 });
 
-
-// Load SSL certificates
 const sslOptions = {
   key: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/privkey.pem'),
   cert: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/fullchain.pem'),
@@ -60,8 +57,8 @@ app.use(
 app.use(express.json());
 
 app.use((req, res, next) => {
-  req.setTimeout(300000); // 5 минут
-  res.setTimeout(300000); // 5 минут
+  req.setTimeout(300000);
+  res.setTimeout(300000);
   next();
 });
 
@@ -99,7 +96,6 @@ const startWebSocketService = async () => {
 setTimeout(startWebSocketService, 2000);
 
 app.get('/api/transactions/stream', (req, res) => {
-  // ИСПРАВЛЕНО: НЕ парсим groupId как число, оставляем как строку (UUID)
   const groupId = req.query.groupId || null;
   
   res.setHeader('Content-Type', 'text/event-stream');
@@ -124,7 +120,6 @@ app.get('/api/transactions/stream', (req, res) => {
       try {
         const transaction = JSON.parse(message);
         
-        // ИСПРАВЛЕНО: сравнение UUID строк
         if (groupId !== null && transaction.groupId !== groupId) {
           console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
           return;
@@ -158,7 +153,7 @@ app.get('/api/transactions/stream', (req, res) => {
 
 app.get('/api/wallets', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const wallets = await db.getActiveWallets(groupId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
@@ -171,7 +166,10 @@ app.get('/api/wallets', async (req, res) => {
             totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
             totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
             totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
-            netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
+            totalSpentStablecoin: Number(stats.total_stablecoin_spent || 0).toFixed(2),
+            totalReceivedStablecoin: Number(stats.total_stablecoin_received || 0).toFixed(2),
+            netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0) +
+                     (Number(stats.total_stablecoin_received || 0) - Number(stats.total_stablecoin_spent || 0)) / 150).toFixed(6),
             lastTransactionAt: stats.last_transaction_at,
           },
         };
@@ -280,7 +278,7 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
 
     const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
@@ -293,6 +291,9 @@ app.get('/api/transactions', async (req, res) => {
           transactionType: row.transaction_type,
           solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
           solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
+          stablecoinSpent: row.stablecoin_spent ? Number(row.stablecoin_spent).toFixed(2) : null,
+          stablecoinReceived: row.stablecoin_received ? Number(row.stablecoin_received).toFixed(2) : null,
+          stablecoinMint: row.stablecoin_mint,
           wallet: {
             address: row.wallet_address,
             name: row.wallet_name,
@@ -331,7 +332,7 @@ app.get('/api/transactions', async (req, res) => {
 
 app.get('/api/monitoring/status', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const monitoringStatus = monitoringService.getStatus();
     const websocketStatus = solanaWebSocketService.getStatus();
     const dbStats = await db.getMonitoringStats(groupId);
@@ -396,6 +397,9 @@ app.get('/api/wallet/:address', async (req, res) => {
           transactionType: row.transaction_type,
           solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
           solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
+          stablecoinSpent: row.stablecoin_spent ? Number(row.stablecoin_spent).toFixed(2) : null,
+          stablecoinReceived: row.stablecoin_received ? Number(row.stablecoin_received).toFixed(2) : null,
+          stablecoinMint: row.stablecoin_mint,
           wallet: {
             address: row.wallet_address,
             name: row.wallet_name,
@@ -444,7 +448,7 @@ app.get('/api/wallet/:address', async (req, res) => {
 app.get('/api/stats/transactions', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const stats = await db.getMonitoringStats(groupId);
 
     res.json({
@@ -453,7 +457,8 @@ app.get('/api/stats/transactions', async (req, res) => {
       totalTransactions: (stats.buy_transactions_today || 0) + (stats.sell_transactions_today || 0),
       solSpent: Number(stats.sol_spent_today || 0).toFixed(6),
       solReceived: Number(stats.sol_received_today || 0).toFixed(6),
-      netSOL: (Number(stats.sol_received_today || 0) - Number(stats.sol_spent_today || 0)).toFixed(6),
+      stablecoinSpent: Number(stats.stablecoin_spent_today || 0).toFixed(2),
+      stablecoinReceived: Number(stats.stablecoin_received_today || 0).toFixed(2),
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching transaction stats:`, error);
@@ -467,7 +472,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
   try {
     const { wallets, groupId } = req.body;
 
-    // Валидация входных данных
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ 
         success: false,
@@ -491,7 +495,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets`);
 
-    // Инициализация результатов
     const results = {
       total: wallets.length,
       successful: 0,
@@ -501,7 +504,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
       successfulWallets: []
     };
 
-    // Предварительная валидация адресов
     const validWallets = [];
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 
@@ -544,20 +546,17 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation`);
 
-    // Обработка пакетами для избежания таймаутов
-    const BATCH_SIZE = 100; // Уменьшаем размер пакета
+    const BATCH_SIZE = 100;
     const totalBatches = Math.ceil(validWallets.length / BATCH_SIZE);
     
     console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${BATCH_SIZE} wallets each`);
 
-    // Обрабатываем пакеты последовательно, а не параллельно
     for (let i = 0; i < validWallets.length; i += BATCH_SIZE) {
       const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
       const batch = validWallets.slice(i, i + BATCH_SIZE);
       
       console.log(`[${new Date().toISOString()}] 📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} wallets)`);
 
-      // Обрабатываем каждый кошелек в пакете
       for (const wallet of batch) {
         try {
           const addedWallet = await solanaWebSocketService.addWallet(
@@ -584,19 +583,16 @@ app.post('/api/wallets/bulk', async (req, res) => {
         }
       }
 
-      // Небольшая пауза между пакетами
       if (i + BATCH_SIZE < validWallets.length) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
 
-      // Промежуточное логирование прогресса
       console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Total: ${results.successful} successful, ${results.failed} failed`);
     }
 
     const duration = Date.now() - startTime;
     console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful`);
 
-    // Возвращаем результат
     res.json({
       success: results.successful > 0,
       message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
@@ -621,7 +617,7 @@ app.get('/api/stats/tokens', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
 
     const topTokens = await db.getTopTokens(limit, type, groupId);
     res.json(topTokens);
@@ -631,12 +627,9 @@ app.get('/api/stats/tokens', async (req, res) => {
   }
 });
 
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
-// Исправленный endpoint в вашем основном файле сервера
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    // ИСПРАВЛЕНО: НЕ парсим как число, оставляем как строку UUID
     const groupId = req.query.groupId || null;
     
     console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
@@ -660,11 +653,15 @@ app.get('/api/tokens/tracker', async (req, res) => {
             totalSells: 0,
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
+            totalSpentStablecoin: 0,
+            totalReceivedStablecoin: 0,
+            netSOL: 0,
           },
         });
       }
       const token = byToken.get(row.mint);
-      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+      const pnlSol = Number(row.sol_received || 0) - Number(row.sol_spent || 0) +
+                     (Number(row.stablecoin_received || 0) - Number(row.stablecoin_spent || 0)) / 150; // Approximate SOL price: $150
       
       token.wallets.push({
         address: row.wallet_address,
@@ -675,6 +672,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
         txSells: Number(row.tx_sells) || 0,
         solSpent: Number(row.sol_spent) || 0,
         solReceived: Number(row.sol_received) || 0,
+        stablecoinSpent: Number(row.stablecoin_spent) || 0,
+        stablecoinReceived: Number(row.stablecoin_received) || 0,
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
         pnlSol: +pnlSol.toFixed(6),
@@ -686,13 +685,16 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.totalSells += Number(row.tx_sells) || 0;
       token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
       token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalSpentStablecoin += Number(row.stablecoin_spent) || 0;
+      token.summary.totalReceivedStablecoin += Number(row.stablecoin_received) || 0;
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
       ...t,
       summary: {
         ...t.summary,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+        netSOL: +((t.summary.totalReceivedSOL - t.summary.totalSpentSOL) +
+                  (t.summary.totalReceivedStablecoin - t.summary.totalSpentStablecoin) / 150).toFixed(6),
       },
     }));
 
@@ -903,24 +905,14 @@ app.use((error, req, res, next) => {
   });
 });
 
-process.on('SIGINT', async () => {
-  console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
-  await monitoringService.close();
-  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
-  await redis.quit();
-  sseClients.forEach((client) => client.end());
-  process.exit(0);
+https.createServer(sslOptions, app).listen(port, () => {
+  console.log(`[${new Date().toISOString()}] 🚀 Server running on https://localhost:${port}`);
 });
 
 process.on('SIGTERM', async () => {
-  console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
+  console.log(`[${new Date().toISOString()}] 🛑 Received SIGTERM. Shutting down gracefully...`);
+  await solanaWebSocketService.stop();
   await monitoringService.close();
-  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
-  await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
-});
-
-https.createServer(sslOptions, app).listen(port, '0.0.0.0', () => {
-    console.log(`[${new Date().toISOString()}] 🚀 Server running on https://0.0.0.0:${port}`);
 });

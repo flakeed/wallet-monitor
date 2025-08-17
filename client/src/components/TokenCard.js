@@ -4,9 +4,10 @@ import WalletPill from './WalletPill';
 function TokenCard({ token, onOpenChart }) {
   const [priceData, setPriceData] = useState(null);
   const [solPrice, setSolPrice] = useState(null);
+  const [usdcPrice, setUsdcPrice] = useState(null);
   const [loadingPrice, setLoadingPrice] = useState(false);
   const [groupPnL, setGroupPnL] = useState(null);
-  console.log("token",token)
+  console.log("token", token);
   const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
   // Fetch SOL price from DexScreener
@@ -16,17 +17,36 @@ function TokenCard({ token, onOpenChart }) {
       const data = await response.json();
       
       if (data.pairs && data.pairs.length > 0) {
-        // Find the most liquid SOL pair
         const bestPair = data.pairs.reduce((prev, current) => 
           (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
         );
-        setSolPrice(parseFloat(bestPair.priceUsd || 150)); // fallback to 150
+        setSolPrice(parseFloat(bestPair.priceUsd || 150));
       } else {
-        setSolPrice(150); // fallback price
+        setSolPrice(150);
       }
     } catch (error) {
       console.error('Error fetching SOL price:', error);
-      setSolPrice(150); // fallback price
+      setSolPrice(150);
+    }
+  };
+
+  // Fetch USDC price from DexScreener
+  const fetchUsdcPrice = async () => {
+    try {
+      const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+      const data = await response.json();
+      
+      if (data.pairs && data.pairs.length > 0) {
+        const bestPair = data.pairs.reduce((prev, current) => 
+          (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
+        );
+        setUsdcPrice(parseFloat(bestPair.priceUsd || 1));
+      } else {
+        setUsdcPrice(1);
+      }
+    } catch (error) {
+      console.error('Error fetching USDC price:', error);
+      setUsdcPrice(1);
     }
   };
 
@@ -40,7 +60,6 @@ function TokenCard({ token, onOpenChart }) {
       const data = await response.json();
       
       if (data.pairs && data.pairs.length > 0) {
-        // Find the most liquid pair (highest volume)
         const bestPair = data.pairs.reduce((prev, current) => 
           (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
         );
@@ -60,33 +79,44 @@ function TokenCard({ token, onOpenChart }) {
     }
   };
 
-  // Calculate group PnL with real SOL price
+  // Calculate group PnL with real SOL and USDC prices
   const calculateGroupPnL = () => {
-    if (!priceData || !priceData.price || !solPrice) return null;
+    if (!priceData || !priceData.price || !solPrice || !usdcPrice) return null;
 
     let totalTokensBought = 0;
     let totalTokensSold = 0;
     let totalSpentSOL = 0;
     let totalReceivedSOL = 0;
+    let totalSpentUSDC = 0;
+    let totalReceivedUSDC = 0;
 
-    // Sum up all wallet data
     token.wallets.forEach(wallet => {
       totalTokensBought += wallet.tokensBought || 0;
       totalTokensSold += wallet.tokensSold || 0;
       totalSpentSOL += wallet.solSpent || 0;
       totalReceivedSOL += wallet.solReceived || 0;
+      totalSpentUSDC += wallet.stablecoinSpent || 0;
+      totalReceivedUSDC += wallet.stablecoinReceived || 0;
     });
 
     const currentHoldings = totalTokensBought - totalTokensSold;
     
-    // Calculate realized PnL (from sold tokens)
-    const realizedPnLSOL = totalReceivedSOL - (totalTokensSold > 0 && totalTokensBought > 0 ? 
-      (totalTokensSold / totalTokensBought) * totalSpentSOL : 0);
+    // Convert USDC to SOL equivalent
+    const totalSpentSOLFromUSDC = totalSpentUSDC / solPrice;
+    const totalReceivedSOLFromUSDC = totalReceivedUSDC / solPrice;
     
-    // Calculate unrealized PnL (from current holdings)
+    // Total spent and received in SOL equivalent
+    const totalSpent = totalSpentSOL + totalSpentSOLFromUSDC;
+    const totalReceived = totalReceivedSOL + totalReceivedSOLFromUSDC;
+
+    // Calculate realized PnL
+    const realizedPnLSOL = totalReceived - (totalTokensSold > 0 && totalTokensBought > 0 ? 
+      (totalTokensSold / totalTokensBought) * totalSpent : 0);
+    
+    // Calculate unrealized PnL
     const currentTokenValueUSD = currentHoldings * priceData.price;
     const remainingCostBasisSOL = totalTokensBought > 0 ? 
-      ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOL : 0;
+      ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpent : 0;
     const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
     const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
     const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
@@ -102,6 +132,8 @@ function TokenCard({ token, onOpenChart }) {
       currentHoldings,
       totalSpentSOL,
       totalReceivedSOL,
+      totalSpentUSDC,
+      totalReceivedUSDC,
       realizedPnLSOL,
       realizedPnLUSD,
       unrealizedPnLSOL,
@@ -111,34 +143,29 @@ function TokenCard({ token, onOpenChart }) {
       currentTokenValueUSD,
       remainingCostBasisUSD,
       currentPriceUSD: priceData.price,
-      solPrice
+      solPrice,
+      usdcPrice
     };
   };
 
   useEffect(() => {
-    // Fetch both SOL price and token price
     fetchSolPrice();
+    fetchUsdcPrice();
     fetchTokenPrice();
   }, [token.mint]);
 
   useEffect(() => {
-    if (priceData && solPrice) {
+    if (priceData && solPrice && usdcPrice) {
       setGroupPnL(calculateGroupPnL());
     }
-  }, [priceData, solPrice, token.wallets]);
+  }, [priceData, solPrice, usdcPrice, token.wallets]);
 
-  // Function to copy text to clipboard
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
-      .then(() => {
-        console.log('Address copied to clipboard:', text);
-      })
-      .catch((err) => {
-        console.error('Failed to copy address:', err);
-      });
+      .then(() => console.log('Address copied to clipboard:', text))
+      .catch((err) => console.error('Failed to copy address:', err));
   };
 
-  // Function to open chart in new window
   const openDexScreenerChart = () => {
     if (!token.mint) {
       console.warn('No mint address available for chart');
@@ -192,7 +219,6 @@ function TokenCard({ token, onOpenChart }) {
         </div>
       </div>
 
-      {/* Group PnL Summary */}
       {groupPnL && (
         <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
           <div className="grid grid-cols-2 gap-3 text-xs">
@@ -202,12 +228,20 @@ function TokenCard({ token, onOpenChart }) {
                 <span className="font-medium">{formatNumber(groupPnL.currentHoldings, 0)} tokens</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600">Total Spent:</span>
+                <span className="text-gray-600">Total Spent (SOL):</span>
                 <span className="font-medium">{formatNumber(groupPnL.totalSpentSOL, 4)} SOL</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-600">Total Received:</span>
+                <span className="text-gray-600">Total Spent (USDC):</span>
+                <span className="font-medium">{formatNumber(groupPnL.totalSpentUSDC, 2)} USDC</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Total Received (SOL):</span>
                 <span className="font-medium">{formatNumber(groupPnL.totalReceivedSOL, 4)} SOL</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Total Received (USDC):</span>
+                <span className="font-medium">{formatNumber(groupPnL.totalReceivedUSDC, 2)} USDC</span>
               </div>
             </div>
             
@@ -248,14 +282,14 @@ function TokenCard({ token, onOpenChart }) {
             </div>
           </div>
 
-          {/* {priceData && (
+          {priceData && (
             <div className="mt-2 text-xs text-gray-600 border-t border-blue-200 pt-2">
               <div className="flex justify-between items-center">
                 <span>24h Volume: {formatCurrency(priceData.volume24h)}</span>
                 <span>Liquidity: {formatCurrency(priceData.liquidity)}</span>
               </div>
             </div>
-          )} */}
+          )}
         </div>
       )}
 
