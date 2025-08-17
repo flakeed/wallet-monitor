@@ -274,7 +274,9 @@ class WalletMonitoringService {
             console.log(`  - Post: ${(postBalance / 1e9).toFixed(6)} SOL`);
             console.log(`  - Change: ${solChange.toFixed(6)} SOL`);
     
-            // НОВАЯ ЛОГИКА: Анализируем изменения токенов СНАЧАЛА, чтобы определить тип транзакции
+            // НОВАЯ ЛОГИКА: Анализируем изменения токенов СНАЧАЛА, независимо от SOL изменений
+            console.log(`[${new Date().toISOString()}] 🔍 Starting enhanced token analysis...`);
+            
             let tokenChanges;
             if (tx.version === 0 || tx.version === null || tx.version === undefined) {
                 tokenChanges = await this.analyzeTokenChangesEnhanced(tx.meta, walletIndex);
@@ -284,8 +286,19 @@ class WalletMonitoringService {
     
             if (tokenChanges.length === 0) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no relevant token changes detected`);
+                
+                // РАСШИРЕННАЯ ДИАГНОСТИКА для debugging
+                console.log(`[${new Date().toISOString()}] 🔍 Enhanced debug info for ${sig.signature}:`);
+                console.log(`  - Transaction version: ${tx.version}`);
+                console.log(`  - Pre-token balances: ${JSON.stringify(tx.meta.preTokenBalances?.map(b => ({mint: b.mint, amount: b.uiTokenAmount.uiAmount})) || [])}`);
+                console.log(`  - Post-token balances: ${JSON.stringify(tx.meta.postTokenBalances?.map(b => ({mint: b.mint, amount: b.uiTokenAmount.uiAmount})) || [])}`);
+                console.log(`  - Instructions count: ${tx.transaction.message.instructions?.length || 0}`);
+                console.log(`  - Inner instructions: ${tx.meta.innerInstructions?.length || 0}`);
+                
                 return null;
             }
+    
+            console.log(`[${new Date().toISOString()}] 📊 Found ${tokenChanges.length} token changes, analyzing transaction type...`);
     
             // Определяем тип транзакции на основе анализа токенов
             const transactionAnalysis = this.analyzeTransactionType(tokenChanges, solChange);
