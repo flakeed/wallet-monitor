@@ -347,62 +347,93 @@ class WalletMonitoringService {
     determineTransactionType(tokenChanges, solChange) {
         const FEE_THRESHOLD = 0.01; // 0.01 SOL threshold для комиссий
         
+        // Список известных стейблкоинов и "валют"
+        const PAYMENT_TOKENS = new Set([
+            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+            'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+            'So11111111111111111111111111111111111111112',   // WSOL
+            '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', // RAY
+            'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'  // BONK (иногда используется)
+        ]);
+        
         // Анализируем направления изменений токенов
         const tokenIncreases = tokenChanges.filter(t => t.changeDirection === 'increase');
         const tokenDecreases = tokenChanges.filter(t => t.changeDirection === 'decrease');
         
-        console.log(`[${new Date().toISOString()}] 📊 Token analysis:`);
-        console.log(`  - Tokens increased: ${tokenIncreases.length}`);
-        console.log(`  - Tokens decreased: ${tokenDecreases.length}`);
+        // Отдельно анализируем изменения "валютных" токенов
+        const paymentIncreases = tokenIncreases.filter(t => PAYMENT_TOKENS.has(t.mint));
+        const paymentDecreases = tokenDecreases.filter(t => PAYMENT_TOKENS.has(t.mint));
+        const regularIncreases = tokenIncreases.filter(t => !PAYMENT_TOKENS.has(t.mint));
+        const regularDecreases = tokenDecreases.filter(t => !PAYMENT_TOKENS.has(t.mint));
+        
+        console.log(`[${new Date().toISOString()}] 📊 Enhanced token analysis:`);
         console.log(`  - SOL change: ${solChange.toFixed(6)}`);
+        console.log(`  - Payment tokens decreased: ${paymentDecreases.length} (${paymentDecreases.map(t => t.symbol).join(', ')})`);
+        console.log(`  - Payment tokens increased: ${paymentIncreases.length} (${paymentIncreases.map(t => t.symbol).join(', ')})`);
+        console.log(`  - Regular tokens increased: ${regularIncreases.length} (${regularIncreases.map(t => t.symbol).join(', ')})`);
+        console.log(`  - Regular tokens decreased: ${regularDecreases.length} (${regularDecreases.map(t => t.symbol).join(', ')})`);
         
-        // Стратегия определения типа транзакции:
+        // ПРИОРИТЕТ 1: Классические SOL транзакции
         
-        // 1. Классический SOL -> Token swap (покупка за SOL)
-        if (solChange < -FEE_THRESHOLD && tokenIncreases.length > 0) {
-            console.log(`[${new Date().toISOString()}] 🛒 Classic SOL->Token BUY detected`);
+        // 1. SOL -> Token покупка
+        if (solChange < -FEE_THRESHOLD && regularIncreases.length > 0) {
+            console.log(`[${new Date().toISOString()}] 🛒 SOL->Token BUY detected`);
             return {
                 transactionType: 'buy',
                 solAmount: Math.abs(solChange)
             };
         }
         
-        // 2. Классический Token -> SOL swap (продажа за SOL)
-        if (solChange > 0.001 && tokenDecreases.length > 0) {
-            console.log(`[${new Date().toISOString()}] 💸 Classic Token->SOL SELL detected`);
+        // 2. Token -> SOL продажа
+        if (solChange > 0.001 && regularDecreases.length > 0) {
+            console.log(`[${new Date().toISOString()}] 💸 Token->SOL SELL detected`);
             return {
                 transactionType: 'sell',
                 solAmount: solChange
             };
         }
         
-        // 3. Token-to-Token swap (без значительного изменения SOL)
-        if (Math.abs(solChange) <= FEE_THRESHOLD && tokenIncreases.length > 0 && tokenDecreases.length > 0) {
-            console.log(`[${new Date().toISOString()}] 🔄 Token-to-Token SWAP detected`);
-            
-            // Определяем, что считать "покупкой" - новые токены (увеличение)
-            // А SOL amount считаем как 0, так как SOL не тратился значительно
+        // ПРИОРИТЕТ 2: Транзакции со стейблкоинами
+        
+        // 3. USDC/USDT -> Token покупка (трата стейблкоина = покупка)
+        if (paymentDecreases.length > 0 && regularIncreases.length > 0) {
+            console.log(`[${new Date().toISOString()}] 🛒 Stablecoin->Token BUY detected`);
+            // Используем потраченное количество стейблкоина как "solAmount" 
+            const totalSpent = paymentDecreases.reduce((sum, token) => sum + (token.rawChange / Math.pow(10, token.decimals)), 0);
             return {
-                transactionType: 'buy', // Новые токены = покупка
+                transactionType: 'buy',
+                solAmount: Math.max(totalSpent * 0.001, Math.abs(solChange)) // Конвертируем примерно в SOL или используем реальные комиссии
+            };
+        }
+        
+        // 4. Token -> USDC/USDT продажа (получение стейблкоина = продажа)
+        if (regularDecreases.length > 0 && paymentIncreases.length > 0) {
+            console.log(`[${new Date().toISOString()}] 💸 Token->Stablecoin SELL detected`);
+            // Используем полученное количество стейблкоина как "solAmount"
+            const totalReceived = paymentIncreases.reduce((sum, token) => sum + (token.rawChange / Math.pow(10, token.decimals)), 0);
+            return {
+                transactionType: 'sell',
+                solAmount: Math.max(totalReceived * 0.001, Math.abs(solChange)) // Конвертируем примерно в SOL или используем реальные комиссии
+            };
+        }
+        
+        // ПРИОРИТЕТ 3: Остальные token-to-token транзакции
+        
+        // 5. Token-to-Token swap - увеличение токенов считаем покупкой
+        if (Math.abs(solChange) <= FEE_THRESHOLD && regularIncreases.length > 0) {
+            console.log(`[${new Date().toISOString()}] 🔄 Token-to-Token BUY detected (new tokens acquired)`);
+            return {
+                transactionType: 'buy',
                 solAmount: Math.abs(solChange) // Только комиссии
             };
         }
         
-        // 4. Только увеличение токенов (возможно, получение токенов)
-        if (tokenIncreases.length > 0 && tokenDecreases.length === 0) {
-            console.log(`[${new Date().toISOString()}] 📈 Token INCREASE only detected`);
-            return {
-                transactionType: 'buy',
-                solAmount: Math.abs(solChange)
-            };
-        }
-        
-        // 5. Только уменьшение токенов (возможно, отправка токенов)
-        if (tokenDecreases.length > 0 && tokenIncreases.length === 0) {
-            console.log(`[${new Date().toISOString()}] 📉 Token DECREASE only detected`);
+        // 6. Token-to-Token swap - только уменьшение токенов считаем продажей
+        if (Math.abs(solChange) <= FEE_THRESHOLD && regularDecreases.length > 0 && regularIncreases.length === 0) {
+            console.log(`[${new Date().toISOString()}] 🔄 Token-to-Token SELL detected (tokens sent out)`);
             return {
                 transactionType: 'sell',
-                solAmount: Math.abs(solChange)
+                solAmount: Math.abs(solChange) // Только комиссии
             };
         }
         
