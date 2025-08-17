@@ -1,3 +1,5 @@
+// Обновленный client/src/components/WalletPill.js
+
 import React from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
@@ -20,10 +22,27 @@ function WalletPill({ wallet, tokenMint }) {
     navigator.clipboard.writeText(wallet.address);
   };
 
+  // Определяем иконку типа торговли
+  const getTradeTypeIcon = () => {
+    if (wallet.isStablecoinTrade) {
+      return (
+        <div className="w-3 h-3 bg-purple-500 rounded-full flex items-center justify-center" title="Stablecoin trade">
+          <span className="text-white text-xs font-bold">$</span>
+        </div>
+      );
+    }
+    return (
+      <div className="w-3 h-3 bg-blue-500 rounded-full flex items-center justify-center" title="SOL trade">
+        <span className="text-white text-xs font-bold">◈</span>
+      </div>
+    );
+  };
+
   return (
     <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
       <div className="truncate max-w-xs">
         <div className="flex items-center space-x-2">
+          {getTradeTypeIcon()}
           <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
           <button
             onClick={copyToClipboard}
@@ -54,11 +73,30 @@ function WalletPill({ wallet, tokenMint }) {
             </svg>
           </button>
         </div>
-        <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+        
+        <div className="text-[10px] text-gray-500 flex items-center space-x-1">
+          <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
+          {wallet.isStablecoinTrade && (
+            <>
+              <span>·</span>
+              <span className="text-purple-600 font-medium" title="Traded via stablecoin">
+                {wallet.stablecoinInfo}
+              </span>
+            </>
+          )}
+        </div>
       </div>
+      
       <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
+        <div className={`text-xs font-semibold ${pnlColor}`}>
+          {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL
+          {wallet.isStablecoinTrade && (
+            <span className="text-purple-500 ml-1" title="SOL equivalent">≈</span>
+          )}
+        </div>
+        <div className="text-[9px] text-gray-400">
+          spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}
+        </div>
       </div>
     </div>
   );
