@@ -168,7 +168,7 @@ class WalletMonitoringService {
                 console.log(`  - Account keys: ${tx.transaction?.message?.accountKeys?.length || 0}`);
                 console.log(`  - Instructions: ${tx.transaction?.message?.instructions?.length || 0}`);
                 console.log(`  - Pre-token balances: ${tx.meta?.preTokenBalances?.length || 0}`);
-                console.log(`  - Post-token balances: ${ getPostTokenBalancesLength(tx) }`);
+                console.log(`  - Post-token balances: ${this.getPostTokenBalancesLength(tx)}`);
     
                 return tx;
             } catch (error) {
@@ -177,12 +177,27 @@ class WalletMonitoringService {
                 if (attempt < maxRetries) {
                     console.log(`[${new Date().toISOString()}] ⏳ Waiting before retry...`);
                     await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                    continue;
                 }
+                console.error(`[${new Date().toISOString()}] ❌ Failed to fetch transaction ${signature} after ${maxRetries} attempts`);
+                return null;
             }
         }
         
         console.error(`[${new Date().toISOString()}] ❌ Failed to fetch transaction ${signature} after ${maxRetries} attempts`);
         return null;
+    }
+
+    getPostTokenBalancesLength(tx) {
+        if (!tx.meta) return 0;
+        if (Array.isArray(tx.meta.postTokenBalances)) {
+            return tx.meta.postTokenBalances.length;
+        }
+        // Handle versioned transactions with different structure
+        if (tx.meta.postTokenBalances && typeof tx.meta.postTokenBalances === 'object') {
+            return Object.keys(tx.meta.postTokenBalances).length;
+        }
+        return 0;
     }
 
     // Helper function to safely get postTokenBalances length
