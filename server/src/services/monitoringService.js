@@ -242,6 +242,20 @@ class WalletMonitoringService {
             const postBalance = tx.meta.postBalances[walletIndex] || 0;
             const solChange = (postBalance - preBalance) / 1e9;
     
+            console.log(`[${new Date().toISOString()}] 📊 Transaction info:`);
+            console.log(`  - Version: ${tx.version !== null ? `v${tx.version}` : 'legacy'}`);
+            console.log(`  - Status: ${tx.meta.err ? 'Failed' : 'Success'}`);
+            console.log(`  - Fee: ${(tx.meta.fee || 0) / 1e9} SOL`);
+            console.log(`  - Account keys: ${tx.transaction.message.accountKeys?.length || 0}`);
+            console.log(`  - Instructions: ${tx.transaction.message.instructions?.length || 0}`);
+            console.log(`  - Pre-token balances: ${(tx.meta.preTokenBalances || []).length}`);
+            console.log(`  - Post-token balances: ${(tx.meta.postTokenBalances || []).length}`);
+    
+            console.log(`[${new Date().toISOString()}] 💰 SOL balance change for ${walletPubkey}:`);
+            console.log(`  - Pre: ${(preBalance / 1e9).toFixed(6)} SOL`);
+            console.log(`  - Post: ${(postBalance / 1e9).toFixed(6)} SOL`);
+            console.log(`  - Change: ${solChange.toFixed(6)} SOL`);
+    
             let tokenChanges = [];
             let transactionType = null;
             let solAmount = 0;
@@ -254,6 +268,14 @@ class WalletMonitoringService {
                 tokenChanges = await this.analyzeTokenChangesVersioned(tx.meta, walletPubkey, tx.transaction.message.accountKeys);
             }
     
+            console.log(`[${new Date().toISOString()}] 🔍 Token changes analysis:`);
+            console.log(`  - Total token changes detected: ${tokenChanges.length}`);
+            tokenChanges.forEach((change, i) => {
+                console.log(`  - Token ${i + 1}: ${change.symbol} (${change.mint})`);
+                console.log(`    - Change: ${change.rawChange} raw (${(change.rawChange / Math.pow(10, change.decimals)).toFixed(6)} UI)`);
+                console.log(`    - Is stablecoin: ${change.isStablecoin}`);
+            });
+    
             // Улучшенная логика определения типа транзакции
             const FEE_THRESHOLD = 0.01;
             let hasValidTokenChanges = false;
@@ -264,9 +286,11 @@ class WalletMonitoringService {
             for (const change of tokenChanges) {
                 if (change.isStablecoin) {
                     stablecoinChanges.push(change);
+                    console.log(`[${new Date().toISOString()}] 💵 Stablecoin change: ${change.symbol} = ${change.rawChange / Math.pow(10, change.decimals)}`);
                 } else if (change.rawChange !== 0) {
                     tokenChangesFiltered.push(change);
                     hasValidTokenChanges = true;
+                    console.log(`[${new Date().toISOString()}] 🪙 Token change: ${change.symbol} = ${change.rawChange / Math.pow(10, change.decimals)}`);
                 }
             }
     
@@ -284,9 +308,11 @@ class WalletMonitoringService {
                 if (stableChange.rawChange < 0) {
                     totalStablecoinSpent += amount;
                     if (!stablecoinMint) stablecoinMint = stableChange.mint;
+                    console.log(`[${new Date().toISOString()}] 💸 Spent ${amount} ${stableChange.symbol}`);
                 } else if (stableChange.rawChange > 0) {
                     totalStablecoinReceived += amount;
                     if (!stablecoinMint) stablecoinMint = stableChange.mint;
+                    console.log(`[${new Date().toISOString()}] 💰 Received ${amount} ${stableChange.symbol}`);
                 }
             }
     
@@ -299,6 +325,12 @@ class WalletMonitoringService {
                     netTokenChange -= 1; // Потеряли токены
                 }
             }
+    
+            console.log(`[${new Date().toISOString()}] 🎯 Transaction analysis:`);
+            console.log(`  - Net token direction: ${netTokenChange} (positive = bought, negative = sold)`);
+            console.log(`  - SOL change: ${solChange.toFixed(6)}`);
+            console.log(`  - Stablecoin spent: ${totalStablecoinSpent}`);
+            console.log(`  - Stablecoin received: ${totalStablecoinReceived}`);
     
             // Определяем тип транзакции по приоритету:
             // 1. Сначала по токенам (получили/отдали)
@@ -314,8 +346,13 @@ class WalletMonitoringService {
                     stablecoinAmount = totalStablecoinSpent;
                     // Конвертируем в SOL для отображения (примерно $150 за SOL)
                     solAmount = totalStablecoinSpent / 150;
+                    console.log(`[${new Date().toISOString()}] 💳 USDC/USDT purchase detected: ${stablecoinAmount} stablecoin = ${solAmount.toFixed(6)} SOL equivalent`);
                 } else if (solChange < -FEE_THRESHOLD) {
                     solAmount = Math.abs(solChange);
+                    console.log(`[${new Date().toISOString()}] 💎 SOL purchase detected: ${solAmount} SOL`);
+                } else {
+                    console.log(`[${new Date().toISOString()}] ⚠️ Buy transaction but no clear payment method detected`);
+                    solAmount = 0.001; // Минимальная сумма для записи
                 }
                 
             } else if (netTokenChange < 0) {
@@ -327,8 +364,13 @@ class WalletMonitoringService {
                     stablecoinAmount = totalStablecoinReceived;
                     // Конвертируем в SOL для отображения
                     solAmount = totalStablecoinReceived / 150;
+                    console.log(`[${new Date().toISOString()}] 💳 USDC/USDT sale detected: ${stablecoinAmount} stablecoin = ${solAmount.toFixed(6)} SOL equivalent`);
                 } else if (solChange > 0.001) {
                     solAmount = solChange;
+                    console.log(`[${new Date().toISOString()}] 💎 SOL sale detected: ${solAmount} SOL`);
+                } else {
+                    console.log(`[${new Date().toISOString()}] ⚠️ Sell transaction but no clear receiving method detected`);
+                    solAmount = 0.001; // Минимальная сумма для записи
                 }
                 
             } else {
@@ -337,25 +379,34 @@ class WalletMonitoringService {
                     transactionType = 'buy';
                     stablecoinAmount = totalStablecoinSpent;
                     solAmount = totalStablecoinSpent / 150;
+                    console.log(`[${new Date().toISOString()}] 💳 Stablecoin-based buy detected`);
                 } else if (totalStablecoinReceived > totalStablecoinSpent) {
                     transactionType = 'sell';
                     stablecoinAmount = totalStablecoinReceived;
                     solAmount = totalStablecoinReceived / 150;
+                    console.log(`[${new Date().toISOString()}] 💳 Stablecoin-based sell detected`);
                 } else if (solChange < -FEE_THRESHOLD) {
                     transactionType = 'buy';
                     solAmount = Math.abs(solChange);
+                    console.log(`[${new Date().toISOString()}] 💎 SOL-based buy detected`);
                 } else if (solChange > 0.001) {
                     transactionType = 'sell';
                     solAmount = solChange;
+                    console.log(`[${new Date().toISOString()}] 💎 SOL-based sell detected`);
                 }
             }
     
             if (!transactionType) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - unable to determine transaction type`);
+                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - unable to determine transaction type. This might be a complex DeFi operation.`);
                 return null;
             }
     
-            console.log(`[${new Date().toISOString()}] ✅ Transaction ${sig.signature} type: ${transactionType}, SOL: ${solAmount}, Stablecoin: ${stablecoinAmount} ${stablecoinMint || ''}, Net tokens: ${netTokenChange}`);
+            console.log(`[${new Date().toISOString()}] ✅ Transaction ${sig.signature} classified:`);
+            console.log(`  - Type: ${transactionType}`);
+            console.log(`  - SOL amount: ${solAmount.toFixed(6)}`);
+            console.log(`  - Stablecoin amount: ${stablecoinAmount}`);
+            console.log(`  - Stablecoin mint: ${stablecoinMint || 'none'}`);
+            console.log(`  - Token operations: ${tokenChangesFiltered.length}`);
     
             return await this.db.withTransaction(async (client) => {
                 const finalCheck = await client.query(
