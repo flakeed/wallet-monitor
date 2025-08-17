@@ -191,7 +191,7 @@ class WalletMonitoringService {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Invalid signature object:`, sig);
                 return null;
             }
-
+    
             // УЛУЧШЕННАЯ ПРОВЕРКА: проверяем, не обработана ли уже эта транзакция для этого кошелька
             const existingTx = await this.db.pool.query(
                 'SELECT id FROM transactions WHERE signature = $1 AND wallet_id = $2',
@@ -201,32 +201,32 @@ class WalletMonitoringService {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed for wallet ${wallet.address}`);
                 return null;
             }
-
+    
             // Дополнительная проверка в памяти для недавно обработанных
             const processedKey = `${sig.signature}-${wallet.id}`;
             if (this.recentlyProcessed && this.recentlyProcessed.has(processedKey)) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} recently processed for wallet ${wallet.address}`);
                 return null;
             }
-
+    
             // Добавляем в кэш недавно обработанных
             this.recentlyProcessed.add(processedKey);
-
+    
             // Очищаем старые записи из кэша (каждые 100 транзакций)
             if (this.recentlyProcessed.size > 1000) {
                 const toDelete = Array.from(this.recentlyProcessed).slice(0, 500);
                 toDelete.forEach(key => this.recentlyProcessed.delete(key));
             }
-
+    
             console.log(`[${new Date().toISOString()}] 🔍 Processing transaction ${sig.signature} for wallet ${wallet.address}`);
-
+    
             const tx = await this.fetchTransactionWithRetry(sig.signature);
-
+    
             if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Invalid transaction ${sig.signature} - missing metadata`);
                 return null;
             }
-
+    
             // Находим индекс кошелька в accountKeys
             const walletPubkey = wallet.address;
             let walletIndex = -1;
@@ -258,85 +258,48 @@ class WalletMonitoringService {
                     }
                 }
             }
-
+    
             if (walletIndex === -1) {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletPubkey} not found in transaction ${sig.signature}`);
                 return null;
             }
-
+    
             // Анализируем изменение SOL баланса для конкретного кошелька
             const preBalance = tx.meta.preBalances[walletIndex] || 0;
             const postBalance = tx.meta.postBalances[walletIndex] || 0;
             const solChange = (postBalance - preBalance) / 1e9;
-
+    
             console.log(`[${new Date().toISOString()}] 💰 SOL balance change for ${walletPubkey}:`);
             console.log(`  - Pre: ${(preBalance / 1e9).toFixed(6)} SOL`);
             console.log(`  - Post: ${(postBalance / 1e9).toFixed(6)} SOL`);
             console.log(`  - Change: ${solChange.toFixed(6)} SOL`);
-
-            let transactionType, solAmount;
-            
-            // Более точная проверка с учетом комиссий
-            const FEE_THRESHOLD = 0.01; // 0.01 SOL threshold для исключения только комиссий
-            
-            if (solChange < -FEE_THRESHOLD) {
-                // SOL уменьшился значительно - это покупка токенов
-                transactionType = 'buy';
-                solAmount = Math.abs(solChange);
-                console.log(`[${new Date().toISOString()}] 🛒 Detected BUY transaction: spent ${solAmount.toFixed(6)} SOL`);
-            } else if (solChange > 0.001) {
-                // SOL увеличился - это продажа токенов
-                transactionType = 'sell';
-                solAmount = solChange;
-                console.log(`[${new Date().toISOString()}] 💸 Detected SELL transaction: received ${solAmount.toFixed(6)} SOL`);
-            } else {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - SOL change too small: ${solChange.toFixed(6)} (likely just fees)`);
-                return null;
-            }
-
-            // Анализируем изменения токенов (с поддержкой versioned transactions)
+    
+            // НОВАЯ ЛОГИКА: Анализируем изменения токенов СНАЧАЛА, чтобы определить тип транзакции
             let tokenChanges;
             if (tx.version === 0 || tx.version === null || tx.version === undefined) {
-                // Legacy transaction или versioned с версией 0
-                tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType);
+                tokenChanges = await this.analyzeTokenChangesEnhanced(tx.meta, walletIndex);
             } else {
-                // Более новые versioned transactions
-                tokenChanges = await this.analyzeTokenChangesVersioned(tx.meta, transactionType, tx.transaction.message.accountKeys);
+                tokenChanges = await this.analyzeTokenChangesVersionedEnhanced(tx.meta, tx.transaction.message.accountKeys, walletIndex);
             }
-            
+    
             if (tokenChanges.length === 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
-                
-                // РАСШИРЕННАЯ ДИАГНОСТИКА
-                console.log(`[${new Date().toISOString()}] 🔍 Enhanced debug info for ${sig.signature}:`);
-                console.log(`  - Transaction version: ${tx.version}`);
-                console.log(`  - Pre-token balances: ${JSON.stringify(tx.meta.preTokenBalances?.map(b => ({mint: b.mint, amount: b.uiTokenAmount.uiAmount})) || [])}`);
-                console.log(`  - Post-token balances: ${JSON.stringify(tx.meta.postTokenBalances?.map(b => ({mint: b.mint, amount: b.uiTokenAmount.uiAmount})) || [])}`);
-                console.log(`  - Instructions count: ${tx.transaction.message.instructions?.length || 0}`);
-                console.log(`  - Inner instructions: ${tx.meta.innerInstructions?.length || 0}`);
-                
-                // Показываем программы, которые были вызваны
-                if (tx.transaction.message.instructions) {
-                    tx.transaction.message.instructions.forEach((instruction, index) => {
-                        const programIdIndex = instruction.programIdIndex;
-                        let programId = 'Unknown';
-                        
-                        if (tx.transaction.message.accountKeys && tx.transaction.message.accountKeys[programIdIndex]) {
-                            if (tx.transaction.message.accountKeys[programIdIndex].pubkey) {
-                                programId = tx.transaction.message.accountKeys[programIdIndex].pubkey.toString();
-                            } else {
-                                programId = tx.transaction.message.accountKeys[programIdIndex].toString();
-                            }
-                        }
-                        console.log(`  - Instruction ${index}: Program ${programId}`);
-                    });
-                }
-                
+                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no relevant token changes detected`);
                 return null;
             }
-
+    
+            // Определяем тип транзакции на основе анализа токенов
+            const transactionAnalysis = this.analyzeTransactionType(tokenChanges, solChange);
+            
+            if (!transactionAnalysis) {
+                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - could not determine transaction type`);
+                return null;
+            }
+    
+            const { transactionType, equivalentSolAmount } = transactionAnalysis;
+    
+            console.log(`[${new Date().toISOString()}] ✅ Detected ${transactionType.toUpperCase()} transaction: ${equivalentSolAmount.toFixed(6)} SOL equivalent`);
             console.log(`[${new Date().toISOString()}] ✅ Found ${tokenChanges.length} token changes, saving transaction`);
-
+    
             // Сохраняем транзакцию в базе данных с дополнительной проверкой дубликатов
             return await this.db.withTransaction(async (client) => {
                 // Финальная проверка перед вставкой
@@ -349,7 +312,7 @@ class WalletMonitoringService {
                     console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already exists, skipping insert`);
                     return null;
                 }
-
+    
                 const query = `
                     INSERT INTO transactions (
                         wallet_id, signature, block_time, transaction_type,
@@ -363,15 +326,15 @@ class WalletMonitoringService {
                     sig.signature,
                     new Date(sig.blockTime * 1000).toISOString(),
                     transactionType,
-                    transactionType === 'buy' ? solAmount : 0,
-                    transactionType === 'sell' ? solAmount : 0,
+                    transactionType === 'buy' ? equivalentSolAmount : 0,
+                    transactionType === 'sell' ? equivalentSolAmount : 0,
                 ]);
-
+    
                 if (result.rows.length === 0) {
                     console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} was already inserted by another process`);
                     return null;
                 }
-
+    
                 const transaction = result.rows[0];
                 
                 // Сохраняем операции с токенами
@@ -379,13 +342,13 @@ class WalletMonitoringService {
                     this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType)
                 );
                 await Promise.all(tokenSavePromises);
-
+    
                 console.log(`[${new Date().toISOString()}] ✅ Successfully saved transaction ${sig.signature} with ${tokenChanges.length} token operations`);
-
+    
                 return {
                     signature: sig.signature,
                     type: transactionType,
-                    solAmount,
+                    solAmount: equivalentSolAmount,
                     tokensChanged: tokenChanges,
                 };
             });
@@ -394,6 +357,338 @@ class WalletMonitoringService {
             console.error(`[${new Date().toISOString()}] ❌ Stack trace:`, error.stack);
             return null;
         }
+    }
+
+    analyzeTransactionType(tokenChanges, solChange) {
+        const STABLECOINS = {
+            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { symbol: 'USDC', decimals: 6 }, // USDC
+            'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': { symbol: 'USDT', decimals: 6 }, // USDT
+            'DESVgJVGajEgKGXhb6XmqtnHoQi3ESjggzpjdj5L1NqB': { symbol: 'DUSD', decimals: 6 }, // DUSD
+            'So11111111111111111111111111111111111111112': { symbol: 'WSOL', decimals: 9 }, // Wrapped SOL
+            'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So': { symbol: 'mSOL', decimals: 9 }, // Marinade SOL
+            'bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1': { symbol: 'bSOL', decimals: 9 }, // Blazestake SOL
+        };
+    
+        const FEE_THRESHOLD = 0.001; // 0.001 SOL threshold для исключения только комиссий
+        let stablecoinSpent = 0;
+        let stablecoinReceived = 0;
+        let tokensReceived = [];
+        let tokensSold = [];
+    
+        // Анализируем изменения токенов
+        for (const change of tokenChanges) {
+            const isStablecoin = STABLECOINS[change.mint];
+            const amount = Math.abs(change.rawChange) / Math.pow(10, change.decimals);
+    
+            if (isStablecoin) {
+                if (change.rawChange < 0) {
+                    // Стейблкоин потрачен (уменьшился)
+                    stablecoinSpent += amount;
+                    console.log(`[${new Date().toISOString()}] 💸 Spent ${amount.toFixed(6)} ${isStablecoin.symbol}`);
+                } else if (change.rawChange > 0) {
+                    // Стейблкоин получен (увеличился)
+                    stablecoinReceived += amount;
+                    console.log(`[${new Date().toISOString()}] 💰 Received ${amount.toFixed(6)} ${isStablecoin.symbol}`);
+                }
+            } else {
+                if (change.rawChange > 0) {
+                    // Обычный токен получен
+                    tokensReceived.push(change);
+                    console.log(`[${new Date().toISOString()}] 🪙 Received ${amount.toFixed(6)} ${change.symbol}`);
+                } else if (change.rawChange < 0) {
+                    // Обычный токен продан
+                    tokensSold.push(change);
+                    console.log(`[${new Date().toISOString()}] 🪙 Sold ${amount.toFixed(6)} ${change.symbol}`);
+                }
+            }
+        }
+    
+        // Определяем тип транзакции
+        let transactionType = null;
+        let equivalentSolAmount = 0;
+    
+        // Проверяем различные сценарии
+        if (stablecoinSpent > 0 && tokensReceived.length > 0) {
+            // Потратили стейблкоин и получили токены = ПОКУПКА
+            transactionType = 'buy';
+            equivalentSolAmount = stablecoinSpent; // Используем потраченный стейблкоин как эквивалент
+            console.log(`[${new Date().toISOString()}] 🛒 Stablecoin buy detected: spent ${stablecoinSpent.toFixed(6)} stablecoin for tokens`);
+        } else if (tokensSold.length > 0 && stablecoinReceived > 0) {
+            // Продали токены и получили стейблкоин = ПРОДАЖА
+            transactionType = 'sell';
+            equivalentSolAmount = stablecoinReceived; // Используем полученный стейблкоин как эквивалент
+            console.log(`[${new Date().toISOString()}] 💸 Stablecoin sell detected: sold tokens for ${stablecoinReceived.toFixed(6)} stablecoin`);
+        } else if (solChange < -FEE_THRESHOLD && tokensReceived.length > 0) {
+            // Классическая SOL покупка
+            transactionType = 'buy';
+            equivalentSolAmount = Math.abs(solChange);
+            console.log(`[${new Date().toISOString()}] 🛒 Classic SOL buy detected: spent ${equivalentSolAmount.toFixed(6)} SOL`);
+        } else if (solChange > 0.001 && tokensSold.length > 0) {
+            // Классическая SOL продажа
+            transactionType = 'sell';
+            equivalentSolAmount = solChange;
+            console.log(`[${new Date().toISOString()}] 💸 Classic SOL sell detected: received ${equivalentSolAmount.toFixed(6)} SOL`);
+        } else if (stablecoinSpent > 0 && stablecoinReceived > 0) {
+            // Swap между стейблкоинами - определяем по количеству
+            if (stablecoinSpent > stablecoinReceived) {
+                transactionType = 'buy';
+                equivalentSolAmount = stablecoinSpent - stablecoinReceived;
+            } else {
+                transactionType = 'sell';
+                equivalentSolAmount = stablecoinReceived - stablecoinSpent;
+            }
+            console.log(`[${new Date().toISOString()}] 🔄 Stablecoin swap detected: ${transactionType} with ${equivalentSolAmount.toFixed(6)} net`);
+        }
+    
+        if (!transactionType) {
+            console.log(`[${new Date().toISOString()}] ⚠️ Could not determine transaction type:`);
+            console.log(`  - SOL change: ${solChange.toFixed(6)}`);
+            console.log(`  - Stablecoin spent: ${stablecoinSpent.toFixed(6)}`);
+            console.log(`  - Stablecoin received: ${stablecoinReceived.toFixed(6)}`);
+            console.log(`  - Tokens received: ${tokensReceived.length}`);
+            console.log(`  - Tokens sold: ${tokensSold.length}`);
+            return null;
+        }
+    
+        return {
+            transactionType,
+            equivalentSolAmount
+        };
+    }
+
+    async analyzeTokenChangesVersionedEnhanced(meta, accountKeys, walletIndex) {
+        const tokenChanges = [];
+    
+        console.log(`[${new Date().toISOString()}] 🔍 Enhanced analysis of versioned transaction token changes`);
+        
+        if (!meta.preTokenBalances || !meta.postTokenBalances) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No token balance data in transaction`);
+            return [];
+        }
+    
+        // Создаем карту изменений токенов по mint (НЕ по accountIndex!)
+        const mintChanges = new Map();
+    
+        // Собираем все изменения по mint'ам
+        const allBalanceChanges = new Map();
+    
+        // Обрабатываем pre-balances
+        for (const preBalance of meta.preTokenBalances) {
+            const key = `${preBalance.mint}-${preBalance.accountIndex}`;
+            allBalanceChanges.set(key, {
+                mint: preBalance.mint,
+                accountIndex: preBalance.accountIndex,
+                owner: preBalance.owner,
+                preAmount: preBalance.uiTokenAmount.amount,
+                preUiAmount: preBalance.uiTokenAmount.uiAmount,
+                decimals: preBalance.uiTokenAmount.decimals,
+                postAmount: '0',
+                postUiAmount: 0
+            });
+        }
+    
+        // Обрабатываем post-balances
+        for (const postBalance of meta.postTokenBalances) {
+            const key = `${postBalance.mint}-${postBalance.accountIndex}`;
+            if (!allBalanceChanges.has(key)) {
+                allBalanceChanges.set(key, {
+                    mint: postBalance.mint,
+                    accountIndex: postBalance.accountIndex,
+                    owner: postBalance.owner,
+                    preAmount: '0',
+                    preUiAmount: 0,
+                    decimals: postBalance.uiTokenAmount.decimals,
+                    postAmount: postBalance.uiTokenAmount.amount,
+                    postUiAmount: postBalance.uiTokenAmount.uiAmount
+                });
+            } else {
+                const existing = allBalanceChanges.get(key);
+                existing.postAmount = postBalance.uiTokenAmount.amount;
+                existing.postUiAmount = postBalance.uiTokenAmount.uiAmount;
+            }
+        }
+    
+        console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} token balance changes`);
+    
+        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ с сохранением направления
+        for (const [key, change] of allBalanceChanges) {
+            const rawChange = Number(change.postAmount) - Number(change.preAmount);
+            const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
+    
+            console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
+            console.log(`  - Account Index: ${change.accountIndex}`);
+            console.log(`  - Owner: ${change.owner}`);
+            console.log(`  - Raw change: ${rawChange}`);
+            console.log(`  - UI change: ${uiChange}`);
+            console.log(`  - Decimals: ${change.decimals}`);
+    
+            // Включаем ВСЕ значимые изменения
+            if (Math.abs(rawChange) > 0) {
+                if (mintChanges.has(change.mint)) {
+                    const existing = mintChanges.get(change.mint);
+                    existing.totalRawChange += rawChange; // Сохраняем направление
+                    console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalRawChange} total`);
+                } else {
+                    mintChanges.set(change.mint, {
+                        mint: change.mint,
+                        decimals: change.decimals,
+                        totalRawChange: rawChange // Сохраняем направление
+                    });
+                    console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${rawChange}`);
+                }
+            }
+        }
+    
+        if (mintChanges.size === 0) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No valid token changes found`);
+            return [];
+        }
+    
+        console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
+    
+        // Получаем метаданные токенов
+        const mints = Array.from(mintChanges.keys());
+        const tokenInfos = await this.batchFetchTokenMetadata(mints);
+    
+        // Создаем финальный список изменений - ОДИН НА MINT с направлением
+        for (const [mint, aggregatedChange] of mintChanges) {
+            const tokenInfo = tokenInfos.get(mint) || {
+                symbol: 'Unknown',
+                name: 'Unknown Token',
+                decimals: aggregatedChange.decimals,
+            };
+    
+            tokenChanges.push({
+                mint: mint,
+                rawChange: aggregatedChange.totalRawChange, // Сохраняем направление
+                decimals: aggregatedChange.decimals,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+            });
+    
+            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (${aggregatedChange.totalRawChange} raw units with direction)`);
+        }
+    
+        console.log(`[${new Date().toISOString()}] 🎯 Enhanced versioned result: ${tokenChanges.length} token changes with directions`);
+        return tokenChanges;
+    }
+
+    async analyzeTokenChangesEnhanced(meta, walletIndex) {
+        const tokenChanges = [];
+    
+        console.log(`[${new Date().toISOString()}] 🔍 Enhanced analysis of token changes`);
+        console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
+    
+        if (!meta.preTokenBalances || !meta.postTokenBalances) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No token balance data in transaction`);
+            return [];
+        }
+    
+        // Создаем карту изменений по mint + accountIndex, НО учитываем владельца
+        const allBalanceChanges = new Map();
+    
+        // Инициализируем с pre-balances
+        for (const pre of meta.preTokenBalances || []) {
+            const key = `${pre.mint}-${pre.accountIndex}`;
+            allBalanceChanges.set(key, {
+                mint: pre.mint,
+                accountIndex: pre.accountIndex,
+                owner: pre.owner,
+                preAmount: pre.uiTokenAmount.amount,
+                preUiAmount: pre.uiTokenAmount.uiAmount,
+                postAmount: '0',
+                postUiAmount: 0,
+                decimals: pre.uiTokenAmount.decimals
+            });
+        }
+    
+        // Обновляем/добавляем post-balances
+        for (const post of meta.postTokenBalances || []) {
+            const key = `${post.mint}-${post.accountIndex}`;
+            if (allBalanceChanges.has(key)) {
+                const existing = allBalanceChanges.get(key);
+                existing.postAmount = post.uiTokenAmount.amount;
+                existing.postUiAmount = post.uiTokenAmount.uiAmount;
+            } else {
+                allBalanceChanges.set(key, {
+                    mint: post.mint,
+                    accountIndex: post.accountIndex,
+                    owner: post.owner,
+                    preAmount: '0',
+                    preUiAmount: 0,
+                    postAmount: post.uiTokenAmount.amount,
+                    postUiAmount: post.uiTokenAmount.uiAmount,
+                    decimals: post.uiTokenAmount.decimals
+                });
+            }
+        }
+    
+        console.log(`[${new Date().toISOString()}] 📊 Found ${allBalanceChanges.size} balance changes to analyze`);
+    
+        // ГРУППИРУЕМ ПО MINT И СУММИРУЕМ ИЗМЕНЕНИЯ
+        const mintChanges = new Map();
+    
+        // Анализируем каждое изменение и группируем по mint
+        for (const [key, change] of allBalanceChanges) {
+            const rawChange = Number(change.postAmount) - Number(change.preAmount);
+            const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
+            
+            console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
+            console.log(`  - Account Index: ${change.accountIndex}`);
+            console.log(`  - Owner: ${change.owner}`);
+            console.log(`  - Raw change: ${rawChange}`);
+            console.log(`  - UI change: ${uiChange}`);
+            console.log(`  - Decimals: ${change.decimals}`);
+    
+            // Включаем ВСЕ значимые изменения (кроме нулевых)
+            if (Math.abs(rawChange) > 0) {
+                if (mintChanges.has(change.mint)) {
+                    const existing = mintChanges.get(change.mint);
+                    existing.totalRawChange += rawChange; // НЕ берем abs, сохраняем направление
+                    console.log(`[${new Date().toISOString()}] 📈 Aggregating change for ${change.mint}: ${existing.totalRawChange} total`);
+                } else {
+                    mintChanges.set(change.mint, {
+                        mint: change.mint,
+                        decimals: change.decimals,
+                        totalRawChange: rawChange // НЕ берем abs, сохраняем направление
+                    });
+                    console.log(`[${new Date().toISOString()}] 🆕 New mint change: ${change.mint} = ${rawChange}`);
+                }
+            }
+        }
+    
+        if (mintChanges.size === 0) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No significant token changes found`);
+            return [];
+        }
+    
+        console.log(`[${new Date().toISOString()}] 📦 Fetching metadata for ${mintChanges.size} unique tokens`);
+    
+        // Получаем метаданные токенов
+        const mints = Array.from(mintChanges.keys());
+        const tokenInfos = await this.batchFetchTokenMetadata(mints);
+    
+        // Создаем финальный список изменений токенов - ОДИН НА MINT с сохранением направления
+        for (const [mint, aggregatedChange] of mintChanges) {
+            const tokenInfo = tokenInfos.get(mint) || {
+                symbol: 'Unknown',
+                name: 'Unknown Token',
+                decimals: aggregatedChange.decimals,
+            };
+    
+            tokenChanges.push({
+                mint: mint,
+                rawChange: aggregatedChange.totalRawChange, // Сохраняем направление (+ или -)
+                decimals: aggregatedChange.decimals,
+                symbol: tokenInfo.symbol,
+                name: tokenInfo.name,
+            });
+    
+            console.log(`[${new Date().toISOString()}] ✅ Added token change: ${tokenInfo.symbol} (${aggregatedChange.totalRawChange} raw units with direction)`);
+        }
+    
+        console.log(`[${new Date().toISOString()}] 🎯 Enhanced result: ${tokenChanges.length} token changes with directions`);
+        return tokenChanges;
     }
 
     async analyzeTokenChangesVersioned(meta, transactionType, accountKeys) {
@@ -730,7 +1025,7 @@ class WalletMonitoringService {
                 console.warn(`[${new Date().toISOString()}] ⚠️ No metadata for token ${tokenChange.mint}`);
                 return;
             }
-
+    
             const tokenUpsertQuery = `
                 INSERT INTO tokens (mint, symbol, name, decimals) 
                 VALUES ($1, $2, $3, $4)
@@ -747,15 +1042,31 @@ class WalletMonitoringService {
                 tokenInfo.name,
                 tokenInfo.decimals,
             ]);
-
+    
             const tokenId = tokenResult.rows[0].id;
-            const amount = tokenChange.rawChange / Math.pow(10, tokenChange.decimals);
-
+            
+            // УЛУЧШЕННАЯ ЛОГИКА: определяем operation_type на основе направления изменения
+            // и соответствия с типом транзакции
+            let operationType;
+            let amount;
+            
+            if (tokenChange.rawChange > 0) {
+                // Токен увеличился
+                operationType = 'buy';  // Токен был куплен/получен
+                amount = tokenChange.rawChange / Math.pow(10, tokenChange.decimals);
+            } else {
+                // Токен уменьшился  
+                operationType = 'sell'; // Токен был продан/потрачен
+                amount = Math.abs(tokenChange.rawChange) / Math.pow(10, tokenChange.decimals);
+            }
+    
+            console.log(`[${new Date().toISOString()}] 💾 Saving token operation: ${operationType} ${amount.toFixed(6)} ${tokenInfo.symbol}`);
+    
             const operationQuery = `
                 INSERT INTO token_operations (transaction_id, token_id, amount, operation_type) 
                 VALUES ($1, $2, $3, $4)
             `;
-            await client.query(operationQuery, [transactionId, tokenId, amount, transactionType]);
+            await client.query(operationQuery, [transactionId, tokenId, amount, operationType]);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error saving token operation:`, error.message);
             throw error;

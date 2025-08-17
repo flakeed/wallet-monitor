@@ -1,8 +1,13 @@
+// Обновленная версия WalletPill.js с улучшенным отображением PnL
+
 import React from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
   const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-  const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+  
+  // УЛУЧШЕННЫЙ РАСЧЕТ PnL - теперь solSpent и solReceived уже включают stablecoin эквиваленты
+  const pnlSol = (wallet.solReceived || 0) - (wallet.solSpent || 0);
+  const pnlColor = pnlSol > 0 ? 'text-green-700' : pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
   const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
 
   // Function to open token chart with wallet as maker in GMGN
@@ -54,11 +59,22 @@ function WalletPill({ wallet, tokenMint }) {
             </svg>
           </button>
         </div>
-        <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+        <div className="text-[10px] text-gray-500">
+          {wallet.txBuys || 0} buys · {wallet.txSells || 0} sells
+          {netAmount !== 0 && (
+            <span className="ml-1">
+              · {netAmount > 0 ? '+' : ''}{netAmount.toFixed(0)} tokens
+            </span>
+          )}
+        </div>
       </div>
       <div className="text-right ml-2">
-        <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-        <div className="text-[9px] text-gray-400">spent {wallet.solSpent.toFixed(4)} · recv {wallet.solReceived.toFixed(4)}</div>
+        <div className={`text-xs font-semibold ${pnlColor}`}>
+          {pnlSol > 0 ? '+' : ''}{pnlSol.toFixed(4)} SOL
+        </div>
+        <div className="text-[9px] text-gray-400">
+          spent {(wallet.solSpent || 0).toFixed(4)} · recv {(wallet.solReceived || 0).toFixed(4)}
+        </div>
       </div>
     </div>
   );
