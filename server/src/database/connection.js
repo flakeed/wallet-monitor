@@ -38,6 +38,7 @@ class Database {
                     try {
                         await client.query(statement);
                     } catch (err) {
+                        // Игнорируем ошибки существующих объектов
                     }
                 }
                 console.log('✅ Database schema initialized');
@@ -115,7 +116,7 @@ class Database {
         } catch (error) {
           throw new Error(`Batch insert failed: ${error.message}`);
         }
-      }
+    }
 
     async removeWallet(address) {
         const query = `
@@ -192,13 +193,13 @@ class Database {
         return result.rows[0];
     }
 
-    async addTransaction(walletId, signature, blockTime, transactionType, solAmount) {
+    async addTransaction(walletId, signature, blockTime, transactionType, solAmount, stablecoinAmount = 0, stablecoinMint = null) {
         const query = `
             INSERT INTO transactions (
                 wallet_id, signature, block_time, transaction_type,
-                sol_spent, sol_received
+                sol_spent, sol_received, stablecoin_spent, stablecoin_received, stablecoin_mint
             ) 
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id, signature, transaction_type
         `;
         try {
@@ -209,6 +210,9 @@ class Database {
                 transactionType,
                 transactionType === 'buy' ? solAmount : 0,
                 transactionType === 'sell' ? solAmount : 0,
+                transactionType === 'buy' ? stablecoinAmount : 0,
+                transactionType === 'sell' ? stablecoinAmount : 0,
+                stablecoinMint
             ]);
             return result.rows[0];
         } catch (error) {
@@ -257,6 +261,9 @@ class Database {
                     t.transaction_type,
                     t.sol_spent,
                     t.sol_received,
+                    t.stablecoin_spent,
+                    t.stablecoin_received,
+                    t.stablecoin_mint,
                     w.address as wallet_address,
                     w.name as wallet_name,
                     w.group_id,
@@ -286,6 +293,9 @@ class Database {
                     t.transaction_type,
                     t.sol_spent,
                     t.sol_received,
+                    t.stablecoin_spent,
+                    t.stablecoin_received,
+                    t.stablecoin_mint,
                     w.address as wallet_address,
                     w.name as wallet_name,
                     w.group_id,
@@ -325,6 +335,8 @@ class Database {
                     COUNT(CASE WHEN transaction_type = 'sell' THEN 1 END) as total_sell_transactions,
                     COALESCE(SUM(sol_spent), 0) as total_sol_spent,
                     COALESCE(SUM(sol_received), 0) as total_sol_received,
+                    COALESCE(SUM(stablecoin_spent), 0) as total_stablecoin_spent,
+                    COALESCE(SUM(stablecoin_received), 0) as total_stablecoin_received,
                     MAX(block_time) as last_transaction_at,
                     COUNT(DISTINCT CASE WHEN to_.operation_type = 'buy' THEN to_.token_id END) as unique_tokens_bought,
                     COUNT(DISTINCT CASE WHEN to_.operation_type = 'sell' THEN to_.token_id END) as unique_tokens_sold
@@ -397,7 +409,11 @@ class Database {
                 COUNT(DISTINCT t.wallet_id) as unique_wallets,
                 SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END) as total_bought,
                 SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END) as total_sold,
-                AVG(CASE WHEN t.transaction_type = 'buy' THEN t.sol_spent ELSE t.sol_received END) as avg_sol_amount
+                AVG(CASE WHEN t.transaction_type = 'buy' THEN 
+                    COALESCE(t.sol_spent, 0) + COALESCE(t.stablecoin_spent / 150, 0)
+                    ELSE 
+                    COALESCE(t.sol_received, 0) + COALESCE(t.stablecoin_received / 150, 0)
+                END) as avg_sol_amount
             FROM tokens tk
             JOIN token_operations to_ ON tk.id = to_.token_id
             JOIN transactions t ON to_.transaction_id = t.id
@@ -428,6 +444,8 @@ class Database {
                 COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.stablecoin_spent ELSE 0 END), 0) as stablecoin_spent,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.stablecoin_received ELSE 0 END), 0) as stablecoin_received,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
                 MAX(t.block_time) as last_activity
@@ -459,7 +477,10 @@ class Database {
                 COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as sell_transactions_today,
                 COALESCE(SUM(t.sol_spent), 0) as sol_spent_today,
                 COALESCE(SUM(t.sol_received), 0) as sol_received_today,
-                COUNT(DISTINCT to_.token_id) as unique_tokens_today
+                COALESCE(SUM(t.stablecoin_spent), 0) as stablecoin_spent_today,
+                COALESCE(SUM(t.stablecoin_received), 0) as stablecoin_received_today,
+                COUNT(DISTINCT to_.token_id) as unique_tokens_today,
+                COUNT(DISTINCT t.stablecoin_mint) FILTER (WHERE t.stablecoin_mint IS NOT NULL) as unique_stablecoins_today
             FROM wallets w
             LEFT JOIN transactions t ON w.id = t.wallet_id 
                 AND t.block_time >= CURRENT_DATE
@@ -475,12 +496,42 @@ class Database {
         return result.rows[0];
     }
 
+    async getStablecoinStats(hours = 24, groupId = null) {
+        let query = `
+            SELECT 
+                t.stablecoin_mint,
+                COUNT(*) as transaction_count,
+                COUNT(CASE WHEN t.transaction_type = 'buy' THEN 1 END) as buy_count,
+                COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as sell_count,
+                COALESCE(SUM(t.stablecoin_spent), 0) as total_spent,
+                COALESCE(SUM(t.stablecoin_received), 0) as total_received,
+                COUNT(DISTINCT t.wallet_id) as unique_wallets
+            FROM transactions t
+            JOIN wallets w ON t.wallet_id = w.id
+            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+                AND t.stablecoin_mint IS NOT NULL
+        `;
+        const params = [];
+        if (groupId) {
+            query += ` AND w.group_id = $1`;
+            params.push(groupId);
+        }
+        query += `
+            GROUP BY t.stablecoin_mint
+            ORDER BY total_spent + total_received DESC
+        `;
+        const result = await this.pool.query(query, params);
+        return result.rows;
+    }
+
     async getTokenInflowSeries(mint, hours = 24, groupId = null) {
         let query = `
             SELECT 
                 date_trunc('minute', t.block_time) AS bucket,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) AS buy_sol,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) AS sell_sol
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN 
+                    t.sol_spent + COALESCE(t.stablecoin_spent / 150, 0) ELSE 0 END), 0) AS buy_sol,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN 
+                    t.sol_received + COALESCE(t.stablecoin_received / 150, 0) ELSE 0 END), 0) AS sell_sol
             FROM tokens tk
             JOIN token_operations to_ ON to_.token_id = tk.id
             JOIN transactions t ON t.id = to_.transaction_id
@@ -513,6 +564,9 @@ class Database {
                 t.transaction_type,
                 t.sol_spent,
                 t.sol_received,
+                t.stablecoin_spent,
+                t.stablecoin_received,
+                t.stablecoin_mint,
                 to_.amount as token_amount,
                 tk.decimals,
                 w.address as wallet_address,
@@ -539,7 +593,9 @@ class Database {
         return result.rows.map(r => ({
             time: r.block_time,
             type: r.transaction_type,
-            sol: r.transaction_type === 'buy' ? Number(r.sol_spent || 0) : Number(r.sol_received || 0),
+            sol: r.transaction_type === 'buy' ? 
+                Number(r.sol_spent || 0) + Number(r.stablecoin_spent || 0) / 150 : 
+                Number(r.sol_received || 0) + Number(r.stablecoin_received || 0) / 150,
             tokenAmount: Number(r.token_amount || 0),
             decimals: r.decimals || 0,
             wallet: { 

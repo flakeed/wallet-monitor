@@ -280,7 +280,7 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
 
     const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
@@ -293,6 +293,9 @@ app.get('/api/transactions', async (req, res) => {
           transactionType: row.transaction_type,
           solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
           solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
+          stablecoinSpent: row.stablecoin_spent ? Number(row.stablecoin_spent).toFixed(2) : null,
+          stablecoinReceived: row.stablecoin_received ? Number(row.stablecoin_received).toFixed(2) : null,
+          stablecoinMint: row.stablecoin_mint,
           wallet: {
             address: row.wallet_address,
             name: row.wallet_name,

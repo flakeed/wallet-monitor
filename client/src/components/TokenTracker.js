@@ -40,6 +40,8 @@ function TokenTracker({ groupId, transactions, timeframe }) {
               totalSells: 0,
               totalSpentSOL: 0,
               totalReceivedSOL: 0,
+              totalSpentUSDC: 0,
+              totalReceivedUSDC: 0,
               netSOL: 0,
             },
           });
@@ -48,6 +50,12 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         const tokenData = byToken.get(token.mint);
         const walletAddress = tx.wallet.address;
         const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
+
+        // Получаем значения для расчетов
+        const solSpent = parseFloat(tx.solSpent) || 0;
+        const solReceived = parseFloat(tx.solReceived) || 0;
+        const stablecoinSpent = parseFloat(tx.stablecoinSpent) || 0;
+        const stablecoinReceived = parseFloat(tx.stablecoinReceived) || 0;
 
         // Обновляем статистику кошелька
         if (!wallet) {
@@ -58,31 +66,42 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             groupName: tx.wallet.group_name,
             txBuys: tx.transactionType === 'buy' ? 1 : 0,
             txSells: tx.transactionType === 'sell' ? 1 : 0,
-            solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
-            solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
+            solSpent: tx.transactionType === 'buy' ? solSpent : 0,
+            solReceived: tx.transactionType === 'sell' ? solReceived : 0,
+            stablecoinSpent: tx.transactionType === 'buy' ? stablecoinSpent : 0,
+            stablecoinReceived: tx.transactionType === 'sell' ? stablecoinReceived : 0,
             tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
             tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
-            pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
-                    (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
+            // PnL в SOL с учетом USDC (конвертируем USDC в SOL по курсу ~$150)
+            pnlSol: (tx.transactionType === 'sell' ? solReceived + (stablecoinReceived / 150) : 0) - 
+                    (tx.transactionType === 'buy' ? solSpent + (stablecoinSpent / 150) : 0),
             lastActivity: tx.time,
           });
           tokenData.summary.uniqueWallets.add(walletAddress);
         } else {
           wallet.txBuys += tx.transactionType === 'buy' ? 1 : 0;
           wallet.txSells += tx.transactionType === 'sell' ? 1 : 0;
-          wallet.solSpent += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-          wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+          wallet.solSpent += tx.transactionType === 'buy' ? solSpent : 0;
+          wallet.solReceived += tx.transactionType === 'sell' ? solReceived : 0;
+          wallet.stablecoinSpent += tx.transactionType === 'buy' ? stablecoinSpent : 0;
+          wallet.stablecoinReceived += tx.transactionType === 'sell' ? stablecoinReceived : 0;
           wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
           wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
-          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
+          
+          // Пересчитываем PnL
+          wallet.pnlSol = (wallet.solReceived + (wallet.stablecoinReceived / 150)) - 
+                         (wallet.solSpent + (wallet.stablecoinSpent / 150));
+          
           wallet.lastActivity = tx.time > wallet.lastActivity ? tx.time : wallet.lastActivity;
         }
 
         // Обновляем summary
         tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
         tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
-        tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-        tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+        tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? solSpent : 0;
+        tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? solReceived : 0;
+        tokenData.summary.totalSpentUSDC += tx.transactionType === 'buy' ? stablecoinSpent : 0;
+        tokenData.summary.totalReceivedUSDC += tx.transactionType === 'sell' ? stablecoinReceived : 0;
       });
     });
 
@@ -92,7 +111,9 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       summary: {
         ...t.summary,
         uniqueWallets: t.summary.uniqueWallets.size,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+        // NetSOL с учетом USDC транзакций (конвертируем в SOL)
+        netSOL: +((t.summary.totalReceivedSOL + (t.summary.totalReceivedUSDC / 150)) - 
+                  (t.summary.totalSpentSOL + (t.summary.totalSpentUSDC / 150))).toFixed(6),
       },
     }));
 
