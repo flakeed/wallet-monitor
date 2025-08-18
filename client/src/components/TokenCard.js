@@ -4,6 +4,8 @@ import WalletPill from './WalletPill';
 function TokenCard({ token, onOpenChart }) {
     const [priceData, setPriceData] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
+    
+    // Используем данные, уже рассчитанные на backend
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
     const fetchTokenPrice = async () => {
@@ -90,18 +92,23 @@ function TokenCard({ token, onOpenChart }) {
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
-                    <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+                    {/* Используем уже готовые данные с backend (включая конвертированный USDC) */}
+                    <div className={`text-base font-bold ${netColor}`}>
+                        {token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
+                    </div>
+                    <div className="text-xs text-gray-500">
+                        {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+                    </div>
                 </div>
             </div>
 
-            {/* Показываем текущую цену и базовую статистику если доступно */}
+            {/* Блок с текущей ценой токена */}
             {priceData && priceData.price > 0 && (
                 <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
                     <div className="grid grid-cols-2 gap-3 text-xs">
                         <div className="space-y-1">
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Current Price:</span>
+                                <span className="text-gray-600">Price:</span>
                                 <span className="font-medium">{formatCurrency(priceData.price)}</span>
                             </div>
                             <div className="flex justify-between">
@@ -113,7 +120,7 @@ function TokenCard({ token, onOpenChart }) {
                         </div>
                         <div className="space-y-1">
                             <div className="flex justify-between">
-                                <span className="text-gray-600">24h Volume:</span>
+                                <span className="text-gray-600">Volume:</span>
                                 <span className="font-medium">{formatCurrency(priceData.volume24h)}</span>
                             </div>
                             <div className="flex justify-between">
@@ -125,7 +132,7 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             )}
 
-            {/* Суммарная статистика группы */}
+            {/* Суммарная статистика группы - используем данные с backend */}
             <div className="mb-3 p-3 bg-green-50 rounded-lg border border-green-200">
                 <div className="grid grid-cols-2 gap-3 text-xs">
                     <div className="space-y-1">
@@ -140,7 +147,7 @@ function TokenCard({ token, onOpenChart }) {
                     </div>
                     <div className="space-y-1">
                         <div className="flex justify-between">
-                            <span className="text-gray-600">Net PnL (SOL):</span>
+                            <span className="text-gray-600">Net PnL:</span>
                             <div className="text-right">
                                 <div className={`font-bold ${token.summary.netSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                     {token.summary.netSOL >= 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
