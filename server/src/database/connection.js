@@ -412,89 +412,105 @@ class Database {
         return result.rows;
     }
 
-    async getTokenWalletAggregates(hours, groupId) {
-        const query = `
-          SELECT
-            t.token_mint,
-            t.symbol,
-            t.name,
-            t.decimals,
-            w.address,
-            w.name,
-            w.group_id,
-            g.name as group_name,
-            COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
-            COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.tokens_bought ELSE 0 END), 0) as tokens_bought,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.tokens_sold ELSE 0 END), 0) as tokens_sold,
-            MAX(t.time) as last_activity
-          FROM token_operations to_
-          JOIN transactions t ON to_.transaction_id = t.id
-          JOIN wallets w ON t.wallet_id = w.id
-          LEFT JOIN groups g ON w.group_id = g.id
-          WHERE t.time >= NOW() - INTERVAL $1
-            AND ($2::text IS NULL OR w.group_id = $2)
-          GROUP BY t.token_mint, t.symbol, t.name, t.decimals, w.address, w.name, w.group_id, g.name;
-        `;
-        const result = await client.query(query, [`${hours} hours`, groupId]);
-      
-        const byMint = new Map();
+// Fixed getTokenWalletAggregates method for Database class
+// Replace the existing method in server/src/database/connection.js
+
+async getTokenWalletAggregates(hours, groupId) {
+    const query = `
+      SELECT
+        tk.mint as token_mint,
+        tk.symbol,
+        tk.name,
+        tk.decimals,
+        w.address as wallet_address,
+        w.name as wallet_name,
+        w.group_id,
+        g.name as group_name,
+        COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
+        COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
+        COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
+        COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+        COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
+        COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.amount ELSE 0 END), 0) as tokens_sold,
+        MAX(t.block_time) as last_activity
+      FROM token_operations to_
+      JOIN transactions t ON to_.transaction_id = t.id
+      JOIN tokens tk ON to_.token_id = tk.id
+      JOIN wallets w ON t.wallet_id = w.id
+      LEFT JOIN groups g ON w.group_id = g.id
+      WHERE t.block_time >= NOW() - INTERVAL $1
+        AND ($2::text IS NULL OR w.group_id = $2)
+      GROUP BY tk.mint, tk.symbol, tk.name, tk.decimals, w.address, w.name, w.group_id, g.name
+      ORDER BY tk.mint, w.address;
+    `;
+    
+    try {
+        const result = await this.pool.query(query, [`${hours} hours`, groupId]);
+        
+        console.log(`[${new Date().toISOString()}] 📊 getTokenWalletAggregates: Found ${result.rows.length} wallet-token combinations`);
+
+        const byToken = new Map();
         for (const row of result.rows) {
-          if (!byMint.has(row.token_mint)) {
-            byMint.set(row.token_mint, {
-              mint: row.token_mint,
-              symbol: row.symbol,
-              name: row.name,
-              decimals: row.decimals,
-              wallets: [],
-              summary: {
-                uniqueWallets: new Set(),
-                totalBuys: 0,
-                totalSells: 0,
-                totalSpentSOL: 0,
-                totalReceivedSOL: 0,
-                netSOL: 0,
-              },
+            if (!byToken.has(row.token_mint)) {
+                byToken.set(row.token_mint, {
+                    mint: row.token_mint,
+                    symbol: row.symbol,
+                    name: row.name,
+                    decimals: row.decimals,
+                    wallets: [],
+                    summary: {
+                        uniqueWallets: 0,
+                        totalBuys: 0,
+                        totalSells: 0,
+                        totalSpentSOL: 0,
+                        totalReceivedSOL: 0,
+                    },
+                });
+            }
+
+            const token = byToken.get(row.token_mint);
+            const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
+            
+            token.wallets.push({
+                address: row.wallet_address,
+                name: row.wallet_name,
+                groupId: row.group_id,
+                groupName: row.group_name,
+                txBuys: Number(row.tx_buys) || 0,
+                txSells: Number(row.tx_sells) || 0,
+                solSpent: Number(row.sol_spent) || 0,
+                solReceived: Number(row.sol_received) || 0,
+                tokensBought: Number(row.tokens_bought) || 0,
+                tokensSold: Number(row.tokens_sold) || 0,
+                pnlSol: +pnlSol.toFixed(6),
+                lastActivity: row.last_activity,
             });
-          }
-      
-          const token = byMint.get(row.token_mint);
-          token.wallets.push({
-            address: row.address,
-            name: row.name,
-            groupId: row.group_id,
-            groupName: row.group_name,
-            txBuys: row.tx_buys,
-            txSells: row.tx_sells,
-            solSpent: parseFloat(row.sol_spent),
-            solReceived: parseFloat(row.sol_received),
-            tokensBought: parseFloat(row.tokens_bought),
-            tokensSold: parseFloat(row.tokens_sold),
-            pnlSol: parseFloat(row.sol_received) - parseFloat(row.sol_spent),
-            lastActivity: row.last_activity,
-          });
-      
-          token.summary.uniqueWallets.add(row.address);
-          token.summary.totalBuys += parseInt(row.tx_buys);
-          token.summary.totalSells += parseInt(row.tx_sells);
-          token.summary.totalSpentSOL += parseFloat(row.sol_spent);
-          token.summary.totalReceivedSOL += parseFloat(row.sol_received);
+            
+            token.summary.uniqueWallets += 1;
+            token.summary.totalBuys += Number(row.tx_buys) || 0;
+            token.summary.totalSells += Number(row.tx_sells) || 0;
+            token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
+            token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
         }
-      
-        const aggregates = Array.from(byMint.values()).map((token) => ({
-          ...token,
-          summary: {
-            ...token.summary,
-            uniqueWallets: token.summary.uniqueWallets.size,
-            netSOL: +(token.summary.totalReceivedSOL - token.summary.totalSpentSOL).toFixed(6),
-          },
+
+        const result_array = Array.from(byToken.values()).map((token) => ({
+            ...token,
+            summary: {
+                ...token.summary,
+                netSOL: +(token.summary.totalReceivedSOL - token.summary.totalSpentSOL).toFixed(6),
+            },
         }));
-      
-        aggregates.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
-        return aggregates;
-      }
+
+        result_array.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+        
+        console.log(`[${new Date().toISOString()}] 📈 Returning ${result_array.length} tokens with aggregated data`);
+        return result_array;
+        
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in getTokenWalletAggregates:`, error);
+        throw error;
+    }
+}
 
     async getMonitoringStats(groupId = null) {
         let query = `
