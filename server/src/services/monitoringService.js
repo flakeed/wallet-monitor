@@ -3,7 +3,6 @@ const { fetchTokenMetadata, redis } = require('./tokenService');
 const Database = require('../database/connection');
 const Redis = require('ioredis');
 
-const redis = require('redis');
 const redisClient = redis.createClient({ url: process.env.REDIS_URL });
 
 class WalletMonitoringService {
