@@ -139,6 +139,10 @@ WHERE id IN (
     SELECT id FROM duplicates WHERE row_num > 1
 );
 
+ALTER TABLE transactions
+ADD COLUMN IF NOT EXISTS usdc_spent NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS usdc_received NUMERIC DEFAULT 0;
+
 -- Добавляем уникальное ограничение
 ALTER TABLE transactions 
 ADD CONSTRAINT uk_transactions_signature_wallet 

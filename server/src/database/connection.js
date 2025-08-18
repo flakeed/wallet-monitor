@@ -428,6 +428,8 @@ class Database {
                 COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
                 MAX(t.block_time) as last_activity
@@ -448,7 +450,40 @@ class Database {
             ORDER BY tk.mint, wallet_id
         `;
         const result = await this.pool.query(query, params);
-        return result.rows;
+    
+        // Fetch SOL price for USDC conversion
+        const solPriceResponse = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
+        const solPriceData = await solPriceResponse.json();
+        const solPrice = solPriceData.pairs && solPriceData.pairs.length > 0
+            ? parseFloat(solPriceData.pairs.reduce((prev, current) =>
+                (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev).priceUsd || 150)
+            : 150;
+    
+        return result.rows.map(row => {
+            const solSpent = Number(row.sol_spent) + (Number(row.usdc_spent) / solPrice);
+            const solReceived = Number(row.sol_received) + (Number(row.usdc_received) / solPrice);
+            return {
+                mint: row.mint,
+                symbol: row.symbol,
+                name: row.name,
+                decimals: row.decimals,
+                wallet_id: row.wallet_id,
+                wallet_address: row.wallet_address,
+                wallet_name: row.wallet_name,
+                group_id: row.group_id,
+                group_name: row.group_name,
+                tx_buys: Number(row.tx_buys) || 0,
+                tx_sells: Number(row.tx_sells) || 0,
+                sol_spent: solSpent,
+                sol_received: solReceived,
+                usdc_spent: Number(row.usdc_spent) || 0,
+                usdc_received: Number(row.usdc_received) || 0,
+                tokens_bought: Number(row.tokens_bought) || 0,
+                tokens_sold: Number(row.tokens_sold) || 0,
+                pnl_sol: +(solReceived - solSpent).toFixed(6),
+                last_activity: row.last_activity
+            };
+        });
     }
 
     async getMonitoringStats(groupId = null) {
