@@ -412,79 +412,89 @@ class Database {
         return result.rows;
     }
 
-    async getTokenWalletAggregates(hours = 24, groupId = null) {
-        let query = `
-            SELECT 
-                tk.mint,
-                tk.symbol,
-                tk.name,
-                tk.decimals,
-                w.id as wallet_id,
-                w.address as wallet_address,
-                w.name as wallet_name,
-                w.group_id,
-                g.name as group_name,
-                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
-                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
-                MAX(t.block_time) as last_activity
-            FROM tokens tk
-            JOIN token_operations to_ ON tk.id = to_.token_id
-            JOIN transactions t ON to_.transaction_id = t.id
-            JOIN wallets w ON t.wallet_id = w.id
-            LEFT JOIN groups g ON w.group_id = g.id
-            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+    async getTokenWalletAggregates(hours, groupId) {
+        const query = `
+          SELECT
+            t.token_mint,
+            t.symbol,
+            t.name,
+            t.decimals,
+            w.address,
+            w.name,
+            w.group_id,
+            g.name as group_name,
+            COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
+            COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.tokens_bought ELSE 0 END), 0) as tokens_bought,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.tokens_sold ELSE 0 END), 0) as tokens_sold,
+            MAX(t.time) as last_activity
+          FROM token_operations to_
+          JOIN transactions t ON to_.transaction_id = t.id
+          JOIN wallets w ON t.wallet_id = w.id
+          LEFT JOIN groups g ON w.group_id = g.id
+          WHERE t.time >= NOW() - INTERVAL $1
+            AND ($2::text IS NULL OR w.group_id = $2)
+          GROUP BY t.token_mint, t.symbol, t.name, t.decimals, w.address, w.name, w.group_id, g.name;
         `;
-        const params = [];
-        if (groupId) {
-            query += ` AND w.group_id = $1`;
-            params.push(groupId);
+        const result = await client.query(query, [`${hours} hours`, groupId]);
+      
+        const byMint = new Map();
+        for (const row of result.rows) {
+          if (!byMint.has(row.token_mint)) {
+            byMint.set(row.token_mint, {
+              mint: row.token_mint,
+              symbol: row.symbol,
+              name: row.name,
+              decimals: row.decimals,
+              wallets: [],
+              summary: {
+                uniqueWallets: new Set(),
+                totalBuys: 0,
+                totalSells: 0,
+                totalSpentSOL: 0,
+                totalReceivedSOL: 0,
+                netSOL: 0,
+              },
+            });
+          }
+      
+          const token = byMint.get(row.token_mint);
+          token.wallets.push({
+            address: row.address,
+            name: row.name,
+            groupId: row.group_id,
+            groupName: row.group_name,
+            txBuys: row.tx_buys,
+            txSells: row.tx_sells,
+            solSpent: parseFloat(row.sol_spent),
+            solReceived: parseFloat(row.sol_received),
+            tokensBought: parseFloat(row.tokens_bought),
+            tokensSold: parseFloat(row.tokens_sold),
+            pnlSol: parseFloat(row.sol_received) - parseFloat(row.sol_spent),
+            lastActivity: row.last_activity,
+          });
+      
+          token.summary.uniqueWallets.add(row.address);
+          token.summary.totalBuys += parseInt(row.tx_buys);
+          token.summary.totalSells += parseInt(row.tx_sells);
+          token.summary.totalSpentSOL += parseFloat(row.sol_spent);
+          token.summary.totalReceivedSOL += parseFloat(row.sol_received);
         }
-        query += `
-            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name
-            ORDER BY tk.mint, wallet_id
-        `;
-        const result = await this.pool.query(query, params);
-    
-        // Fetch SOL price for USDC conversion
-        const solPriceResponse = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
-        const solPriceData = await solPriceResponse.json();
-        const solPrice = solPriceData.pairs && solPriceData.pairs.length > 0
-            ? parseFloat(solPriceData.pairs.reduce((prev, current) =>
-                (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev).priceUsd || 150)
-            : 150;
-    
-        return result.rows.map(row => {
-            const solSpent = Number(row.sol_spent) + (Number(row.usdc_spent) / solPrice);
-            const solReceived = Number(row.sol_received) + (Number(row.usdc_received) / solPrice);
-            return {
-                mint: row.mint,
-                symbol: row.symbol,
-                name: row.name,
-                decimals: row.decimals,
-                wallet_id: row.wallet_id,
-                wallet_address: row.wallet_address,
-                wallet_name: row.wallet_name,
-                group_id: row.group_id,
-                group_name: row.group_name,
-                tx_buys: Number(row.tx_buys) || 0,
-                tx_sells: Number(row.tx_sells) || 0,
-                sol_spent: solSpent,
-                sol_received: solReceived,
-                usdc_spent: Number(row.usdc_spent) || 0,
-                usdc_received: Number(row.usdc_received) || 0,
-                tokens_bought: Number(row.tokens_bought) || 0,
-                tokens_sold: Number(row.tokens_sold) || 0,
-                pnl_sol: +(solReceived - solSpent).toFixed(6),
-                last_activity: row.last_activity
-            };
-        });
-    }
+      
+        const aggregates = Array.from(byMint.values()).map((token) => ({
+          ...token,
+          summary: {
+            ...token.summary,
+            uniqueWallets: token.summary.uniqueWallets.size,
+            netSOL: +(token.summary.totalReceivedSOL - token.summary.totalSpentSOL).toFixed(6),
+          },
+        }));
+      
+        aggregates.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+        return aggregates;
+      }
 
     async getMonitoringStats(groupId = null) {
         let query = `

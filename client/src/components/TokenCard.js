@@ -59,28 +59,20 @@ function TokenCard({ token, onOpenChart }) {
         let totalTokensSold = 0;
         let totalSpentSOL = 0;
         let totalReceivedSOL = 0;
-        let totalSpentUSDC = 0;
-        let totalReceivedUSDC = 0;
 
         token.wallets.forEach(wallet => {
             totalTokensBought += wallet.tokensBought || 0;
             totalTokensSold += wallet.tokensSold || 0;
             totalSpentSOL += wallet.solSpent || 0;
             totalReceivedSOL += wallet.solReceived || 0;
-            totalSpentUSDC += wallet.usdcSpent || 0;
-            totalReceivedUSDC += wallet.usdcReceived || 0;
         });
 
-        // Convert USDC to SOL
-        const totalSpentSOLNormalized = totalSpentSOL + (totalSpentUSDC / solPrice);
-        const totalReceivedSOLNormalized = totalReceivedSOL + (totalReceivedUSDC / solPrice);
-
         const currentHoldings = totalTokensBought - totalTokensSold;
-        const realizedPnLSOL = totalReceivedSOLNormalized - (totalTokensSold > 0 && totalTokensBought > 0 ?
-            (totalTokensSold / totalTokensBought) * totalSpentSOLNormalized : 0);
+        const realizedPnLSOL = totalReceivedSOL - (totalTokensSold > 0 && totalTokensBought > 0 ?
+            (totalTokensSold / totalTokensBought) * totalSpentSOL : 0);
         const currentTokenValueUSD = currentHoldings * priceData.price;
         const remainingCostBasisSOL = totalTokensBought > 0 ?
-            ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOLNormalized : 0;
+            ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOL : 0;
         const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
         const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
         const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
@@ -92,10 +84,8 @@ function TokenCard({ token, onOpenChart }) {
             totalTokensBought,
             totalTokensSold,
             currentHoldings,
-            totalSpentSOL: totalSpentSOLNormalized,
-            totalReceivedSOL: totalReceivedSOLNormalized,
-            totalSpentUSDC,
-            totalReceivedUSDC,
+            totalSpentSOL,
+            totalReceivedSOL,
             realizedPnLSOL,
             realizedPnLUSD,
             unrealizedPnLSOL,
@@ -189,11 +179,11 @@ function TokenCard({ token, onOpenChart }) {
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Total Spent:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalSpentSOL, 4)} SOL / {formatCurrency(groupPnL.totalSpentUSDC)}</span>
+                                <span className="font-medium">{formatNumber(groupPnL.totalSpentSOL, 4)} SOL / {formatCurrency(groupPnL.totalSpentSOL * groupPnL.solPrice)}</span>
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Total Received:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalReceivedSOL, 4)} SOL / {formatCurrency(groupPnL.totalReceivedUSDC)}</span>
+                                <span className="font-medium">{formatNumber(groupPnL.totalReceivedSOL, 4)} SOL / {formatCurrency(groupPnL.totalReceivedSOL * groupPnL.solPrice)}</span>
                             </div>
                         </div>
                         <div className="space-y-1">
@@ -219,7 +209,7 @@ function TokenCard({ token, onOpenChart }) {
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex justify-between border-t border-blue-300 pt-1">
+                            <div className="flex justify-between border-t border-blue-200 pt-1">
                                 <span className="text-gray-600 font-medium">Total PnL:</span>
                                 <div className="text-right">
                                     <div className={`font-bold ${groupPnL.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>

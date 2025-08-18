@@ -148,6 +148,10 @@ ALTER TABLE transactions
 ADD CONSTRAINT uk_transactions_signature_wallet 
 UNIQUE (signature, wallet_id);
 
+ALTER TABLE transactions
+DROP COLUMN IF EXISTS usdc_spent,
+DROP COLUMN IF EXISTS usdc_received;
+
 -- Создаем индекс для быстрого поиска
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_signature_wallet 
 ON transactions(signature, wallet_id);
