@@ -1,10 +1,28 @@
 import React from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
+    // Add null checks to prevent errors
+    if (!wallet || !wallet.address) {
+        console.warn('WalletPill: Invalid wallet data:', wallet);
+        return (
+            <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-red-50 border-red-200">
+                <div className="text-xs text-red-600">Invalid wallet data</div>
+            </div>
+        );
+    }
+
+    // Формируем метку кошелька (имя или сокращенный адрес)
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-    const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+    
+    // Цвет для PnL: зеленый для положительного, красный для отрицательного, серый для нулевого
+    // PnL уже рассчитан на backend и приходит в SOL (включая конвертацию из USDC)
+    const pnlSol = wallet.pnlSol || 0;
+    const pnlColor = pnlSol > 0 ? 'text-green-700' : pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+    
+    // Чистое количество токенов (куплено - продано)
     const netAmount = (wallet.tokensBought || 0) - (wallet.tokensSold || 0);
 
+    // Открытие графика на gmgn.ai с указанием кошелька как maker
     const openGmgnTokenWithMaker = () => {
         if (!tokenMint || !wallet.address) {
             console.warn('Missing token mint or wallet address');
@@ -14,8 +32,11 @@ function WalletPill({ wallet, tokenMint }) {
         window.open(gmgnUrl, '_blank');
     };
 
+    // Копирование адреса кошелька в буфер обмена
     const copyToClipboard = () => {
-        navigator.clipboard.writeText(wallet.address);
+        if (wallet.address) {
+            navigator.clipboard.writeText(wallet.address);
+        }
     };
 
     return (
@@ -27,6 +48,7 @@ function WalletPill({ wallet, tokenMint }) {
                         onClick={copyToClipboard}
                         className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
                         title="Copy address"
+                        disabled={!wallet.address}
                     >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path
@@ -41,6 +63,7 @@ function WalletPill({ wallet, tokenMint }) {
                         onClick={openGmgnTokenWithMaker}
                         className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
                         title="Open token chart with this wallet as maker"
+                        disabled={!tokenMint || !wallet.address}
                     >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path
@@ -52,20 +75,19 @@ function WalletPill({ wallet, tokenMint }) {
                         </svg>
                     </button>
                 </div>
-                <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+                <div className="text-[10px] text-gray-500">
+                    {wallet.txBuys || 0} buys · {wallet.txSells || 0} sells
+                </div>
             </div>
             <div className="text-right ml-2">
-                <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-                <div className="text-[9px] text-gray-400">
-                    spent {wallet.solSpent.toFixed(4)} SOL 
-                    <br />
-                    recv {wallet.solReceived.toFixed(4)} SOL
+                <div className={`text-xs font-semibold ${pnlColor}`}>
+                    {pnlSol > 0 ? '+' : ''}{pnlSol.toFixed(4)} SOL
                 </div>
-                {/* <div className="text-[9px] text-gray-400">
-                    spent {wallet.solSpent.toFixed(4)} SOL / ${(wallet.usdcSpent || 0).toFixed(2)} USDC
+                <div className="text-[9px] text-gray-400">
+                    spent {(wallet.solSpent || 0).toFixed(4)} SOL
                     <br />
-                    recv {wallet.solReceived.toFixed(4)} SOL / ${(wallet.usdcReceived || 0).toFixed(2)} USDC
-                </div> */}
+                    recv {(wallet.solReceived || 0).toFixed(4)} SOL
+                </div>
             </div>
         </div>
     );

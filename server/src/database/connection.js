@@ -249,7 +249,7 @@ class Database {
                 typeFilter += ` AND w.group_id = $${paramIndex}`;
                 queryParams.push(groupId);
             }
-
+    
             const uniqueTransactionsQuery = `
                 SELECT 
                     t.signature,
@@ -257,6 +257,9 @@ class Database {
                     t.transaction_type,
                     t.sol_spent,
                     t.sol_received,
+                    t.original_usdc_amount,
+                    t.usdc_to_sol_rate,
+                    t.sol_price_usd,
                     w.address as wallet_address,
                     w.name as wallet_name,
                     w.group_id,
@@ -265,20 +268,21 @@ class Database {
                 JOIN wallets w ON t.wallet_id = w.id
                 LEFT JOIN groups g ON w.group_id = g.id
                 WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+                AND w.is_active = true
                 ${typeFilter}
                 ORDER BY t.block_time DESC
                 LIMIT $1
             `;
-
+    
             const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
             
             if (uniqueTransactions.rows.length === 0) {
                 return [];
             }
-
+    
             const signatures = uniqueTransactions.rows.map(row => row.signature);
             const placeholders = signatures.map((_, index) => `$${index + 1}`).join(',');
-
+    
             const fullDataQuery = `
                 SELECT 
                     t.signature,
@@ -286,6 +290,9 @@ class Database {
                     t.transaction_type,
                     t.sol_spent,
                     t.sol_received,
+                    t.original_usdc_amount,
+                    t.usdc_to_sol_rate,
+                    t.sol_price_usd,
                     w.address as wallet_address,
                     w.name as wallet_name,
                     w.group_id,
@@ -302,15 +309,34 @@ class Database {
                 LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
                 LEFT JOIN tokens tk ON to_.token_id = tk.id
                 WHERE t.signature IN (${placeholders})
+                AND w.is_active = true
                 ORDER BY t.block_time DESC, t.signature, to_.id
             `;
-
+    
             const result = await this.pool.query(fullDataQuery, signatures);
             
             console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens`);
             
+            // Логируем информацию о USDC конвертации
+            const usdcTransactions = result.rows.filter(row => row.original_usdc_amount > 0);
+            if (usdcTransactions.length > 0) {
+                console.log(`💱 Found ${usdcTransactions.length} rows with USDC conversion data`);
+                
+                // Группируем по signature для подсчёта уникальных транзакций с USDC
+                const uniqueUsdcTxs = new Set(usdcTransactions.map(row => row.signature));
+                console.log(`💱 ${uniqueUsdcTxs.size} unique transactions involved USDC conversion`);
+                
+                // Примеры конвертации для отладки
+                const examples = Array.from(uniqueUsdcTxs).slice(0, 3);
+                for (const sig of examples) {
+                    const tx = usdcTransactions.find(row => row.signature === sig);
+                    const convertedSol = tx.transaction_type === 'buy' ? tx.sol_spent : tx.sol_received;
+                    console.log(`  - ${sig.slice(0, 8)}...: ${tx.original_usdc_amount} USDC → ${convertedSol} SOL (rate: ${tx.usdc_to_sol_rate})`);
+                }
+            }
+            
             return result.rows;
-
+    
         } catch (error) {
             console.error('❌ Error in getRecentTransactions:', error);
             throw error;
@@ -412,78 +438,123 @@ class Database {
         return result.rows;
     }
 
-    async getTokenWalletAggregates(hours = 24, groupId = null) {
-        let query = `
-            SELECT 
-                tk.mint,
-                tk.symbol,
-                tk.name,
-                tk.decimals,
-                w.id as wallet_id,
-                w.address as wallet_address,
-                w.name as wallet_name,
-                w.group_id,
-                g.name as group_name,
-                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
-                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
-                MAX(t.block_time) as last_activity
-            FROM tokens tk
-            JOIN token_operations to_ ON tk.id = to_.token_id
-            JOIN transactions t ON to_.transaction_id = t.id
-            JOIN wallets w ON t.wallet_id = w.id
-            LEFT JOIN groups g ON w.group_id = g.id
-            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+    async getTokenWalletAggregates(hours, groupId) {
+        const query = `
+          SELECT
+            tk.mint as token_mint,
+            tk.symbol,
+            tk.name,
+            tk.decimals,
+            w.address as wallet_address,
+            w.name as wallet_name,
+            w.group_id,
+            g.name as group_name,
+            COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
+            COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
+            -- Суммируем SOL (уже включая конвертированный USDC)
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.amount ELSE 0 END), 0) as tokens_sold,
+            -- Информация о USDC конвертации для отладки
+            COALESCE(SUM(CASE WHEN t.original_usdc_amount > 0 THEN t.original_usdc_amount ELSE 0 END), 0) as total_usdc_used,
+            AVG(CASE WHEN t.usdc_to_sol_rate > 0 THEN t.usdc_to_sol_rate ELSE NULL END) as avg_usdc_rate,
+            MAX(t.block_time) as last_activity
+          FROM token_operations to_
+          JOIN transactions t ON to_.transaction_id = t.id
+          JOIN tokens tk ON to_.token_id = tk.id
+          JOIN wallets w ON t.wallet_id = w.id
+          LEFT JOIN groups g ON w.group_id = g.id
+          WHERE t.block_time >= NOW() - INTERVAL '1 hour' * $1
+            AND ($2::text IS NULL OR w.group_id = $2::uuid)
+            AND w.is_active = true
+          GROUP BY tk.mint, tk.symbol, tk.name, tk.decimals, w.address, w.name, w.group_id, g.name
+          ORDER BY tk.mint, w.address;
         `;
-        const params = [];
-        if (groupId) {
-            query += ` AND w.group_id = $1`;
-            params.push(groupId);
+        
+        try {
+            const result = await this.pool.query(query, [hours, groupId]);
+            
+            console.log(`[${new Date().toISOString()}] 📊 getTokenWalletAggregates: Found ${result.rows.length} wallet-token combinations`);
+    
+            const byToken = new Map();
+            for (const row of result.rows) {
+                if (!byToken.has(row.token_mint)) {
+                    byToken.set(row.token_mint, {
+                        mint: row.token_mint,
+                        symbol: row.symbol,
+                        name: row.name,
+                        decimals: row.decimals,
+                        wallets: [],
+                        summary: {
+                            uniqueWallets: 0,
+                            totalBuys: 0,
+                            totalSells: 0,
+                            totalSpentSOL: 0,
+                            totalReceivedSOL: 0,
+                            totalUsdcUsed: 0, // Общее количество USDC, использованного для транзакций
+                        },
+                    });
+                }
+    
+                const token = byToken.get(row.token_mint);
+                const solSpent = Number(row.sol_spent) || 0;
+                const solReceived = Number(row.sol_received) || 0;
+                const pnlSol = solReceived - solSpent;
+                
+                token.wallets.push({
+                    address: row.wallet_address,
+                    name: row.wallet_name,
+                    groupId: row.group_id,
+                    groupName: row.group_name,
+                    txBuys: Number(row.tx_buys) || 0,
+                    txSells: Number(row.tx_sells) || 0,
+                    solSpent: solSpent,
+                    solReceived: solReceived,
+                    tokensBought: Number(row.tokens_bought) || 0,
+                    tokensSold: Number(row.tokens_sold) || 0,
+                    pnlSol: +pnlSol.toFixed(6), // PnL уже в SOL, включая конвертированный USDC
+                    usdcUsed: Number(row.total_usdc_used) || 0, // Для информации
+                    avgUsdcRate: Number(row.avg_usdc_rate) || 0, // Для информации
+                    lastActivity: row.last_activity,
+                });
+                
+                token.summary.uniqueWallets += 1;
+                token.summary.totalBuys += Number(row.tx_buys) || 0;
+                token.summary.totalSells += Number(row.tx_sells) || 0;
+                token.summary.totalSpentSOL += solSpent;
+                token.summary.totalReceivedSOL += solReceived;
+                token.summary.totalUsdcUsed += Number(row.total_usdc_used) || 0;
+            }
+    
+            const result_array = Array.from(byToken.values()).map((token) => ({
+                ...token,
+                summary: {
+                    ...token.summary,
+                    netSOL: +(token.summary.totalReceivedSOL - token.summary.totalSpentSOL).toFixed(6),
+                },
+            }));
+    
+            // Сортируем по абсолютному значению PnL (наибольший PnL/убыток сверху)
+            result_array.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+            
+            console.log(`[${new Date().toISOString()}] 📈 Returning ${result_array.length} tokens with aggregated data (USDC converted to SOL)`);
+            
+            // Логируем примеры конвертации USDC для отладки
+            const usdcTokens = result_array.filter(t => t.summary.totalUsdcUsed > 0);
+            if (usdcTokens.length > 0) {
+                console.log(`[${new Date().toISOString()}] 💱 Found ${usdcTokens.length} tokens with USDC transactions:`);
+                usdcTokens.slice(0, 3).forEach(token => {
+                    console.log(`  - ${token.symbol}: ${token.summary.totalUsdcUsed.toFixed(2)} USDC converted to SOL`);
+                });
+            }
+            
+            return result_array;
+            
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error in getTokenWalletAggregates:`, error);
+            throw error;
         }
-        query += `
-            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name
-            ORDER BY tk.mint, wallet_id
-        `;
-        const result = await this.pool.query(query, params);
-    
-        // Fetch SOL price for USDC conversion
-        const solPriceResponse = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
-        const solPriceData = await solPriceResponse.json();
-        const solPrice = solPriceData.pairs && solPriceData.pairs.length > 0
-            ? parseFloat(solPriceData.pairs.reduce((prev, current) =>
-                (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev).priceUsd || 150)
-            : 150;
-    
-        return result.rows.map(row => {
-            const solSpent = Number(row.sol_spent) + (Number(row.usdc_spent) / solPrice);
-            const solReceived = Number(row.sol_received) + (Number(row.usdc_received) / solPrice);
-            return {
-                mint: row.mint,
-                symbol: row.symbol,
-                name: row.name,
-                decimals: row.decimals,
-                wallet_id: row.wallet_id,
-                wallet_address: row.wallet_address,
-                wallet_name: row.wallet_name,
-                group_id: row.group_id,
-                group_name: row.group_name,
-                tx_buys: Number(row.tx_buys) || 0,
-                tx_sells: Number(row.tx_sells) || 0,
-                sol_spent: solSpent,
-                sol_received: solReceived,
-                usdc_spent: Number(row.usdc_spent) || 0,
-                usdc_received: Number(row.usdc_received) || 0,
-                tokens_bought: Number(row.tokens_bought) || 0,
-                tokens_sold: Number(row.tokens_sold) || 0,
-                pnl_sol: +(solReceived - solSpent).toFixed(6),
-                last_activity: row.last_activity
-            };
-        });
     }
 
     async getMonitoringStats(groupId = null) {

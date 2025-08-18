@@ -3,28 +3,8 @@ import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
     const [priceData, setPriceData] = useState(null);
-    const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
-    const [groupPnL, setGroupPnL] = useState(null);
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
-
-    const fetchSolPrice = async () => {
-        try {
-            const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
-            const data = await response.json();
-            if (data.pairs && data.pairs.length > 0) {
-                const bestPair = data.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                setSolPrice(parseFloat(bestPair.priceUsd || 150));
-            } else {
-                setSolPrice(150);
-            }
-        } catch (error) {
-            console.error('Error fetching SOL price:', error);
-            setSolPrice(150);
-        }
-    };
 
     const fetchTokenPrice = async () => {
         if (!token.mint || loadingPrice) return;
@@ -52,73 +32,9 @@ function TokenCard({ token, onOpenChart }) {
         }
     };
 
-    const calculateGroupPnL = () => {
-        if (!priceData || !priceData.price || !solPrice) return null;
-
-        let totalTokensBought = 0;
-        let totalTokensSold = 0;
-        let totalSpentSOL = 0;
-        let totalReceivedSOL = 0;
-        let totalSpentUSDC = 0;
-        let totalReceivedUSDC = 0;
-
-        token.wallets.forEach(wallet => {
-            totalTokensBought += wallet.tokensBought || 0;
-            totalTokensSold += wallet.tokensSold || 0;
-            totalSpentSOL += wallet.solSpent || 0;
-            totalReceivedSOL += wallet.solReceived || 0;
-            totalSpentUSDC += wallet.usdcSpent || 0;
-            totalReceivedUSDC += wallet.usdcReceived || 0;
-        });
-
-        // Convert USDC to SOL
-        const totalSpentSOLNormalized = totalSpentSOL + (totalSpentUSDC / solPrice);
-        const totalReceivedSOLNormalized = totalReceivedSOL + (totalReceivedUSDC / solPrice);
-
-        const currentHoldings = totalTokensBought - totalTokensSold;
-        const realizedPnLSOL = totalReceivedSOLNormalized - (totalTokensSold > 0 && totalTokensBought > 0 ?
-            (totalTokensSold / totalTokensBought) * totalSpentSOLNormalized : 0);
-        const currentTokenValueUSD = currentHoldings * priceData.price;
-        const remainingCostBasisSOL = totalTokensBought > 0 ?
-            ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOLNormalized : 0;
-        const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
-        const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
-        const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
-        const realizedPnLUSD = realizedPnLSOL * solPrice;
-        const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
-        const totalPnLSOL = totalPnLUSD / solPrice;
-
-        return {
-            totalTokensBought,
-            totalTokensSold,
-            currentHoldings,
-            totalSpentSOL: totalSpentSOLNormalized,
-            totalReceivedSOL: totalReceivedSOLNormalized,
-            totalSpentUSDC,
-            totalReceivedUSDC,
-            realizedPnLSOL,
-            realizedPnLUSD,
-            unrealizedPnLSOL,
-            unrealizedPnLUSD,
-            totalPnLSOL,
-            totalPnLUSD,
-            currentTokenValueUSD,
-            remainingCostBasisUSD,
-            currentPriceUSD: priceData.price,
-            solPrice
-        };
-    };
-
     useEffect(() => {
-        fetchSolPrice();
         fetchTokenPrice();
     }, [token.mint]);
-
-    useEffect(() => {
-        if (priceData && solPrice) {
-            setGroupPnL(calculateGroupPnL());
-        }
-    }, [priceData, solPrice, token.wallets]);
 
     const copyToClipboard = (text) => {
         navigator.clipboard.writeText(text)
@@ -179,68 +95,74 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             </div>
 
-            {groupPnL && (
+            {/* Показываем текущую цену и базовую статистику если доступно */}
+            {priceData && priceData.price > 0 && (
                 <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
                     <div className="grid grid-cols-2 gap-3 text-xs">
                         <div className="space-y-1">
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Holdings:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.currentHoldings, 0)} tokens</span>
+                                <span className="text-gray-600">Current Price:</span>
+                                <span className="font-medium">{formatCurrency(priceData.price)}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Total Spent:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalSpentSOL, 4)} SOL / {formatCurrency(groupPnL.totalSpentUSDC)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Total Received:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalReceivedSOL, 4)} SOL / {formatCurrency(groupPnL.totalReceivedUSDC)}</span>
+                                <span className="text-gray-600">24h Change:</span>
+                                <span className={`font-medium ${priceData.change24h >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {priceData.change24h >= 0 ? '+' : ''}{priceData.change24h.toFixed(2)}%
+                                </span>
                             </div>
                         </div>
                         <div className="space-y-1">
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Realized PnL:</span>
-                                <div className="text-right">
-                                    <div className={`font-medium ${groupPnL.realizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
-                                    </div>
-                                    <div className={`text-xs ${groupPnL.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.realizedPnLUSD)}
-                                    </div>
-                                </div>
+                                <span className="text-gray-600">24h Volume:</span>
+                                <span className="font-medium">{formatCurrency(priceData.volume24h)}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Unrealized PnL:</span>
-                                <div className="text-right">
-                                    <div className={`font-medium ${groupPnL.unrealizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
-                                    </div>
-                                    <div className={`text-xs ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.unrealizedPnLUSD)}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="flex justify-between border-t border-blue-300 pt-1">
-                                <span className="text-gray-600 font-medium">Total PnL:</span>
-                                <div className="text-right">
-                                    <div className={`font-bold ${groupPnL.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL
-                                    </div>
-                                    <div className={`text-xs ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.totalPnLUSD)}
-                                    </div>
-                                </div>
+                                <span className="text-gray-600">Liquidity:</span>
+                                <span className="font-medium">{formatCurrency(priceData.liquidity)}</span>
                             </div>
                         </div>
                     </div>
                 </div>
             )}
 
+            {/* Суммарная статистика группы */}
+            <div className="mb-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="space-y-1">
+                        <div className="flex justify-between">
+                            <span className="text-gray-600">Total Spent:</span>
+                            <span className="font-medium">{formatNumber(token.summary.totalSpentSOL, 4)} SOL</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-gray-600">Total Received:</span>
+                            <span className="font-medium">{formatNumber(token.summary.totalReceivedSOL, 4)} SOL</span>
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <div className="flex justify-between">
+                            <span className="text-gray-600">Net PnL (SOL):</span>
+                            <div className="text-right">
+                                <div className={`font-bold ${token.summary.netSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {token.summary.netSOL >= 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-gray-600">Transactions:</span>
+                            <span className="font-medium">{token.summary.totalBuys + token.summary.totalSells}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Список кошельков */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {token.wallets.map((w) => (
                     <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
                 ))}
             </div>
 
+            {/* Кнопки действий */}
             <div className="mt-2 flex space-x-2">
                 <button
                     onClick={onOpenChart}
