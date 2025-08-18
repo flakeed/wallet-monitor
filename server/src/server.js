@@ -636,7 +636,6 @@ app.get('/api/stats/tokens', async (req, res) => {
 app.get('/api/tokens/tracker', async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
-    // ИСПРАВЛЕНО: НЕ парсим как число, оставляем как строку UUID
     const groupId = req.query.groupId || null;
     
     console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
@@ -660,6 +659,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
             totalSells: 0,
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
+            totalSpentUSDC: 0, // Добавляем
+            totalReceivedUSDC: 0, // Добавляем
           },
         });
       }
@@ -675,6 +676,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
         txSells: Number(row.tx_sells) || 0,
         solSpent: Number(row.sol_spent) || 0,
         solReceived: Number(row.sol_received) || 0,
+        usdcSpent: Number(row.usdc_spent) || 0, // Добавляем
+        usdcReceived: Number(row.usdc_received) || 0, // Добавляем
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
         pnlSol: +pnlSol.toFixed(6),
@@ -686,6 +689,8 @@ app.get('/api/tokens/tracker', async (req, res) => {
       token.summary.totalSells += Number(row.tx_sells) || 0;
       token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
       token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalSpentUSDC += Number(row.usdc_spent) || 0; // Добавляем
+      token.summary.totalReceivedUSDC += Number(row.usdc_received) || 0; // Добавляем
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
@@ -693,6 +698,7 @@ app.get('/api/tokens/tracker', async (req, res) => {
       summary: {
         ...t.summary,
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+        netUSDC: +(t.summary.totalReceivedUSDC - t.summary.totalSpentUSDC).toFixed(6), // Добавляем
       },
     }));
 
