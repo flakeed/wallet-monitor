@@ -57,10 +57,15 @@ function WalletPill({ wallet, tokenMint }) {
             <div className="text-right ml-2">
                 <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
                 <div className="text-[9px] text-gray-400">
+                    spent {wallet.solSpent.toFixed(4)} SOL 
+                    <br />
+                    recv {wallet.solReceived.toFixed(4)} SOL
+                </div>
+                {/* <div className="text-[9px] text-gray-400">
                     spent {wallet.solSpent.toFixed(4)} SOL / ${(wallet.usdcSpent || 0).toFixed(2)} USDC
                     <br />
                     recv {wallet.solReceived.toFixed(4)} SOL / ${(wallet.usdcReceived || 0).toFixed(2)} USDC
-                </div>
+                </div> */}
             </div>
         </div>
     );
