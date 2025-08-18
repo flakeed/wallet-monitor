@@ -3,8 +3,6 @@ const { fetchTokenMetadata, redis } = require('./tokenService');
 const Database = require('../database/connection');
 const Redis = require('ioredis');
 
-const redisClient = redis.createClient({ url: process.env.REDIS_URL });
-
 class WalletMonitoringService {
     constructor() {
         this.db = new Database();
@@ -43,7 +41,7 @@ class WalletMonitoringService {
 
     async getUsdcToSolRate() {
         const cacheKey = 'usdc_to_sol_rate';
-        const cachedRate = await redisClient.get(cacheKey);
+        const cachedRate = await redis.get(cacheKey);
         if (cachedRate) return parseFloat(cachedRate);
       
         try {
@@ -51,7 +49,7 @@ class WalletMonitoringService {
           const solPriceInUsd = response.data.solana.usd;
           const usdcPriceInUsd = response.data['usd-coin'].usd;
           const rate = usdcPriceInUsd / solPriceInUsd;
-          await redisClient.setEx(cacheKey, 600, rate.toString()); // Кэш на 10 минут
+          await redis.set(cacheKey, 600, rate.toString()); // Кэш на 10 минут
           return rate;
         } catch (error) {
           console.error('Error fetching USDC/SOL rate:', error);
