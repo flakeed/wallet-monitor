@@ -727,6 +727,21 @@ app.get('/api/websocket/status', (req, res) => {
   }
 });
 
+app.get('/api/solana/price', async (req, res) => {
+  try {
+    const solPrice = await monitoringService.fetchSolPrice();
+    res.json({
+      success: true,
+      price: solPrice,
+      currency: 'USD',
+      lastUpdated: monitoringService.solPriceCache.lastUpdated
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch SOL price' });
+  }
+});
+
 app.post('/api/websocket/reconnect', async (req, res) => {
   try {
     const { groupId } = req.body;

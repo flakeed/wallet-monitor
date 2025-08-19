@@ -3,10 +3,13 @@ import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
     const [priceData, setPriceData] = useState(null);
+    const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
+    const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
+    // Fetch token price from DexScreener
     const fetchTokenPrice = async () => {
         if (!token.mint || loadingPrice) return;
         setLoadingPrice(true);
@@ -33,15 +36,36 @@ function TokenCard({ token, onOpenChart }) {
         }
     };
 
+    // Fetch SOL price from backend
+    const fetchSolPrice = async () => {
+        if (loadingSolPrice) return;
+        setLoadingSolPrice(true);
+        try {
+            const response = await fetch('/api/solana/price');
+            const data = await response.json();
+            if (data.success) {
+                setSolPrice(data.price);
+            } else {
+                console.error('Failed to fetch SOL price:', data.error);
+                setSolPrice(150); // Fallback
+            }
+        } catch (error) {
+            console.error('Error fetching SOL price:', error);
+            setSolPrice(150); // Fallback
+        } finally {
+            setLoadingSolPrice(false);
+        }
+    };
+
+    // Calculate group PnL
     const calculateGroupPnL = () => {
-        if (!priceData || !priceData.price) return null;
+        if (!priceData || !priceData.price || !solPrice) return null;
 
         let totalTokensBought = 0;
         let totalTokensSold = 0;
         let totalSpentSOL = 0;
         let totalReceivedSOL = 0;
 
-        // Теперь все данные уже в SOL, включая USDC транзакции
         token.wallets.forEach(wallet => {
             totalTokensBought += wallet.tokensBought || 0;
             totalTokensSold += wallet.tokensSold || 0;
@@ -55,9 +79,6 @@ function TokenCard({ token, onOpenChart }) {
         const currentTokenValueUSD = currentHoldings * priceData.price;
         const remainingCostBasisSOL = totalTokensBought > 0 ?
             ((totalTokensBought - totalTokensSold) / totalTokensBought) * totalSpentSOL : 0;
-        
-        // Получаем текущую цену SOL из API
-        const solPrice = 150; // Можно получить из API, но для простоты используем константу
         const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
         const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
         const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
@@ -86,13 +107,14 @@ function TokenCard({ token, onOpenChart }) {
 
     useEffect(() => {
         fetchTokenPrice();
+        fetchSolPrice();
     }, [token.mint]);
 
     useEffect(() => {
-        if (priceData && priceData.price) {
+        if (priceData && priceData.price && solPrice) {
             setGroupPnL(calculateGroupPnL());
         }
-    }, [priceData, token.wallets]);
+    }, [priceData, solPrice, token.wallets]);
 
     const copyToClipboard = (text) => {
         navigator.clipboard.writeText(text)
@@ -193,7 +215,7 @@ function TokenCard({ token, onOpenChart }) {
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex justify-between border-t border-blue-300 pt-1">
+                            <div className="flex justify-between border-t border-blue-200 pt-1">
                                 <span className="text-gray-600 font-medium">Total PnL:</span>
                                 <div className="text-right">
                                     <div className={`font-bold ${groupPnL.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
