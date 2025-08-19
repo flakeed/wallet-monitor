@@ -659,13 +659,26 @@ app.get('/api/tokens/tracker', async (req, res) => {
             totalSells: 0,
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
-            totalSpentUSDCOriginal: 0, // Для статистики
-            totalReceivedUSDCOriginal: 0, // Для статистики
+            totalSpentUSDCOriginal: 0,
+            totalReceivedUSDCOriginal: 0,
+            latestActivity: null,  // добавляем время последней активности
+            firstBuyTime: null,    // время первой покупки
           },
         });
       }
       
       const token = byToken.get(row.mint);
+      
+      // Обновляем время последней активности и первой покупки на уровне токена
+      if (!token.summary.latestActivity || new Date(row.last_activity) > new Date(token.summary.latestActivity)) {
+        token.summary.latestActivity = row.last_activity;
+      }
+      
+      if (row.first_buy_time) {
+        if (!token.summary.firstBuyTime || new Date(row.first_buy_time) < new Date(token.summary.firstBuyTime)) {
+          token.summary.firstBuyTime = row.first_buy_time;
+        }
+      }
       
       // Все значения уже в SOL благодаря конвертации на бэкенде
       token.wallets.push({
@@ -675,24 +688,25 @@ app.get('/api/tokens/tracker', async (req, res) => {
         groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0, // Уже включает USDC конвертацию
-        solReceived: Number(row.sol_received) || 0, // Уже включает USDC конвертацию
-        usdcSpentOriginal: Number(row.usdc_spent_original) || 0, // Оригинальные USDC для справки
-        usdcReceivedOriginal: Number(row.usdc_received_original) || 0, // Оригинальные USDC для справки
+        solSpent: Number(row.sol_spent) || 0,
+        solReceived: Number(row.sol_received) || 0,
+        usdcSpentOriginal: Number(row.usdc_spent_original) || 0,
+        usdcReceivedOriginal: Number(row.usdc_received_original) || 0,
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
-        pnlSol: Number(row.pnl_sol) || 0, // Уже рассчитан правильно
+        pnlSol: Number(row.pnl_sol) || 0,
         lastActivity: row.last_activity,
+        firstBuyTime: row.first_buy_time, // добавляем время первой покупки кошелька
       });
       
       // Обновляем summary
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0; // Уже в SOL
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0; // Уже в SOL
-      token.summary.totalSpentUSDCOriginal += Number(row.usdc_spent_original) || 0; // Статистика
-      token.summary.totalReceivedUSDCOriginal += Number(row.usdc_received_original) || 0; // Статистика
+      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
+      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
+      token.summary.totalSpentUSDCOriginal += Number(row.usdc_spent_original) || 0;
+      token.summary.totalReceivedUSDCOriginal += Number(row.usdc_received_original) || 0;
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
@@ -700,14 +714,24 @@ app.get('/api/tokens/tracker', async (req, res) => {
       summary: {
         ...t.summary,
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-        netUSDCOriginal: +(t.summary.totalReceivedUSDCOriginal - t.summary.totalSpentUSDCOriginal).toFixed(6), // Для статистики
+        netUSDCOriginal: +(t.summary.totalReceivedUSDCOriginal - t.summary.totalSpentUSDCOriginal).toFixed(6),
       },
+      // Сортируем кошельки внутри токена по времени последней активности (самые свежие первыми)
+      wallets: t.wallets.sort((a, b) => {
+        const timeA = new Date(a.lastActivity || 0);
+        const timeB = new Date(b.lastActivity || 0);
+        return timeB - timeA;
+      })
     }));
 
-    // Сортируем по абсолютному значению netSOL
-    result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
+    // Сортируем токены по времени последней активности (самые свежие первыми)
+    result.sort((a, b) => {
+      const timeA = new Date(a.summary.latestActivity || 0);
+      const timeB = new Date(b.summary.latestActivity || 0);
+      return timeB - timeA;
+    });
 
-    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
+    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker, sorted by latest activity`);
     console.log(`[${new Date().toISOString()}] 📊 Sample token summary:`, result[0]?.summary);
     
     res.json(result);

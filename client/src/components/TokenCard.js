@@ -189,6 +189,18 @@ function TokenCard({ token, onOpenChart }) {
         return `$${formatNumber(num)}`;
     };
 
+    const formatTime = (timeString) => {
+        if (!timeString) return 'N/A';
+        const date = new Date(timeString);
+        const now = new Date();
+        const diffInMinutes = Math.floor((now - date) / (1000 * 60));
+        
+        if (diffInMinutes < 1) return 'Just now';
+        if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+        if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
+        return `${Math.floor(diffInMinutes / 1440)}d ago`;
+    };
+
     return (
         <div className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
@@ -220,6 +232,26 @@ function TokenCard({ token, onOpenChart }) {
                     <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
                 </div>
             </div>
+
+            {/* Информация о времени активности */}
+            {(token.summary.latestActivity || token.summary.firstBuyTime) && (
+                <div className="mb-3 p-2 bg-blue-50 rounded border border-blue-200">
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                        {token.summary.latestActivity && (
+                            <div>
+                                <span className="text-gray-600">Latest Activity:</span>
+                                <div className="font-medium text-blue-700">{formatTime(token.summary.latestActivity)}</div>
+                            </div>
+                        )}
+                        {token.summary.firstBuyTime && (
+                            <div>
+                                <span className="text-gray-600">First Purchase:</span>
+                                <div className="font-medium text-green-700">{formatTime(token.summary.firstBuyTime)}</div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {groupPnL && (
                 <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
