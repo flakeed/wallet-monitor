@@ -8,125 +8,143 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest'); // новое состояние для сортировки
 
-  // Функция для агрегации данных о токенах из транзакций
-  const aggregateTokens = (transactions, hours, groupId) => {
-    const byToken = new Map();
+// Функция для агрегации данных о токенах из транзакций
+const aggregateTokens = (transactions, hours, groupId) => {
+  // Токены для исключения из трекера
+  const EXCLUDED_TOKENS = [
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    'So11111111111111111111111111111111111111112',   // Wrapped SOL
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',  // USDT (опционально)
+  ];
 
-    // Фильтруем транзакции по времени и groupId
-    const now = new Date();
-    const filteredTransactions = transactions.filter((tx) => {
+  const byToken = new Map();
+
+  // Фильтруем транзакции по времени и groupId
+  const now = new Date();
+  const filteredTransactions = transactions.filter((tx) => {
+    const txTime = new Date(tx.time);
+    const hoursDiff = (now - txTime) / (1000 * 60 * 60);
+    const matchesTimeframe = hoursDiff <= parseInt(hours);
+    const matchesGroup = !groupId || tx.wallet.group_id === groupId;
+    return matchesTimeframe && matchesGroup;
+  });
+
+  console.log(`Processing ${filteredTransactions.length} filtered transactions`);
+
+  // Агрегируем данные по токенам
+  filteredTransactions.forEach((tx) => {
+    const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
+    if (!tokens || tokens.length === 0) return;
+
+    tokens.forEach((token) => {
+      // ИСКЛЮЧАЕМ НЕЖЕЛАТЕЛЬНЫЕ ТОКЕНЫ
+      if (EXCLUDED_TOKENS.includes(token.mint)) {
+        console.log(`Excluding token ${token.symbol || token.mint} from tracker`);
+        return;
+      }
+
+      if (!byToken.has(token.mint)) {
+        byToken.set(token.mint, {
+          mint: token.mint,
+          symbol: token.symbol || 'Unknown',
+          name: token.name || 'Unknown Token',
+          decimals: token.decimals || 6,
+          wallets: [],
+          summary: {
+            uniqueWallets: new Set(),
+            totalBuys: 0,
+            totalSells: 0,
+            totalSpentSOL: 0,
+            totalReceivedSOL: 0,
+            netSOL: 0,
+            latestActivity: null, // время последней активности
+            firstBuyTime: null,   // время первой покупки
+          },
+        });
+      }
+
+      const tokenData = byToken.get(token.mint);
+      const walletAddress = tx.wallet.address;
+      const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
       const txTime = new Date(tx.time);
-      const hoursDiff = (now - txTime) / (1000 * 60 * 60);
-      const matchesTimeframe = hoursDiff <= parseInt(hours);
-      const matchesGroup = !groupId || tx.wallet.group_id === groupId;
-      return matchesTimeframe && matchesGroup;
-    });
 
-    // Агрегируем данные по токенам
-    filteredTransactions.forEach((tx) => {
-      const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
-      if (!tokens || tokens.length === 0) return;
-
-      tokens.forEach((token) => {
-        if (!byToken.has(token.mint)) {
-          byToken.set(token.mint, {
-            mint: token.mint,
-            symbol: token.symbol || 'Unknown',
-            name: token.name || 'Unknown Token',
-            decimals: token.decimals || 6,
-            wallets: [],
-            summary: {
-              uniqueWallets: new Set(),
-              totalBuys: 0,
-              totalSells: 0,
-              totalSpentSOL: 0,
-              totalReceivedSOL: 0,
-              netSOL: 0,
-              latestActivity: null, // добавляем время последней активности
-              firstBuyTime: null,   // время первой покупки
-            },
-          });
+      // Обновляем время последней активности и первой покупки на уровне токена
+      if (!tokenData.summary.latestActivity || txTime > new Date(tokenData.summary.latestActivity)) {
+        tokenData.summary.latestActivity = tx.time;
+      }
+      
+      if (tx.transactionType === 'buy') {
+        if (!tokenData.summary.firstBuyTime || txTime < new Date(tokenData.summary.firstBuyTime)) {
+          tokenData.summary.firstBuyTime = tx.time;
         }
+      }
 
-        const tokenData = byToken.get(token.mint);
-        const walletAddress = tx.wallet.address;
-        const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
-        const txTime = new Date(tx.time);
-
-        // Обновляем время последней активности и первой покупки
-        if (!tokenData.summary.latestActivity || txTime > new Date(tokenData.summary.latestActivity)) {
-          tokenData.summary.latestActivity = tx.time;
+      // Обновляем статистику кошелька
+      if (!wallet) {
+        tokenData.wallets.push({
+          address: walletAddress,
+          name: tx.wallet.name || null,
+          groupId: tx.wallet.group_id,
+          groupName: tx.wallet.group_name,
+          txBuys: tx.transactionType === 'buy' ? 1 : 0,
+          txSells: tx.transactionType === 'sell' ? 1 : 0,
+          // Теперь все значения уже в SOL (включая конвертированные USDC)
+          solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
+          solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
+          tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
+          tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
+          pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
+                  (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
+          lastActivity: tx.time,
+          firstBuyTime: tx.transactionType === 'buy' ? tx.time : null, // время первой покупки кошелька
+        });
+        tokenData.summary.uniqueWallets.add(walletAddress);
+      } else {
+        wallet.txBuys += tx.transactionType === 'buy' ? 1 : 0;
+        wallet.txSells += tx.transactionType === 'sell' ? 1 : 0;
+        wallet.solSpent += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
+        wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+        wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
+        wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
+        wallet.pnlSol = wallet.solReceived - wallet.solSpent;
+        
+        // Обновляем время последней активности кошелька
+        if (txTime > new Date(wallet.lastActivity)) {
+          wallet.lastActivity = tx.time;
         }
         
+        // Обновляем время первой покупки кошелька
         if (tx.transactionType === 'buy') {
-          if (!tokenData.summary.firstBuyTime || txTime < new Date(tokenData.summary.firstBuyTime)) {
-            tokenData.summary.firstBuyTime = tx.time;
+          if (!wallet.firstBuyTime || txTime < new Date(wallet.firstBuyTime)) {
+            wallet.firstBuyTime = tx.time;
           }
         }
+      }
 
-        // Обновляем статистику кошелька
-        if (!wallet) {
-          tokenData.wallets.push({
-            address: walletAddress,
-            name: tx.wallet.name || null,
-            groupId: tx.wallet.group_id,
-            groupName: tx.wallet.group_name,
-            txBuys: tx.transactionType === 'buy' ? 1 : 0,
-            txSells: tx.transactionType === 'sell' ? 1 : 0,
-            solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
-            solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
-            tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
-            tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
-            pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
-                    (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
-            lastActivity: tx.time,
-            firstBuyTime: tx.transactionType === 'buy' ? tx.time : null, // время первой покупки кошелька
-          });
-          tokenData.summary.uniqueWallets.add(walletAddress);
-        } else {
-          wallet.txBuys += tx.transactionType === 'buy' ? 1 : 0;
-          wallet.txSells += tx.transactionType === 'sell' ? 1 : 0;
-          wallet.solSpent += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-          wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
-          wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
-          wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
-          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
-          
-          // Обновляем время последней активности кошелька
-          if (txTime > new Date(wallet.lastActivity)) {
-            wallet.lastActivity = tx.time;
-          }
-          
-          // Обновляем время первой покупки кошелька
-          if (tx.transactionType === 'buy') {
-            if (!wallet.firstBuyTime || txTime < new Date(wallet.firstBuyTime)) {
-              wallet.firstBuyTime = tx.time;
-            }
-          }
-        }
-
-        // Обновляем summary
-        tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
-        tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
-        tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
-        tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
-      });
+      // Обновляем summary
+      tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
+      tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
+      tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
+      tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
     });
+  });
 
-    // Формируем итоговый массив токенов
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        uniqueWallets: t.summary.uniqueWallets.size,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-      },
-      // Сортируем кошельки внутри токена по времени последней активности
-      wallets: t.wallets.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity))
-    }));
+  // Формируем итоговый массив токенов
+  const result = Array.from(byToken.values()).map((t) => ({
+    ...t,
+    summary: {
+      ...t.summary,
+      uniqueWallets: t.summary.uniqueWallets.size,
+      netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
+    },
+    // Сортируем кошельки внутри токена по времени последней активности (самые свежие первыми)
+    wallets: t.wallets.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity))
+  }));
 
-    return result;
-  };
+  console.log(`Aggregated ${result.length} unique tokens (excluded ${EXCLUDED_TOKENS.length} system tokens)`);
+
+  return result;
+};
 
   // Функция сортировки токенов
   const sortTokens = (tokens, sortBy) => {

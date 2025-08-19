@@ -413,93 +413,98 @@ class Database {
     }
 
     async getTokenWalletAggregates(hours = 24, groupId = null) {
-    let query = `
-        SELECT 
-            tk.mint,
-            tk.symbol,
-            tk.name,
-            tk.decimals,
-            w.id as wallet_id,
-            w.address as wallet_address,
-            w.name as wallet_name,
-            w.group_id,
-            g.name as group_name,
-            COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
-            COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent_original,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received_original,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_bought,
-            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
-            MAX(t.block_time) as last_activity,
-            MIN(CASE WHEN to_.operation_type = 'buy' THEN t.block_time END) as first_buy_time,
-            MIN(CASE WHEN to_.operation_type = 'sell' THEN t.block_time END) as first_sell_time
-        FROM tokens tk
-        JOIN token_operations to_ ON tk.id = to_.token_id
-        JOIN transactions t ON to_.transaction_id = t.id
-        JOIN wallets w ON t.wallet_id = w.id
-        LEFT JOIN groups g ON w.group_id = g.id
-        WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
-    `;
-    const params = [];
-    if (groupId) {
-        query += ` AND w.group_id = $1`;
-        params.push(groupId);
+        // Константы для исключения
+        const EXCLUDED_TOKENS = [
+            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+            'So11111111111111111111111111111111111111112',   // Wrapped SOL
+            // Можно добавить другие токены для исключения
+        ];
+    
+        let query = `
+            SELECT 
+                tk.mint,
+                tk.symbol,
+                tk.name,
+                tk.decimals,
+                w.id as wallet_id,
+                w.address as wallet_address,
+                w.name as wallet_name,
+                w.group_id,
+                g.name as group_name,
+                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
+                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent_original,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received_original,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_bought,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
+                MAX(t.block_time) as last_activity,
+                MIN(CASE WHEN to_.operation_type = 'buy' THEN t.block_time END) as first_buy_time,
+                MIN(CASE WHEN to_.operation_type = 'sell' THEN t.block_time END) as first_sell_time
+            FROM tokens tk
+            JOIN token_operations to_ ON tk.id = to_.token_id
+            JOIN transactions t ON to_.transaction_id = t.id
+            JOIN wallets w ON t.wallet_id = w.id
+            LEFT JOIN groups g ON w.group_id = g.id
+            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+            AND tk.mint NOT IN (${EXCLUDED_TOKENS.map((_, i) => `$${i + 1}`).join(', ')})
+        `;
+        
+        const params = [...EXCLUDED_TOKENS];
+        let paramIndex = EXCLUDED_TOKENS.length + 1;
+        
+        if (groupId) {
+            query += ` AND w.group_id = $${paramIndex}`;
+            params.push(groupId);
+        }
+        
+        query += `
+            GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name
+            ORDER BY last_activity DESC, tk.mint, w.address
+        `;
+        
+        const result = await this.pool.query(query, params);
+    
+        console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows (excluded ${EXCLUDED_TOKENS.length} tokens)`);
+    
+        return result.rows.map(row => {
+            // Убедимся что все значения числовые
+            const solSpent = Number(row.sol_spent) || 0;
+            const solReceived = Number(row.sol_received) || 0;
+            const tokensBought = Number(row.tokens_bought) || 0;
+            const tokensSold = Number(row.tokens_sold) || 0;
+            const txBuys = Number(row.tx_buys) || 0;
+            const txSells = Number(row.tx_sells) || 0;
+            
+            // Простой расчет PnL для каждого кошелька
+            const pnlSol = +(solReceived - solSpent).toFixed(6);
+            
+            return {
+                mint: row.mint,
+                symbol: row.symbol || 'Unknown',
+                name: row.name || 'Unknown Token',
+                decimals: Number(row.decimals) || 9,
+                wallet_id: row.wallet_id,
+                wallet_address: row.wallet_address,
+                wallet_name: row.wallet_name,
+                group_id: row.group_id,
+                group_name: row.group_name,
+                tx_buys: txBuys,
+                tx_sells: txSells,
+                sol_spent: solSpent,
+                sol_received: solReceived,
+                usdc_spent_original: Number(row.usdc_spent_original) || 0,
+                usdc_received_original: Number(row.usdc_received_original) || 0,
+                tokens_bought: tokensBought,
+                tokens_sold: tokensSold,
+                pnl_sol: pnlSol,
+                last_activity: row.last_activity,
+                first_buy_time: row.first_buy_time,
+                first_sell_time: row.first_sell_time
+            };
+        });
     }
-    query += `
-        GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, g.name
-        ORDER BY tk.mint, w.address
-    `;
-    const result = await this.pool.query(query, params);
-
-    console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows`);
-
-    return result.rows.map(row => {
-        // Убедимся что все значения числовые
-        const solSpent = Number(row.sol_spent) || 0;
-        const solReceived = Number(row.sol_received) || 0;
-        const tokensBought = Number(row.tokens_bought) || 0;
-        const tokensSold = Number(row.tokens_sold) || 0;
-        const txBuys = Number(row.tx_buys) || 0;
-        const txSells = Number(row.tx_sells) || 0;
-        
-        // Простой расчет PnL для каждого кошелька
-        const pnlSol = +(solReceived - solSpent).toFixed(6);
-        
-        console.log(`[${new Date().toISOString()}] 🔍 Processing wallet ${row.wallet_address} for token ${row.symbol}:`);
-        console.log(`  - SOL spent: ${solSpent.toFixed(6)}`);
-        console.log(`  - SOL received: ${solReceived.toFixed(6)}`);
-        console.log(`  - Tokens bought: ${tokensBought}`);
-        console.log(`  - Tokens sold: ${tokensSold}`);
-        console.log(`  - PnL: ${pnlSol.toFixed(6)} SOL`);
-        console.log(`  - Transactions: ${txBuys} buys, ${txSells} sells`);
-        
-        return {
-            mint: row.mint,
-            symbol: row.symbol || 'Unknown',
-            name: row.name || 'Unknown Token',
-            decimals: Number(row.decimals) || 9,
-            wallet_id: row.wallet_id,
-            wallet_address: row.wallet_address,
-            wallet_name: row.wallet_name,
-            group_id: row.group_id,
-            group_name: row.group_name,
-            tx_buys: txBuys,
-            tx_sells: txSells,
-            sol_spent: solSpent,
-            sol_received: solReceived,
-            usdc_spent_original: Number(row.usdc_spent_original) || 0,
-            usdc_received_original: Number(row.usdc_received_original) || 0,
-            tokens_bought: tokensBought,
-            tokens_sold: tokensSold,
-            pnl_sol: pnlSol,
-            last_activity: row.last_activity,
-            first_buy_time: row.first_buy_time,
-            first_sell_time: row.first_sell_time
-        };
-    });
-}
 
     async getMonitoringStats(groupId = null) {
         let query = `
