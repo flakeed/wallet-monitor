@@ -18,6 +18,18 @@ function WalletPill({ wallet, tokenMint }) {
         navigator.clipboard.writeText(wallet.address);
     };
 
+    const formatTime = (timeString) => {
+        if (!timeString) return 'N/A';
+        const date = new Date(timeString);
+        const now = new Date();
+        const diffInMinutes = Math.floor((now - date) / (1000 * 60));
+        
+        if (diffInMinutes < 1) return 'now';
+        if (diffInMinutes < 60) return `${diffInMinutes}m`;
+        if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h`;
+        return `${Math.floor(diffInMinutes / 1440)}d`;
+    };
+
     return (
         <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
             <div className="truncate max-w-xs">
@@ -52,7 +64,20 @@ function WalletPill({ wallet, tokenMint }) {
                         </svg>
                     </button>
                 </div>
-                <div className="text-[10px] text-gray-500">{wallet.txBuys} buys · {wallet.txSells} sells</div>
+                <div className="flex items-center justify-between text-[10px] text-gray-500">
+                    <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
+                    {wallet.lastActivity && (
+                        <span className="text-blue-600 font-medium">
+                            {formatTime(wallet.lastActivity)}
+                        </span>
+                    )}
+                </div>
+                {/* Показываем время первой покупки, если доступно */}
+                {wallet.firstBuyTime && (
+                    <div className="text-[9px] text-green-600">
+                        First buy: {formatTime(wallet.firstBuyTime)}
+                    </div>
+                )}
             </div>
             <div className="text-right ml-2">
                 <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
