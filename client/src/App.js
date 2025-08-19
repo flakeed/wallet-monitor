@@ -469,64 +469,8 @@ function App() {
               >
                 Token Tracker
               </button>
-              <button
-                className={`text-sm px-3 py-1 rounded ${view === 'transactions' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
-                onClick={() => setView('transactions')}
-              >
-                Recent Transactions
-              </button>
             </div>
-            {view === 'transactions' && (
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Type:</span>
-                  <select
-                    value={transactionType}
-                    onChange={(e) => handleTransactionTypeChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="all">All Transactions</option>
-                    <option value="buy">Buy Only</option>
-                    <option value="sell">Sell Only</option>
-                  </select>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-500">Period:</span>
-                  <select
-                    value={timeframe}
-                    onChange={(e) => handleTimeframeChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="1">Last 1 hour</option>
-                    <option value="6">Last 6 hours</option>
-                    <option value="24">Last 24 hours</option>
-                  </select>
-                </div>
-              </div>
-            )}
           </div>
-          {view === 'transactions' && (
-            <div className="mt-4 grid grid-cols-3 gap-4">
-              <div className="bg-blue-50 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-blue-700">Total Transactions</span>
-                  <span className="font-semibold text-blue-900">{transactions.length}</span>
-                </div>
-              </div>
-              <div className="bg-green-50 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-green-700">Buy Transactions</span>
-                  <span className="font-semibold text-green-900">{transactions.filter((tx) => tx.transactionType === 'buy').length}</span>
-                </div>
-              </div>
-              <div className="bg-red-50 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-red-700">Sell Transactions</span>
-                  <span className="font-semibold text-red-900">{transactions.filter((tx) => tx.transactionType === 'sell').length}</span>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
         <WalletManager onAddWalletsBulk={handleAddWalletsBulk} onCreateGroup={createGroup} groups={groups} />
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

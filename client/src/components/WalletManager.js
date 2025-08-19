@@ -190,36 +190,6 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     setBulkValidation(null);
   };
 
-  const downloadTemplate = () => {
-    const template = `# Bulk Wallet Import Template (up to 10,000 wallets)
-# Format: address,name (name is optional)
-# One wallet per line
-# Lines starting with # are ignored
-# Maximum 10,000 wallets per import
-
-# Example wallets (replace with real addresses):
-9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Main Trading Wallet
-53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Backup Wallet
-Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
-7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Environment
-
-# Tips for large imports:
-# - Remove duplicate addresses before importing
-# - Use meaningful names for easier tracking
-# - Consider grouping wallets by strategy or purpose
-# - Monitor import progress in the UI`;
-
-    const blob = new Blob([template], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'bulk-wallet-import-template.txt';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   useEffect(() => {
     return () => {
       if (window.bulkValidationTimeout) {
@@ -272,12 +242,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
           <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex justify-between items-start mb-3">
               <h4 className="text-sm font-medium text-blue-900">Enhanced Bulk Import (up to 10,000 wallets):</h4>
-              <button
-                onClick={downloadTemplate}
-                className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700"
-              >
-                Download Template
-              </button>
+
             </div>
             <div className="text-sm text-blue-800 space-y-1">
               <p>• One wallet address per line</p>
