@@ -4,12 +4,12 @@ function WalletPill({ wallet, tokenMint }) {
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
     const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
 
-    const openDexTokenWithMaker = () => {
+    const openGmgnTokenWithMaker = () => {
         if (!tokenMint || !wallet.address) {
             console.warn('Missing token mint or wallet address');
             return;
         }
-        const gmgnUrl = `https://dexscreener.com/solana/${encodeURIComponent(tokenMint)}?maker=${encodeURIComponent(wallet.address)}`;
+        const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(tokenMint)}?maker=${encodeURIComponent(wallet.address)}`;
         window.open(gmgnUrl, '_blank');
     };
 
@@ -49,7 +49,7 @@ function WalletPill({ wallet, tokenMint }) {
                         </svg>
                     </button>
                     <button
-                        onClick={openDexTokenWithMaker}
+                        onClick={openGmgnTokenWithMaker}
                         className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
                         title="Open token chart with this wallet as maker"
                     >
