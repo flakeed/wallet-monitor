@@ -150,7 +150,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         </div>
       </div>
       
-      {/* Summary stats */}
+      {/* Summary stats
       {items.length > 0 && (
         <div className="mb-4 grid grid-cols-3 gap-4">
           <div className="bg-blue-50 rounded-lg p-3">
@@ -176,7 +176,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             </div>
           </div>
         </div>
-      )}
+      )} */}
 
       {loading ? (
         <div className="flex items-center justify-center py-12">
