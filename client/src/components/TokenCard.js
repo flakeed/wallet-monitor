@@ -154,13 +154,13 @@ function TokenCard({ token, onOpenChart }) {
             .catch(err => console.error('Failed to copy address:', err));
     };
 
-    const openGmgnChart = () => {
+    const openDexScreenerChart = () => {
         if (!token.mint) {
             console.warn('No mint address available for chart');
             return;
         }
-        const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
-        window.open(gmgnUrl, '_blank');
+        const dexScreenerUrl = `https://dexscreener.com/solana/${token.mint}`;
+        window.open(dexScreenerUrl, '_blank');
     };
 
     const formatNumber = (num, decimals = 2) => {
@@ -289,10 +289,10 @@ function TokenCard({ token, onOpenChart }) {
                     Open Chart
                 </button>
                 <button
-                    onClick={openGmgnChart}
+                    onClick={openDexScreenerChart}
                     className="flex-1 bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
                 >
-                    Open new tab
+                    DexScreener
                 </button>
             </div>
         </div>
