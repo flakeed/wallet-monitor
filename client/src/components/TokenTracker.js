@@ -58,6 +58,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             groupName: tx.wallet.group_name,
             txBuys: tx.transactionType === 'buy' ? 1 : 0,
             txSells: tx.transactionType === 'sell' ? 1 : 0,
+            // Теперь все значения уже в SOL (включая конвертированные USDC)
             solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
             solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
             tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
@@ -135,26 +136,75 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     <div className="bg-white rounded-lg shadow-sm border p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
-        <select
-          value={hours}
-          onChange={(e) => setHours(e.target.value)}
-          className="text-sm border border-gray-300 rounded px-2 py-1"
-        >
-          <option value="1">Last 1 hour</option>
-          <option value="6">Last 6 hours</option>
-          <option value="24">Last 24 hours</option>
-        </select>
+        <div className="flex items-center space-x-2">
+          <span className="text-sm text-gray-500">Period:</span>
+          <select
+            value={hours}
+            onChange={(e) => setHours(e.target.value)}
+            className="text-sm border border-gray-300 rounded px-2 py-1"
+          >
+            <option value="1">Last 1 hour</option>
+            <option value="6">Last 6 hours</option>
+            <option value="24">Last 24 hours</option>
+          </select>
+        </div>
       </div>
+      
+      {/* Summary stats */}
+      {items.length > 0 && (
+        <div className="mb-4 grid grid-cols-3 gap-4">
+          <div className="bg-blue-50 rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-blue-700">Unique Tokens</span>
+              <span className="font-semibold text-blue-900">{items.length}</span>
+            </div>
+          </div>
+          <div className="bg-green-50 rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-green-700">Total Buys</span>
+              <span className="font-semibold text-green-900">
+                {items.reduce((sum, token) => sum + token.summary.totalBuys, 0)}
+              </span>
+            </div>
+          </div>
+          <div className="bg-red-50 rounded-lg p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-red-700">Total Sells</span>
+              <span className="font-semibold text-red-900">
+                {items.reduce((sum, token) => sum + token.summary.totalSells, 0)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
-        <div className="text-gray-500">Loading...</div>
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
+          <span className="text-gray-500">Loading token data...</span>
+        </div>
       ) : error ? (
-        <div className="text-red-600">{error}</div>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div className="text-red-700 font-medium">Error loading data</div>
+          <div className="text-red-600 text-sm mt-1">{error}</div>
+        </div>
       ) : items.length === 0 ? (
-        <div className="text-gray-500">No token data for selected group/timeframe</div>
+        <div className="text-center py-12">
+          <div className="text-gray-400 mb-4">
+            <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} 
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </div>
+          <p className="text-gray-500 text-lg">No token activity found</p>
+          <p className="text-sm text-gray-400 mt-1">
+            No token transactions detected for the selected timeframe and group
+          </p>
+        </div>
       ) : (
-        <div>
+        <div className="space-y-4">
           {items.map((token) => (
-            <div key={token.mint} className="mb-4">
+            <div key={token.mint}>
               <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
             </div>
           ))}

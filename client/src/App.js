@@ -48,6 +48,8 @@ function App() {
   const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
+      console.log(`🔍 Fetching data: hours=${hours}, type=${type}, groupId=${groupId}`);
+      
       const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
       const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
       const groupsUrl = `${API_BASE}/groups`;

@@ -428,8 +428,8 @@ class Database {
                 COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent_original,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received_original,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
                 MAX(t.block_time) as last_activity
@@ -451,17 +451,21 @@ class Database {
         `;
         const result = await this.pool.query(query, params);
     
-        // Fetch SOL price for USDC conversion
-        const solPriceResponse = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
-        const solPriceData = await solPriceResponse.json();
-        const solPrice = solPriceData.pairs && solPriceData.pairs.length > 0
-            ? parseFloat(solPriceData.pairs.reduce((prev, current) =>
-                (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev).priceUsd || 150)
-            : 150;
-    
+        console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows`);
+
         return result.rows.map(row => {
-            const solSpent = Number(row.sol_spent) + (Number(row.usdc_spent) / solPrice);
-            const solReceived = Number(row.sol_received) + (Number(row.usdc_received) / solPrice);
+            // Теперь sol_spent и sol_received уже включают конвертированные USDC значения
+            const solSpent = Number(row.sol_spent) || 0;
+            const solReceived = Number(row.sol_received) || 0;
+            const pnlSol = +(solReceived - solSpent).toFixed(6);
+            
+            console.log(`[${new Date().toISOString()}] 🔍 Processing wallet ${row.wallet_address} for token ${row.symbol}:`);
+            console.log(`  - SOL spent: ${solSpent.toFixed(6)} (includes USDC conversions)`);
+            console.log(`  - SOL received: ${solReceived.toFixed(6)} (includes USDC conversions)`);
+            console.log(`  - PnL: ${pnlSol.toFixed(6)} SOL`);
+            console.log(`  - Original USDC spent: ${Number(row.usdc_spent_original || 0).toFixed(2)}`);
+            console.log(`  - Original USDC received: ${Number(row.usdc_received_original || 0).toFixed(2)}`);
+            
             return {
                 mint: row.mint,
                 symbol: row.symbol,
@@ -476,11 +480,11 @@ class Database {
                 tx_sells: Number(row.tx_sells) || 0,
                 sol_spent: solSpent,
                 sol_received: solReceived,
-                usdc_spent: Number(row.usdc_spent) || 0,
-                usdc_received: Number(row.usdc_received) || 0,
+                usdc_spent_original: Number(row.usdc_spent_original) || 0, // Для справки
+                usdc_received_original: Number(row.usdc_received_original) || 0, // Для справки
                 tokens_bought: Number(row.tokens_bought) || 0,
                 tokens_sold: Number(row.tokens_sold) || 0,
-                pnl_sol: +(solReceived - solSpent).toFixed(6),
+                pnl_sol: pnlSol,
                 last_activity: row.last_activity
             };
         });

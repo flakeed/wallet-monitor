@@ -61,11 +61,6 @@ function WalletPill({ wallet, tokenMint }) {
                     <br />
                     recv {wallet.solReceived.toFixed(4)} SOL
                 </div>
-                {/* <div className="text-[9px] text-gray-400">
-                    spent {wallet.solSpent.toFixed(4)} SOL / ${(wallet.usdcSpent || 0).toFixed(2)} USDC
-                    <br />
-                    recv {wallet.solReceived.toFixed(4)} SOL / ${(wallet.usdcReceived || 0).toFixed(2)} USDC
-                </div> */}
             </div>
         </div>
     );

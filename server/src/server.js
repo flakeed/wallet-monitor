@@ -659,14 +659,15 @@ app.get('/api/tokens/tracker', async (req, res) => {
             totalSells: 0,
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
-            totalSpentUSDC: 0, // Добавляем
-            totalReceivedUSDC: 0, // Добавляем
+            totalSpentUSDCOriginal: 0, // Для статистики
+            totalReceivedUSDCOriginal: 0, // Для статистики
           },
         });
       }
-      const token = byToken.get(row.mint);
-      const pnlSol = Number(row.sol_received) - Number(row.sol_spent);
       
+      const token = byToken.get(row.mint);
+      
+      // Все значения уже в SOL благодаря конвертации на бэкенде
       token.wallets.push({
         address: row.wallet_address,
         name: row.wallet_name,
@@ -674,23 +675,24 @@ app.get('/api/tokens/tracker', async (req, res) => {
         groupName: row.group_name,
         txBuys: Number(row.tx_buys) || 0,
         txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        usdcSpent: Number(row.usdc_spent) || 0, // Добавляем
-        usdcReceived: Number(row.usdc_received) || 0, // Добавляем
+        solSpent: Number(row.sol_spent) || 0, // Уже включает USDC конвертацию
+        solReceived: Number(row.sol_received) || 0, // Уже включает USDC конвертацию
+        usdcSpentOriginal: Number(row.usdc_spent_original) || 0, // Оригинальные USDC для справки
+        usdcReceivedOriginal: Number(row.usdc_received_original) || 0, // Оригинальные USDC для справки
         tokensBought: Number(row.tokens_bought) || 0,
         tokensSold: Number(row.tokens_sold) || 0,
-        pnlSol: +pnlSol.toFixed(6),
+        pnlSol: Number(row.pnl_sol) || 0, // Уже рассчитан правильно
         lastActivity: row.last_activity,
       });
       
+      // Обновляем summary
       token.summary.uniqueWallets += 1;
       token.summary.totalBuys += Number(row.tx_buys) || 0;
       token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
-      token.summary.totalSpentUSDC += Number(row.usdc_spent) || 0; // Добавляем
-      token.summary.totalReceivedUSDC += Number(row.usdc_received) || 0; // Добавляем
+      token.summary.totalSpentSOL += Number(row.sol_spent) || 0; // Уже в SOL
+      token.summary.totalReceivedSOL += Number(row.sol_received) || 0; // Уже в SOL
+      token.summary.totalSpentUSDCOriginal += Number(row.usdc_spent_original) || 0; // Статистика
+      token.summary.totalReceivedUSDCOriginal += Number(row.usdc_received_original) || 0; // Статистика
     }
 
     const result = Array.from(byToken.values()).map((t) => ({
@@ -698,13 +700,16 @@ app.get('/api/tokens/tracker', async (req, res) => {
       summary: {
         ...t.summary,
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-        netUSDC: +(t.summary.totalReceivedUSDC - t.summary.totalSpentUSDC).toFixed(6), // Добавляем
+        netUSDCOriginal: +(t.summary.totalReceivedUSDCOriginal - t.summary.totalSpentUSDCOriginal).toFixed(6), // Для статистики
       },
     }));
 
+    // Сортируем по абсолютному значению netSOL
     result.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
 
     console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker`);
+    console.log(`[${new Date().toISOString()}] 📊 Sample token summary:`, result[0]?.summary);
+    
     res.json(result);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);

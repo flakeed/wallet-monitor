@@ -25,6 +25,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_group_active
 ON wallets(group_id, is_active) 
 WHERE is_active = true;
 
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_type_time 
+ON transactions(transaction_type, block_time DESC);
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_wallet_time 
+ON transactions(wallet_id, block_time DESC) 
+INCLUDE (transaction_type, sol_spent, sol_received);
+
 -- 3. Функция для массового добавления кошельков с оптимизацией
 CREATE OR REPLACE FUNCTION bulk_insert_wallets(
     wallet_data jsonb[],
@@ -139,14 +146,26 @@ WHERE id IN (
     SELECT id FROM duplicates WHERE row_num > 1
 );
 
-ALTER TABLE transactions
-ADD COLUMN IF NOT EXISTS usdc_spent NUMERIC DEFAULT 0,
-ADD COLUMN IF NOT EXISTS usdc_received NUMERIC DEFAULT 0;
-
--- Добавляем уникальное ограничение
 ALTER TABLE transactions 
-ADD CONSTRAINT uk_transactions_signature_wallet 
-UNIQUE (signature, wallet_id);
+ADD CONSTRAINT check_sol_amounts_positive 
+CHECK (sol_spent >= 0 AND sol_received >= 0);
+
+ALTER TABLE transactions 
+ADD CONSTRAINT check_usdc_amounts_positive 
+CHECK (usdc_spent >= 0 AND usdc_received >= 0);
+
+-- Добавляем ограничение для логической консистентности
+ALTER TABLE transactions 
+ADD CONSTRAINT check_transaction_logic 
+CHECK (
+    (transaction_type = 'buy' AND sol_spent > 0 AND sol_received = 0) OR
+    (transaction_type = 'sell' AND sol_received > 0 AND sol_spent = 0)
+);
+
+-- Создаем индекс для мониторинга конвертации
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_usdc_monitoring 
+ON transactions(block_time, usdc_spent, usdc_received) 
+WHERE (usdc_spent > 0 OR usdc_received > 0);
 
 -- Создаем индекс для быстрого поиска
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_signature_wallet 

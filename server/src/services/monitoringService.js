@@ -4,7 +4,7 @@ const Database = require('../database/connection');
 const Redis = require('ioredis');
 
 class WalletMonitoringService {
-    constructor() {
+constructor() {
         this.db = new Database();
         this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', {
             commitment: 'confirmed',
@@ -12,7 +12,7 @@ class WalletMonitoringService {
         });
         this.isMonitoring = false;
         this.processedSignatures = new Set();
-        this.recentlyProcessed = new Set(); // Добавляем кэш для предотвращения дубликатов
+        this.recentlyProcessed = new Set();
         this.stats = {
             totalScans: 0,
             totalWallets: 0,
@@ -26,6 +26,12 @@ class WalletMonitoringService {
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
         this.batchSize = 400;
+        // Кэш цены SOL для уменьшения количества запросов к API
+        this.solPriceCache = {
+            price: 150,
+            lastUpdated: 0,
+            cacheTimeout: 60000 // 1 минута
+        };
         console.log(`[${new Date().toISOString()}] 🔧 MonitoringService initialized`);
     }
 
@@ -185,217 +191,240 @@ class WalletMonitoringService {
         return null;
     }
 
-    async fetchSolPrice() {
-        try {
-            const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
-            const data = await response.json();
-            if (data.pairs && data.pairs.length > 0) {
-                const bestPair = data.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                return parseFloat(bestPair.priceUsd || 150);
-            }
-            return 150; // Fallback price
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);
-            return 150; // Fallback price
-        }
+ // Обновленный метод для получения цены SOL с кэшем
+ async fetchSolPrice() {
+    const now = Date.now();
+    
+    // Проверяем кэш
+    if (now - this.solPriceCache.lastUpdated < this.solPriceCache.cacheTimeout) {
+        console.log(`[${new Date().toISOString()}] 💰 Using cached SOL price: $${this.solPriceCache.price}`);
+        return this.solPriceCache.price;
     }
 
-    async processTransaction(sig, wallet) {
-        try {
-            if (!sig.signature || !sig.blockTime) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Invalid signature object:`, sig);
+    try {
+        console.log(`[${new Date().toISOString()}] 💰 Fetching fresh SOL price from DexScreener...`);
+        const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112');
+        const data = await response.json();
+        
+        if (data.pairs && data.pairs.length > 0) {
+            const bestPair = data.pairs.reduce((prev, current) =>
+                (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
+            );
+            const newPrice = parseFloat(bestPair.priceUsd || 150);
+            
+            // Обновляем кэш
+            this.solPriceCache = {
+                price: newPrice,
+                lastUpdated: now,
+                cacheTimeout: 60000
+            };
+            
+            console.log(`[${new Date().toISOString()}] 💰 Updated SOL price: $${newPrice}`);
+            return newPrice;
+        }
+        
+        console.warn(`[${new Date().toISOString()}] ⚠️ No SOL price data found, using fallback`);
+        return this.solPriceCache.price; // Возвращаем закэшированную цену
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);
+        return this.solPriceCache.price; // Возвращаем закэшированную цену при ошибке
+    }
+}
+
+async processTransaction(sig, wallet) {
+    try {
+        if (!sig.signature || !sig.blockTime) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Invalid signature object:`, sig);
+            return null;
+        }
+
+        const existingTx = await this.db.pool.query(
+            'SELECT id FROM transactions WHERE signature = $1 AND wallet_id = $2',
+            [sig.signature, wallet.id]
+        );
+        if (existingTx.rows.length > 0) {
+            console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed for wallet ${wallet.address}`);
+            return null;
+        }
+
+        const processedKey = `${sig.signature}-${wallet.id}`;
+        if (this.recentlyProcessed.has(processedKey)) {
+            console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} recently processed for wallet ${wallet.address}`);
+            return null;
+        }
+        this.recentlyProcessed.add(processedKey);
+
+        if (this.recentlyProcessed.size > 1000) {
+            const toDelete = Array.from(this.recentlyProcessed).slice(0, 500);
+            toDelete.forEach(key => this.recentlyProcessed.delete(key));
+        }
+
+        console.log(`[${new Date().toISOString()}] 🔍 Processing transaction ${sig.signature} for wallet ${wallet.address}`);
+
+        const tx = await this.fetchTransactionWithRetry(sig.signature);
+        if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Invalid transaction ${sig.signature} - missing metadata`);
+            return null;
+        }
+
+        const walletPubkey = wallet.address;
+        let walletIndex = -1;
+        if (tx.transaction.message.accountKeys) {
+            if (Array.isArray(tx.transaction.message.accountKeys)) {
+                walletIndex = tx.transaction.message.accountKeys.findIndex(
+                    (key) => key.pubkey ? key.pubkey.toString() === walletPubkey : key.toString() === walletPubkey
+                );
+            } else if (tx.transaction.message.staticAccountKeys) {
+                walletIndex = tx.transaction.message.staticAccountKeys.findIndex(
+                    (key) => key.toString() === walletPubkey
+                );
+            }
+            if (walletIndex === -1 && tx.transaction.message.addressTableLookups) {
+                console.warn(`[${new Date().toISOString()}] ⚠️ Versioned transaction with address table lookups not fully supported yet`);
                 return null;
             }
-    
-            const existingTx = await this.db.pool.query(
+        }
+
+        if (walletIndex === -1) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletPubkey} not found in transaction ${sig.signature}`);
+            return null;
+        }
+
+        // Analyze SOL balance change
+        const preBalance = tx.meta.preBalances[walletIndex] || 0;
+        const postBalance = tx.meta.postBalances[walletIndex] || 0;
+        const solChange = (postBalance - preBalance) / 1e9;
+
+        console.log(`[${new Date().toISOString()}] 💰 SOL balance change for ${walletPubkey}:`);
+        console.log(`  - Pre: ${(preBalance / 1e9).toFixed(6)} SOL`);
+        console.log(`  - Post: ${(postBalance / 1e9).toFixed(6)} SOL`);
+        console.log(`  - Change: ${solChange.toFixed(6)} SOL`);
+
+        // Analyze token changes, including USDC
+        const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+        let transactionType, totalSolAmount = 0, usdcAmount = 0;
+        const FEE_THRESHOLD = 0.01;
+        let tokenChanges = [];
+
+        // Получаем актуальную цену SOL для конвертации USDC
+        const solPrice = await this.fetchSolPrice();
+        console.log(`[${new Date().toISOString()}] 💰 Current SOL price: ${solPrice}`);
+
+        // Check for USDC balance changes
+        let usdcChange = 0;
+        const usdcPreBalance = (tx.meta.preTokenBalances || []).find(b => b.mint === USDC_MINT && b.owner === walletPubkey);
+        const usdcPostBalance = (tx.meta.postTokenBalances || []).find(b => b.mint === USDC_MINT && b.owner === walletPubkey);
+        
+        if (usdcPreBalance && usdcPostBalance) {
+            usdcChange = (Number(usdcPostBalance.uiTokenAmount.amount) - Number(usdcPreBalance.uiTokenAmount.amount)) / 1e6;
+        } else if (usdcPostBalance) {
+            usdcChange = Number(usdcPostBalance.uiTokenAmount.uiAmount || 0);
+        } else if (usdcPreBalance) {
+            usdcChange = -Number(usdcPreBalance.uiTokenAmount.uiAmount || 0);
+        }
+
+        console.log(`[${new Date().toISOString()}] 💵 USDC change: ${usdcChange.toFixed(2)} USDC`);
+
+        // Определяем тип транзакции и конвертируем USDC в SOL
+        if (usdcChange !== 0) {
+            // USDC-based transaction - конвертируем в SOL
+            usdcAmount = Math.abs(usdcChange);
+            const usdcSolEquivalent = usdcAmount / solPrice; // USDC в SOL
+            
+            if (usdcChange < 0) {
+                transactionType = 'buy';
+                totalSolAmount = usdcSolEquivalent; // Потрачено в SOL эквиваленте
+                console.log(`[${new Date().toISOString()}] 🛒 Detected USDC BUY: spent ${usdcAmount.toFixed(2)} USDC = ${totalSolAmount.toFixed(6)} SOL equivalent`);
+            } else if (usdcChange > 0) {
+                transactionType = 'sell';
+                totalSolAmount = usdcSolEquivalent; // Получено в SOL эквиваленте
+                console.log(`[${new Date().toISOString()}] 💸 Detected USDC SELL: received ${usdcAmount.toFixed(2)} USDC = ${totalSolAmount.toFixed(6)} SOL equivalent`);
+            }
+            tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType, walletPubkey);
+        } else if (solChange < -FEE_THRESHOLD) {
+            // SOL-based transaction
+            transactionType = 'buy';
+            totalSolAmount = Math.abs(solChange);
+            console.log(`[${new Date().toISOString()}] 🛒 Detected SOL BUY: spent ${totalSolAmount.toFixed(6)} SOL`);
+            tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType, walletPubkey);
+        } else if (solChange > 0.001) {
+            // SOL-based transaction
+            transactionType = 'sell';
+            totalSolAmount = solChange;
+            console.log(`[${new Date().toISOString()}] 💸 Detected SOL SELL: received ${totalSolAmount.toFixed(6)} SOL`);
+            tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType, walletPubkey);
+        } else {
+            console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - SOL change too small: ${solChange.toFixed(6)} (likely just fees)`);
+            return null;
+        }
+
+        if (tokenChanges.length === 0) {
+            console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
+            return null;
+        }
+
+        console.log(`[${new Date().toISOString()}] ✅ Found ${tokenChanges.length} token changes, saving transaction`);
+
+        return await this.db.withTransaction(async (client) => {
+            const finalCheck = await client.query(
                 'SELECT id FROM transactions WHERE signature = $1 AND wallet_id = $2',
                 [sig.signature, wallet.id]
             );
-            if (existingTx.rows.length > 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already processed for wallet ${wallet.address}`);
+            if (finalCheck.rows.length > 0) {
+                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already exists, skipping insert`);
                 return null;
             }
-    
-            const processedKey = `${sig.signature}-${wallet.id}`;
-            if (this.recentlyProcessed.has(processedKey)) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} recently processed for wallet ${wallet.address}`);
-                return null;
-            }
-            this.recentlyProcessed.add(processedKey);
-    
-            if (this.recentlyProcessed.size > 1000) {
-                const toDelete = Array.from(this.recentlyProcessed).slice(0, 500);
-                toDelete.forEach(key => this.recentlyProcessed.delete(key));
-            }
-    
-            console.log(`[${new Date().toISOString()}] 🔍 Processing transaction ${sig.signature} for wallet ${wallet.address}`);
-    
-            const tx = await this.fetchTransactionWithRetry(sig.signature);
-            if (!tx || !tx.meta || !tx.meta.preBalances || !tx.meta.postBalances) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Invalid transaction ${sig.signature} - missing metadata`);
-                return null;
-            }
-    
-            const walletPubkey = wallet.address;
-            let walletIndex = -1;
-            if (tx.transaction.message.accountKeys) {
-                if (Array.isArray(tx.transaction.message.accountKeys)) {
-                    walletIndex = tx.transaction.message.accountKeys.findIndex(
-                        (key) => key.pubkey ? key.pubkey.toString() === walletPubkey : key.toString() === walletPubkey
-                    );
-                } else if (tx.transaction.message.staticAccountKeys) {
-                    walletIndex = tx.transaction.message.staticAccountKeys.findIndex(
-                        (key) => key.toString() === walletPubkey
-                    );
-                }
-                if (walletIndex === -1 && tx.transaction.message.addressTableLookups) {
-                    console.warn(`[${new Date().toISOString()}] ⚠️ Versioned transaction with address table lookups not fully supported yet`);
-                    return null;
-                }
-            }
-    
-            if (walletIndex === -1) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletPubkey} not found in transaction ${sig.signature}`);
-                return null;
-            }
-    
-            // Analyze SOL balance change
-            const preBalance = tx.meta.preBalances[walletIndex] || 0;
-            const postBalance = tx.meta.postBalances[walletIndex] || 0;
-            const solChange = (postBalance - preBalance) / 1e9;
-    
-            console.log(`[${new Date().toISOString()}] 💰 SOL balance change for ${walletPubkey}:`);
-            console.log(`  - Pre: ${(preBalance / 1e9).toFixed(6)} SOL`);
-            console.log(`  - Post: ${(postBalance / 1e9).toFixed(6)} SOL`);
-            console.log(`  - Change: ${solChange.toFixed(6)} SOL`);
-    
-            // Analyze token changes, including USDC
-            const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-            let transactionType, solAmount, usdcAmount = 0;
-            const FEE_THRESHOLD = 0.01;
-            let tokenChanges = [];
-    
-            // Fetch SOL price for USDC conversion
-            const solPrice = await this.fetchSolPrice();
-            if (!solPrice) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Could not fetch SOL price, using fallback`);
-                return null;
-            }
-    
-            // Check for USDC balance changes
-            let usdcChange = 0;
-            const usdcPreBalance = (tx.meta.preTokenBalances || []).find(b => b.mint === USDC_MINT && b.owner === walletPubkey);
-            const usdcPostBalance = (tx.meta.postTokenBalances || []).find(b => b.mint === USDC_MINT && b.owner === walletPubkey);
-            if (usdcPreBalance && usdcPostBalance) {
-                usdcChange = (Number(usdcPostBalance.uiTokenAmount.amount) - Number(usdcPreBalance.uiTokenAmount.amount)) / 1e6; // USDC has 6 decimals
-            } else if (usdcPostBalance) {
-                usdcChange = Number(usdcPostBalance.uiTokenAmount.uiAmount || 0);
-            } else if (usdcPreBalance) {
-                usdcChange = -Number(usdcPreBalance.uiTokenAmount.uiAmount || 0);
-            }
-    
-            // Determine transaction type
-            if (usdcChange !== 0) {
-                // USDC-based transaction
-                if (usdcChange < 0) {
-                    transactionType = 'buy';
-                    usdcAmount = Math.abs(usdcChange);
-                    solAmount = usdcAmount / solPrice; // Convert USDC to SOL
-                    console.log(`[${new Date().toISOString()}] 🛒 Detected USDC BUY: spent ${usdcAmount.toFixed(2)} USDC (${solAmount.toFixed(6)} SOL)`);
-                } else if (usdcChange > 0) {
-                    transactionType = 'sell';
-                    usdcAmount = usdcChange;
-                    solAmount = usdcAmount / solPrice; // Convert USDC to SOL
-                    console.log(`[${new Date().toISOString()}] 💸 Detected USDC SELL: received ${usdcAmount.toFixed(2)} USDC (${solAmount.toFixed(6)} SOL)`);
-                }
-                tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType, walletPubkey);
-            } else if (solChange < -FEE_THRESHOLD) {
-                transactionType = 'buy';
-                solAmount = Math.abs(solChange);
-                console.log(`[${new Date().toISOString()}] 🛒 Detected SOL BUY: spent ${solAmount.toFixed(6)} SOL`);
-                tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType, walletPubkey);
-            } else if (solChange > 0.001) {
-                transactionType = 'sell';
-                solAmount = solChange;
-                console.log(`[${new Date().toISOString()}] 💸 Detected SOL SELL: received ${solAmount.toFixed(6)} SOL`);
-                tokenChanges = await this.analyzeTokenChanges(tx.meta, transactionType, walletPubkey);
-            } else {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - SOL change too small: ${solChange.toFixed(6)} (likely just fees)`);
-                return null;
-            }
-    
-            if (tokenChanges.length === 0) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} - no token changes detected`);
-                console.log(`[${new Date().toISOString()}] 🔍 Enhanced debug info for ${sig.signature}:`);
-                console.log(`  - Transaction version: ${tx.version}`);
-                console.log(`  - Pre-token balances: ${JSON.stringify((tx.meta.preTokenBalances || []).map(b => ({mint: b.mint, amount: b.uiTokenAmount.uiAmount})))}`);
-                console.log(`  - Post-token balances: ${JSON.stringify((tx.meta.postTokenBalances || []).map(b => ({mint: b.mint, amount: b.uiTokenAmount.uiAmount})))}`);
-                console.log(`  - Instructions count: ${tx.transaction.message.instructions?.length || 0}`);
-                console.log(`  - Inner instructions: ${tx.meta.innerInstructions?.length || 0}`);
-                return null;
-            }
-    
-            console.log(`[${new Date().toISOString()}] ✅ Found ${tokenChanges.length} token changes, saving transaction`);
-    
-            return await this.db.withTransaction(async (client) => {
-                const finalCheck = await client.query(
-                    'SELECT id FROM transactions WHERE signature = $1 AND wallet_id = $2',
-                    [sig.signature, wallet.id]
-                );
-                if (finalCheck.rows.length > 0) {
-                    console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} already exists, skipping insert`);
-                    return null;
-                }
-    
-                const query = `
-                    INSERT INTO transactions (
-                        wallet_id, signature, block_time, transaction_type,
-                        sol_spent, sol_received, usdc_spent, usdc_received
-                    ) 
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    RETURNING id, signature, transaction_type
-                `;
-                const result = await client.query(query, [
-                    wallet.id,
-                    sig.signature,
-                    new Date(sig.blockTime * 1000).toISOString(),
-                    transactionType,
-                    transactionType === 'buy' && !usdcAmount ? solAmount : 0,
-                    transactionType === 'sell' && !usdcAmount ? solAmount : 0,
-                    transactionType === 'buy' && usdcAmount ? usdcAmount : 0,
-                    transactionType === 'sell' && usdcAmount ? usdcAmount : 0,
-                ]);
-    
-                if (result.rows.length === 0) {
-                    console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} was already inserted by another process`);
-                    return null;
-                }
-    
-                const transaction = result.rows[0];
-                const tokenSavePromises = tokenChanges.map((tokenChange) =>
-                    this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType)
-                );
-                await Promise.all(tokenSavePromises);
-    
-                console.log(`[${new Date().toISOString()}] ✅ Successfully saved transaction ${sig.signature} with ${tokenChanges.length} token operations`);
-    
-                return {
-                    signature: sig.signature,
-                    type: transactionType,
-                    solAmount,
-                    usdcAmount,
-                    tokensChanged: tokenChanges,
-                };
-            });
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature}:`, error.message);
-            console.error(`[${new Date().toISOString()}] ❌ Stack trace:`, error.stack);
-            return null;
-        }
-    }
 
+            // ВАЖНО: Сохраняем всё в SOL эквиваленте
+            const query = `
+                INSERT INTO transactions (
+                    wallet_id, signature, block_time, transaction_type,
+                    sol_spent, sol_received, usdc_spent, usdc_received
+                ) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING id, signature, transaction_type
+            `;
+            const result = await client.query(query, [
+                wallet.id,
+                sig.signature,
+                new Date(sig.blockTime * 1000).toISOString(),
+                transactionType,
+                // Если USDC транзакция - сохраняем в SOL эквиваленте, иначе используем реальные SOL
+                transactionType === 'buy' ? totalSolAmount : 0,
+                transactionType === 'sell' ? totalSolAmount : 0,
+                // Оригинальные USDC значения для справки (опционально)
+                transactionType === 'buy' && usdcAmount ? usdcAmount : 0,
+                transactionType === 'sell' && usdcAmount ? usdcAmount : 0,
+            ]);
+
+            if (result.rows.length === 0) {
+                console.log(`[${new Date().toISOString()}] ℹ️ Transaction ${sig.signature} was already inserted by another process`);
+                return null;
+            }
+
+            const transaction = result.rows[0];
+            const tokenSavePromises = tokenChanges.map((tokenChange) =>
+                this.saveTokenOperationInTransaction(client, transaction.id, tokenChange, transactionType)
+            );
+            await Promise.all(tokenSavePromises);
+
+            console.log(`[${new Date().toISOString()}] ✅ Successfully saved transaction ${sig.signature} with ${tokenChanges.length} token operations`);
+            console.log(`[${new Date().toISOString()}] 💰 Transaction summary: ${transactionType} ${totalSolAmount.toFixed(6)} SOL${usdcAmount ? ` (from ${usdcAmount.toFixed(2)} USDC)` : ''}`);
+
+            return {
+                signature: sig.signature,
+                type: transactionType,
+                solAmount: totalSolAmount, // Возвращаем унифицированное значение в SOL
+                usdcAmount,
+                tokensChanged: tokenChanges,
+            };
+        });
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error processing transaction ${sig.signature}:`, error.message);
+        console.error(`[${new Date().toISOString()}] ❌ Stack trace:`, error.stack);
+        return null;
+    }
+}
     async analyzeTokenChanges(meta, transactionType, walletAddress) {
         const WRAPPED_SOL_MINT = 'So11111111111111111111111111111111111111112';
         const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
