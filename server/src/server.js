@@ -19,7 +19,7 @@ const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-this-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.KMUFsIDTnFmyG3nMiGM6H9FNFUROf3wh7SmqJp-QV30';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const sseClients = new Set();
