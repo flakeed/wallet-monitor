@@ -6,10 +6,14 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
+import TelegramAuth from './components/TelegramAuth';
+import AdminPanel from './components/AdminPanel';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken'));
   const [wallets, setWallets] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
@@ -21,15 +25,85 @@ function App() {
   const [view, setView] = useState('tokens');
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+
+  // Authentication check on app load
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = localStorage.getItem('authToken');
+      const userData = localStorage.getItem('userData');
+      
+      if (token && userData) {
+        try {
+          // Verify token is still valid
+          const response = await fetch(`${API_BASE}/auth/verify`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            setUser(result.user);
+            setAuthToken(token);
+          } else {
+            // Token invalid, clear storage
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('userData');
+            setAuthToken(null);
+            setUser(null);
+          }
+        } catch (error) {
+          console.error('Auth verification failed:', error);
+          localStorage.removeItem('authToken');
+          localStorage.removeItem('userData');
+          setAuthToken(null);
+          setUser(null);
+        }
+      }
+      setLoading(false);
+    };
+
+    checkAuth();
+  }, []);
+
+  // Fetch data only when authenticated
+  useEffect(() => {
+    if (authToken && user) {
+      fetchData();
+    }
+  }, [refreshKey, authToken, user]);
+
+  const handleAuthSuccess = (userData, token) => {
+    setUser(userData);
+    setAuthToken(token);
+    setLoading(false);
+  };
+
+  const handleAuthFailure = (message) => {
+    setError(message);
+    setLoading(false);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('userData');
+    setUser(null);
+    setAuthToken(null);
+    setWallets([]);
+    setTransactions([]);
+    setGroups([]);
+  };
+
+  const getAuthHeaders = () => ({
+    'Authorization': `Bearer ${authToken}`,
+    'Content-Type': 'application/json'
+  });
 
   const removeAllWallets = async () => {
     try {
       const url = selectedGroup ? `${API_BASE}/wallets?groupId=${selectedGroup}` : `${API_BASE}/wallets`;
       const response = await fetch(url, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -54,10 +128,10 @@ function App() {
       const groupsUrl = `${API_BASE}/groups`;
 
       const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
-        fetch(walletsUrl),
-        fetch(transactionsUrl),
-        fetch(`${API_BASE}/monitoring/status${groupId ? `?groupId=${groupId}` : ''}`),
-        fetch(groupsUrl),
+        fetch(walletsUrl, { headers: getAuthHeaders() }),
+        fetch(transactionsUrl, { headers: getAuthHeaders() }),
+        fetch(`${API_BASE}/monitoring/status${groupId ? `?groupId=${groupId}` : ''}`, { headers: getAuthHeaders() }),
+        fetch(groupsUrl, { headers: getAuthHeaders() }),
       ]);
 
       if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
@@ -83,14 +157,24 @@ function App() {
     }
   };
 
+  // SSE connection with authentication
   useEffect(() => {
+    if (!authToken || !user) return;
+
     const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
-    const eventSource = new EventSource(sseUrl);
+    const eventSource = new EventSource(sseUrl, {
+      headers: getAuthHeaders()
+    });
 
     eventSource.onmessage = (event) => {
       try {
         const newTransaction = JSON.parse(event.data);
         console.log('New transaction received via SSE:', newTransaction);
+
+        // Check if transaction belongs to current user
+        if (newTransaction.userId !== user.id) {
+          return; // Ignore transactions from other users
+        }
 
         const now = new Date();
         const txTime = new Date(newTransaction.timestamp);
@@ -142,7 +226,7 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets, selectedGroup]);
+  }, [timeframe, transactionType, wallets, selectedGroup, authToken, user]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
@@ -164,7 +248,7 @@ function App() {
     try {
       await fetch(`${API_BASE}/groups/switch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ groupId: selectedGroupId }),
       });
       fetchData(timeframe, transactionType, selectedGroupId);
@@ -189,9 +273,7 @@ function App() {
 
         const response = await fetch('/api/wallets/bulk', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: getAuthHeaders(),
           body: JSON.stringify({
             wallets: chunk,
             groupId
@@ -364,6 +446,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/wallets/${address}`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
 
       const data = await response.json();
@@ -383,7 +466,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/groups`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ name }),
       });
 
@@ -404,7 +487,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/monitoring/toggle`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ action, groupId: selectedGroup }),
       });
 
@@ -420,15 +503,21 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    fetchData();
-  }, [refreshKey]);
+  // Show authentication screen if not logged in
+  if (!authToken || !user) {
+    return (
+      <TelegramAuth
+        onAuthSuccess={handleAuthSuccess}
+        onAuthFailure={handleAuthFailure}
+      />
+    );
+  }
 
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 py-8 px-4">
         <div className="max-w-6xl mx-auto">
-          <Header />
+          <Header user={user} onLogout={handleLogout} onAdminPanel={() => setShowAdminPanel(true)} />
           <LoadingSpinner />
         </div>
       </div>
@@ -438,9 +527,10 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
       <div className="max-w-6xl mx-auto">
-        <Header />
+        <Header user={user} onLogout={handleLogout} onAdminPanel={() => setShowAdminPanel(true)} />
         {error && <ErrorMessage error={error} />}
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
+        
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -472,7 +562,13 @@ function App() {
             </div>
           </div>
         </div>
-        <WalletManager onAddWalletsBulk={handleAddWalletsBulk} onCreateGroup={createGroup} groups={groups} />
+
+        <WalletManager 
+          onAddWalletsBulk={handleAddWalletsBulk} 
+          onCreateGroup={createGroup} 
+          groups={groups} 
+        />
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <WalletList
@@ -483,10 +579,22 @@ function App() {
           </div>
           <div className="lg:col-span-2">
             {view === 'tokens' && (
-              <TokenTracker groupId={selectedGroup} transactions={transactions} timeframe={timeframe} />
+              <TokenTracker 
+                groupId={selectedGroup} 
+                transactions={transactions} 
+                timeframe={timeframe} 
+              />
             )}
           </div>
         </div>
+
+        {/* Admin Panel Modal */}
+        {showAdminPanel && (
+          <AdminPanel
+            user={user}
+            onClose={() => setShowAdminPanel(false)}
+          />
+        )}
       </div>
     </div>
   );

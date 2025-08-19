@@ -38,6 +38,7 @@ class Database {
                     try {
                         await client.query(statement);
                     } catch (err) {
+                        // Ignore errors for existing objects
                     }
                 }
                 console.log('✅ Database schema initialized');
@@ -50,14 +51,55 @@ class Database {
         }
     }
 
-    async addGroup(name) {
+    // User management methods
+    async createUser(telegramId, username, firstName, lastName, isAdmin = false) {
         const query = `
-            INSERT INTO groups (name)
-            VALUES ($1)
-            RETURNING id, name, created_at
+            INSERT INTO users (telegram_id, username, first_name, last_name, is_admin, last_login)
+            VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+            RETURNING *
         `;
         try {
-            const result = await this.pool.query(query, [name]);
+            const result = await this.pool.query(query, [telegramId, username, firstName, lastName, isAdmin]);
+            return result.rows[0];
+        } catch (error) {
+            if (error.code === '23505') {
+                throw new Error('User already exists');
+            }
+            throw error;
+        }
+    }
+
+    async getUserByTelegramId(telegramId) {
+        const query = 'SELECT * FROM users WHERE telegram_id = $1';
+        const result = await this.pool.query(query, [telegramId]);
+        return result.rows[0];
+    }
+
+    async getUserById(userId) {
+        const query = 'SELECT * FROM users WHERE id = $1';
+        const result = await this.pool.query(query, [userId]);
+        return result.rows[0];
+    }
+
+    async updateUserLastLogin(userId) {
+        const query = `
+            UPDATE users 
+            SET last_login = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING *
+        `;
+        const result = await this.pool.query(query, [userId]);
+        return result.rows[0];
+    }
+
+    async addGroup(name, userId) {
+        const query = `
+            INSERT INTO groups (name, user_id)
+            VALUES ($1, $2)
+            RETURNING id, name, user_id, created_at
+        `;
+        try {
+            const result = await this.pool.query(query, [name, userId]);
             return result.rows[0];
         } catch (error) {
             if (error.code === '23505') {
@@ -67,26 +109,27 @@ class Database {
         }
     }
 
-    async getGroups() {
+    async getGroups(userId) {
         const query = `
-            SELECT g.id, g.name, COUNT(w.id) as wallet_count
+            SELECT g.id, g.name, g.user_id, g.is_shared, COUNT(w.id) as wallet_count, g.created_at
             FROM groups g
-            LEFT JOIN wallets w ON g.id = w.group_id
-            GROUP BY g.id, g.name
-            ORDER BY g.created_at
+            LEFT JOIN wallets w ON g.id = w.group_id AND w.is_active = TRUE
+            WHERE g.user_id = $1 OR g.is_shared = TRUE
+            GROUP BY g.id, g.name, g.user_id, g.is_shared, g.created_at
+            ORDER BY g.created_at DESC
         `;
-        const result = await this.pool.query(query);
+        const result = await this.pool.query(query, [userId]);
         return result.rows;
     }
 
-    async addWallet(address, name = null, groupId = null) {
+    async addWallet(address, name = null, groupId = null, userId) {
         const query = `
-            INSERT INTO wallets (address, name, group_id) 
-            VALUES ($1, $2, $3) 
-            RETURNING id, address, name, group_id, created_at
+            INSERT INTO wallets (address, name, group_id, user_id) 
+            VALUES ($1, $2, $3, $4) 
+            RETURNING id, address, name, group_id, user_id, created_at
         `;
         try {
-            const result = await this.pool.query(query, [address, name, groupId]);
+            const result = await this.pool.query(query, [address, name, groupId, userId]);
             return result.rows[0];
         } catch (error) {
             if (error.code === '23505') {
@@ -96,17 +139,17 @@ class Database {
         }
     }
 
-    async addWalletsBatch(wallets) {
+    async addWalletsBatch(wallets, userId) {
         const query = `
-          INSERT INTO wallets (address, name, group_id) 
-          VALUES ${wallets.map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`).join(', ')}
+          INSERT INTO wallets (address, name, group_id, user_id) 
+          VALUES ${wallets.map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`).join(', ')}
           ON CONFLICT (address) DO NOTHING
-          RETURNING id, address, name, group_id, created_at
+          RETURNING id, address, name, group_id, user_id, created_at
         `;
         
         const values = [];
         wallets.forEach(wallet => {
-          values.push(wallet.address, wallet.name, wallet.groupId);
+          values.push(wallet.address, wallet.name, wallet.groupId, userId);
         });
       
         try {
@@ -115,18 +158,18 @@ class Database {
         } catch (error) {
           throw new Error(`Batch insert failed: ${error.message}`);
         }
-      }
+    }
 
-    async removeWallet(address) {
+    async removeWallet(address, userId) {
         const query = `
             DELETE FROM wallets 
-            WHERE address = $1
+            WHERE address = $1 AND user_id = $2
             RETURNING id
         `;
         try {
-            const result = await this.pool.query(query, [address]);
+            const result = await this.pool.query(query, [address, userId]);
             if (result.rowCount === 0) {
-                throw new Error('Wallet not found');
+                throw new Error('Wallet not found or access denied');
             }
             return result.rows[0];
         } catch (error) {
@@ -134,35 +177,39 @@ class Database {
         }
     }
 
-    async removeAllWallets(groupId = null) {
-        let query = `DELETE FROM wallets`;
-        const params = [];
+    async removeAllWallets(groupId = null, userId) {
+        let query = `DELETE FROM wallets WHERE user_id = $1`;
+        const params = [userId];
+        
         if (groupId) {
-            query += ` WHERE group_id = $1`;
+            query += ` AND group_id = $2`;
             params.push(groupId);
         }
+        
         try {
             const result = await this.pool.query(query, params);
-            console.log(`[${new Date().toISOString()}] 🗑️ Removed ${result.rowCount} wallets and associated data`);
+            console.log(`[${new Date().toISOString()}] 🗑️ Removed ${result.rowCount} wallets for user ${userId}${groupId ? ` in group ${groupId}` : ''}`);
             return { deletedCount: result.rowCount };
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
-            throw new Error(`Failed to remove all wallets: ${error.message}`);
+            console.error(`[${new Date().toISOString()}] ❌ Error removing wallets for user ${userId}:`, error);
+            throw new Error(`Failed to remove wallets: ${error.message}`);
         }
     }
 
-    async getActiveWallets(groupId = null) {
+    async getActiveWallets(groupId = null, userId) {
         let query = `
             SELECT w.*, g.name as group_name
             FROM wallets w
             LEFT JOIN groups g ON w.group_id = g.id
-            WHERE w.is_active = TRUE
+            WHERE w.is_active = TRUE AND w.user_id = $1
         `;
-        const params = [];
+        const params = [userId];
+        
         if (groupId) {
-            query += ` AND w.group_id = $1`;
+            query += ` AND w.group_id = $2`;
             params.push(groupId);
         }
+        
         query += ` ORDER BY w.created_at DESC`;
         const result = await this.pool.query(query, params);
         return result.rows;
@@ -192,13 +239,13 @@ class Database {
         return result.rows[0];
     }
 
-    async addTransaction(walletId, signature, blockTime, transactionType, solAmount) {
+    async addTransaction(walletId, signature, blockTime, transactionType, solAmount, userId) {
         const query = `
             INSERT INTO transactions (
                 wallet_id, signature, block_time, transaction_type,
-                sol_spent, sol_received
+                sol_spent, sol_received, user_id
             ) 
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id, signature, transaction_type
         `;
         try {
@@ -209,6 +256,7 @@ class Database {
                 transactionType,
                 transactionType === 'buy' ? solAmount : 0,
                 transactionType === 'sell' ? solAmount : 0,
+                userId
             ]);
             return result.rows[0];
         } catch (error) {
@@ -229,17 +277,24 @@ class Database {
         return result.rows[0];
     }
 
-    async getWalletByAddress(address) {
-        const query = `SELECT * FROM wallets WHERE address = $1`;
-        const result = await this.pool.query(query, [address]);
+    async getWalletByAddress(address, userId = null) {
+        let query = `SELECT * FROM wallets WHERE address = $1`;
+        const params = [address];
+        
+        if (userId) {
+            query += ` AND user_id = $2`;
+            params.push(userId);
+        }
+        
+        const result = await this.pool.query(query, params);
         return result.rows[0];
     }
 
-    async getRecentTransactions(hours = 24, limit = 400, transactionType = null, groupId = null) {
+    async getRecentTransactions(hours = 24, limit = 400, transactionType = null, groupId = null, userId) {
         try {
             let typeFilter = '';
-            let queryParams = [limit];
-            let paramIndex = 2;
+            let queryParams = [userId, limit];
+            let paramIndex = 3;
             
             if (transactionType) {
                 typeFilter = `AND t.transaction_type = $${paramIndex++}`;
@@ -265,9 +320,10 @@ class Database {
                 JOIN wallets w ON t.wallet_id = w.id
                 LEFT JOIN groups g ON w.group_id = g.id
                 WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+                  AND w.user_id = $1
                 ${typeFilter}
                 ORDER BY t.block_time DESC
-                LIMIT $1
+                LIMIT $2
             `;
 
             const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
@@ -297,7 +353,7 @@ class Database {
                     to_.operation_type,
                     tk.decimals
                 FROM transactions t
-                JOIN wallets w ON t.wallet_id = w.id
+                JOIN wallets w ON t.wallet_id = w.id AND w.user_id = $${signatures.length + 1}
                 LEFT JOIN groups g ON w.group_id = g.id
                 LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
                 LEFT JOIN tokens tk ON to_.token_id = tk.id
@@ -305,9 +361,9 @@ class Database {
                 ORDER BY t.block_time DESC, t.signature, to_.id
             `;
 
-            const result = await this.pool.query(fullDataQuery, signatures);
+            const result = await this.pool.query(fullDataQuery, [...signatures, userId]);
             
-            console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens`);
+            console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens for user ${userId}`);
             
             return result.rows;
 
@@ -373,10 +429,10 @@ class Database {
         return result.rows[0];
     }
 
-    async getTopTokens(limit = 10, operationType = null, groupId = null) {
+    async getTopTokens(limit = 10, operationType = null, groupId = null, userId) {
         let typeFilter = '';
-        let queryParams = [limit];
-        let paramIndex = 2;
+        let queryParams = [userId, limit];
+        let paramIndex = 3;
         
         if (operationType) {
             typeFilter = `AND to_.operation_type = $${paramIndex++}`;
@@ -403,16 +459,17 @@ class Database {
             JOIN transactions t ON to_.transaction_id = t.id
             JOIN wallets w ON t.wallet_id = w.id
             WHERE t.block_time >= NOW() - INTERVAL '24 hours'
+              AND w.user_id = $1
             ${typeFilter}
             GROUP BY tk.id, tk.mint, tk.symbol, tk.name
             ORDER BY (buy_count + sell_count) DESC
-            LIMIT $1
+            LIMIT $2
         `;
         const result = await this.pool.query(query, queryParams);
         return result.rows;
     }
 
-    async getTokenWalletAggregates(hours = 24, groupId = null) {
+    async getTokenWalletAggregates(hours = 24, groupId = null, userId) {
         const EXCLUDED_TOKENS = [
             'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 
             'So11111111111111111111111111111111111111112',  
@@ -443,14 +500,14 @@ class Database {
             FROM tokens tk
             JOIN token_operations to_ ON tk.id = to_.token_id
             JOIN transactions t ON to_.transaction_id = t.id
-            JOIN wallets w ON t.wallet_id = w.id
+            JOIN wallets w ON t.wallet_id = w.id AND w.user_id = $${EXCLUDED_TOKENS.length + 2}
             LEFT JOIN groups g ON w.group_id = g.id
             WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
             AND tk.mint NOT IN (${EXCLUDED_TOKENS.map((_, i) => `$${i + 1}`).join(', ')})
         `;
         
-        const params = [...EXCLUDED_TOKENS];
-        let paramIndex = EXCLUDED_TOKENS.length + 1;
+        const params = [...EXCLUDED_TOKENS, userId];
+        let paramIndex = EXCLUDED_TOKENS.length + 3;
         
         if (groupId) {
             query += ` AND w.group_id = $${paramIndex}`;
@@ -464,7 +521,7 @@ class Database {
         
         const result = await this.pool.query(query, params);
     
-        console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows (excluded ${EXCLUDED_TOKENS.length} tokens)`);
+        console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows (excluded ${EXCLUDED_TOKENS.length} tokens) for user ${userId}`);
     
         return result.rows.map(row => {
             const solSpent = Number(row.sol_spent) || 0;
@@ -502,7 +559,7 @@ class Database {
         });
     }
 
-    async getMonitoringStats(groupId = null) {
+    async getMonitoringStats(groupId = null, userId) {
         let query = `
             SELECT 
                 COUNT(DISTINCT w.id) as active_wallets,
@@ -515,18 +572,18 @@ class Database {
             LEFT JOIN transactions t ON w.id = t.wallet_id 
                 AND t.block_time >= CURRENT_DATE
             LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-            WHERE w.is_active = TRUE
+            WHERE w.is_active = TRUE AND w.user_id = $1
         `;
-        const params = [];
+        const params = [userId];
         if (groupId) {
-            query += ` AND w.group_id = $1`;
+            query += ` AND w.group_id = $2`;
             params.push(groupId);
         }
         const result = await this.pool.query(query, params);
         return result.rows[0];
     }
 
-    async getTokenInflowSeries(mint, hours = 24, groupId = null) {
+    async getTokenInflowSeries(mint, hours = 24, groupId = null, userId) {
         let query = `
             SELECT 
                 date_trunc('minute', t.block_time) AS bucket,
@@ -538,10 +595,11 @@ class Database {
             JOIN wallets w ON t.wallet_id = w.id
             WHERE tk.mint = $1
               AND t.block_time >= NOW() - INTERVAL '${hours} hours'
+              AND w.user_id = $2
         `;
-        const params = [mint];
+        const params = [mint, userId];
         if (groupId) {
-            query += ` AND w.group_id = $2`;
+            query += ` AND w.group_id = $3`;
             params.push(groupId);
         }
         query += `
@@ -557,7 +615,7 @@ class Database {
         }));
     }
 
-    async getTokenOperations(mint, hours = 24, groupId = null) {
+    async getTokenOperations(mint, hours = 24, groupId = null, userId) {
         let query = `
             SELECT 
                 t.block_time,
@@ -577,10 +635,11 @@ class Database {
             LEFT JOIN groups g ON w.group_id = g.id
             WHERE tk.mint = $1
               AND t.block_time >= NOW() - INTERVAL '${hours} hours'
+              AND w.user_id = $2
         `;
-        const params = [mint];
+        const params = [mint, userId];
         if (groupId) {
-            query += ` AND w.group_id = $2`;
+            query += ` AND w.group_id = $3`;
             params.push(groupId);
         }
         query += `
