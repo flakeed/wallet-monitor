@@ -413,11 +413,9 @@ class Database {
     }
 
     async getTokenWalletAggregates(hours = 24, groupId = null) {
-        // Константы для исключения
         const EXCLUDED_TOKENS = [
-            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
-            'So11111111111111111111111111111111111111112',   // Wrapped SOL
-            // Можно добавить другие токены для исключения
+            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 
+            'So11111111111111111111111111111111111111112',  
         ];
     
         let query = `
@@ -469,7 +467,6 @@ class Database {
         console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows (excluded ${EXCLUDED_TOKENS.length} tokens)`);
     
         return result.rows.map(row => {
-            // Убедимся что все значения числовые
             const solSpent = Number(row.sol_spent) || 0;
             const solReceived = Number(row.sol_received) || 0;
             const tokensBought = Number(row.tokens_bought) || 0;
@@ -477,7 +474,6 @@ class Database {
             const txBuys = Number(row.tx_buys) || 0;
             const txSells = Number(row.tx_sells) || 0;
             
-            // Простой расчет PnL для каждого кошелька
             const pnlSol = +(solReceived - solSpent).toFixed(6);
             
             return {

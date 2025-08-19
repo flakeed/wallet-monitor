@@ -4,8 +4,6 @@ const { Metaplex } = require('@metaplex-foundation/js');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
 
-let tokenMap = new Map();
-const requestQueue = [];
 let isProcessingQueue = false;
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');

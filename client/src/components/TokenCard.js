@@ -9,7 +9,6 @@ function TokenCard({ token, onOpenChart }) {
     const [groupPnL, setGroupPnL] = useState(null);
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
-    // Fetch token price from DexScreener
     const fetchTokenPrice = async () => {
         if (!token.mint || loadingPrice) return;
         setLoadingPrice(true);
@@ -36,7 +35,6 @@ function TokenCard({ token, onOpenChart }) {
         }
     };
 
-    // Fetch SOL price from backend
     const fetchSolPrice = async () => {
         if (loadingSolPrice) return;
         setLoadingSolPrice(true);
@@ -47,17 +45,16 @@ function TokenCard({ token, onOpenChart }) {
                 setSolPrice(data.price);
             } else {
                 console.error('Failed to fetch SOL price:', data.error);
-                setSolPrice(150); // Fallback
+                setSolPrice(150); 
             }
         } catch (error) {
             console.error('Error fetching SOL price:', error);
-            setSolPrice(150); // Fallback
+            setSolPrice(150);
         } finally {
             setLoadingSolPrice(false);
         }
     };
 
-    // Calculate group PnL
     const calculateGroupPnL = () => {
         if (!priceData || !priceData.price || !solPrice) return null;
 
@@ -66,7 +63,6 @@ function TokenCard({ token, onOpenChart }) {
         let totalSpentSOL = 0;
         let totalReceivedSOL = 0;
 
-        // Агрегируем данные по всем кошелькам
         token.wallets.forEach(wallet => {
             totalTokensBought += wallet.tokensBought || 0;
             totalTokensSold += wallet.tokensSold || 0;
@@ -83,41 +79,31 @@ function TokenCard({ token, onOpenChart }) {
             solPrice
         });
 
-        // Текущие холдинги
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         
-        // ИСПРАВЛЕННЫЙ расчет Realized PnL
         let realizedPnLSOL = 0;
         let remainingCostBasisSOL = 0;
 
         if (totalTokensBought > 0 && totalTokensSold > 0) {
-            // Средняя цена покупки в SOL за токен
             const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
             
-            // Realized PnL = полученные SOL - (проданные токены * средняя цена покупки)
             const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
             realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
             
-            // Cost basis для оставшихся токенов
             remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
         } else {
-            // Если только покупки или только продажи
             realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
             remainingCostBasisSOL = totalSpentSOL;
         }
 
-        // Текущая стоимость холдингов
         const currentTokenValueUSD = currentHoldings * priceData.price;
         const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
         
-        // Unrealized PnL
         const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
         const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
         
-        // Realized PnL в USD
         const realizedPnLUSD = realizedPnLSOL * solPrice;
         
-        // Общий PnL
         const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
         const totalPnLSOL = totalPnLUSD / solPrice;
 
@@ -233,7 +219,6 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             </div>
 
-            {/* Информация о времени активности */}
             {(token.summary.latestActivity || token.summary.firstBuyTime) && (
                 <div className="mb-3 p-2 bg-blue-50 rounded border border-blue-200">
                     <div className="grid grid-cols-2 gap-2 text-xs">

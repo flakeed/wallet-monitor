@@ -296,7 +296,6 @@ class SolanaWebSocketService {
         const errors = [];
       
         try {
-          // Используем пакетное добавление в БД
           const dbWallets = wallets.map(w => ({
             address: w.address,
             name: w.name,
@@ -305,7 +304,6 @@ class SolanaWebSocketService {
       
           const insertedWallets = await this.db.addWalletsBatch(dbWallets);
           
-          // Обновляем кэш мониторинга
           for (const wallet of insertedWallets) {
             if (!this.groupId || wallet.group_id === this.groupId) {
               this.monitoredWallets.set(wallet.address, {
@@ -319,7 +317,6 @@ class SolanaWebSocketService {
             }
           }
       
-          // Перезапускаем WebSocket если нужно
           if (addedWallets.length > 0 && this.isConnected) {
             console.log(`[${new Date().toISOString()}] 🔄 Restarting WebSocket with ${this.monitoredWallets.size} wallets`);
             await this.restart();
@@ -358,7 +355,6 @@ class SolanaWebSocketService {
             await this.unsubscribeFromWallet(walletAddress);
         }
         if (this.ws) this.ws.close();
-        // НЕ закрываем базу данных здесь, только при полном завершении приложения
         console.log(`[${new Date().toISOString()}] ⏹️ WebSocket client stopped`);
     }
 

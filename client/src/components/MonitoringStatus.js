@@ -15,11 +15,7 @@ function MonitoringStatus({ status, onToggle }) {
             </span>
           </div>
 
-          {/* {processedSignatures > 0 && (
-            <div className="text-sm text-gray-500">
-              Processed: {processedSignatures.toLocaleString()} signatures
-            </div>
-          )} */}
+
         </div>
 
         <div className="flex space-x-2">

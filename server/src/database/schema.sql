@@ -1,26 +1,15 @@
--- ===== Оптимизации для PostgreSQL при массовом импорте =====
-
--- 1. Увеличение лимитов для массовых операций
--- Добавьте эти настройки в postgresql.conf или выполните как SQL команды:
-
--- Увеличиваем рабочую память для сложных запросов
 SET work_mem = '256MB';
 
--- Увеличиваем память для обслуживания (для создания индексов)
 SET maintenance_work_mem = '1GB';
 
--- Увеличиваем размер буфера для массовых вставок
 SET shared_buffers = '512MB';
 
--- Отключаем автокоммит для батчевых операций (только для сессии импорта)
 SET autocommit = off;
 
--- 2. Оптимизированные индексы для быстрого поиска дубликатов
 CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_address_unique 
 ON wallets(address) 
 WHERE is_active = true;
 
--- Индекс для быстрого поиска по группам
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_group_active 
 ON wallets(group_id, is_active) 
 WHERE is_active = true;
@@ -32,7 +21,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_wallet_time
 ON transactions(wallet_id, block_time DESC) 
 INCLUDE (transaction_type, sol_spent, sol_received);
 
--- 3. Функция для массового добавления кошельков с оптимизацией
 CREATE OR REPLACE FUNCTION bulk_insert_wallets(
     wallet_data jsonb[],
     default_group_id UUID DEFAULT NULL
@@ -53,14 +41,12 @@ DECLARE
     wallet_record jsonb;
     new_wallet_id UUID;
 BEGIN
-    -- Создаем временную таблицу для пакетной обработки
     CREATE TEMP TABLE temp_wallet_batch (
         address VARCHAR(44),
         name VARCHAR(255),
         group_id UUID
     ) ON COMMIT DROP;
 
-    -- Заполняем временную таблицу данными
     FOR i IN 1..array_length(wallet_data, 1) LOOP
         BEGIN
             wallet_record := wallet_data[i];
@@ -77,7 +63,6 @@ BEGIN
         END;
     END LOOP;
 
-    -- Массовая вставка с обработкой дубликатов
     WITH inserted_wallets AS (
         INSERT INTO wallets (address, name, group_id)
         SELECT DISTINCT t.address, t.name, t.group_id
@@ -100,7 +85,6 @@ BEGIN
     INTO inserted_cnt, result_data
     FROM inserted_wallets;
 
-    -- Подсчитываем дубликаты
     SELECT COUNT(*)::INTEGER INTO duplicate_cnt
     FROM temp_wallet_batch t
     INNER JOIN wallets w ON w.address = t.address;
@@ -109,7 +93,6 @@ BEGIN
 END;
 $$;
 
--- 4. Функция для получения статистики импорта
 CREATE OR REPLACE FUNCTION get_bulk_import_stats()
 RETURNS TABLE(
     total_wallets BIGINT,
@@ -154,7 +137,6 @@ ALTER TABLE transactions
 ADD CONSTRAINT check_usdc_amounts_positive 
 CHECK (usdc_spent >= 0 AND usdc_received >= 0);
 
--- Добавляем ограничение для логической консистентности
 ALTER TABLE transactions 
 ADD CONSTRAINT check_transaction_logic 
 CHECK (
@@ -162,34 +144,28 @@ CHECK (
     (transaction_type = 'sell' AND sol_received > 0 AND sol_spent = 0)
 );
 
--- Создаем индекс для мониторинга конвертации
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_usdc_monitoring 
 ON transactions(block_time, usdc_spent, usdc_received) 
 WHERE (usdc_spent > 0 OR usdc_received > 0);
 
--- Создаем индекс для быстрого поиска
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_signature_wallet 
 ON transactions(signature, wallet_id);
 
 
--- 5. Процедура очистки и оптимизации после массового импорта
 CREATE OR REPLACE FUNCTION optimize_after_bulk_import()
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    -- Обновляем статистику таблиц для оптимизатора запросов
     ANALYZE wallets;
     ANALYZE groups;
     ANALYZE transactions;
     ANALYZE tokens;
     
-    -- Очищаем неактивные записи старше 30 дней
     DELETE FROM wallets 
     WHERE is_active = false 
     AND updated_at < NOW() - INTERVAL '30 days';
     
-    -- Обновляем счетчики кошельков в группах
     UPDATE groups 
     SET updated_at = CURRENT_TIMESTAMP
     FROM (
@@ -204,7 +180,6 @@ BEGIN
 END;
 $$;
 
--- 6. Индексы для улучшения производительности массовых операций
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_wallets_created_at_desc 
 ON wallets(created_at DESC);
 
@@ -212,7 +187,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transactions_wallet_group
 ON transactions(wallet_id) 
 INCLUDE (block_time, transaction_type);
 
--- 7. Настройка автовакуума для интенсивных вставок
 ALTER TABLE wallets SET (
     autovacuum_vacuum_threshold = 1000,
     autovacuum_analyze_threshold = 500,
@@ -220,21 +194,6 @@ ALTER TABLE wallets SET (
     autovacuum_analyze_scale_factor = 0.05
 );
 
--- 8. Партиционирование для больших объемов (опционально)
--- Если ожидается более 100,000 кошельков, можно использовать партиционирование
-
--- Создаем партиционированную таблицу для транзакций по времени
--- CREATE TABLE transactions_partitioned (
---     LIKE transactions INCLUDING ALL
--- ) PARTITION BY RANGE (block_time);
-
--- CREATE TABLE transactions_y2024 PARTITION OF transactions_partitioned
--- FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
-
--- CREATE TABLE transactions_y2025 PARTITION OF transactions_partitioned
--- FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
-
--- 9. Мониторинг производительности массовых операций
 CREATE OR REPLACE VIEW bulk_import_monitoring AS
 SELECT 
     schemaname,

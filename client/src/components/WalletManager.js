@@ -1,13 +1,11 @@
 import React, { useState, useCallback, useEffect } from 'react';
 
-function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups }) {
-  const [address, setAddress] = useState('');
-  const [name, setName] = useState('');
+function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
   const [groupId, setGroupId] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
-  const [activeTab, setActiveTab] = useState('single');
+  const [activeTab, setActiveTab] = useState('bulk');
   const [bulkText, setBulkText] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
@@ -30,70 +28,6 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    console.log('Checking server health before bulk import...');
-    const serverHealth = await checkServerHealth();
-    
-    if (!serverHealth) {
-      setBulkResults({
-        type: 'error',
-        message: 'Server health check failed. Please try again later.'
-      });
-      return;
-    }
-  
-    setBulkLoading(true);
-    setShowProgress(true);
-    setBulkResults(null);
-    setImportProgress({ current: 0, total: wallets.length, batch: 0 });
-      
-    if (!address.trim()) {
-      setMessage({ type: 'error', text: 'Wallet address is required' });
-      return;
-    }
-
-    if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-      setMessage({ type: 'error', text: 'Invalid Solana wallet address format' });
-      return;
-    }
-
-    setLoading(true);
-    setMessage(null);
-    try {
-      const result = await onAddWallet(address, name, groupId || null);
-      if (result.success) {
-        setMessage({ type: 'success', text: result.message });
-        setImportProgress(progress);
-        setAddress('');
-        setName('');
-        setGroupId('');
-      }
-    } catch (error) {
-      console.error('Bulk import failed:', error);
-      
-      // Более детальное сообщение об ошибке
-      let errorMessage = error.message;
-      if (error.message.includes('HTML') || error.message.includes('DOCTYPE')) {
-        errorMessage = 'Server returned an error page. This usually means the request was too large or took too long. Try importing fewer wallets at once.';
-      } else if (error.message.includes('timeout')) {
-        errorMessage = 'Request timed out. Try importing fewer wallets at once.';
-      } else if (error.message.includes('JSON')) {
-        errorMessage = 'Server response format error. Check server logs and try again.';
-      }
-      
-      setBulkResults({
-        type: 'error',
-        message: `Bulk import failed: ${errorMessage}`
-      });
-    } finally {
-      setLoading(false);
-      setBulkLoading(false);
-    setShowProgress(false);
-    setImportProgress({ current: 0, total: 0, batch: 0 });
-    }
-  };
-
   const parseBulkInput = useCallback((text) => {
     const lines = text.trim().split('\n');
     const wallets = [];
@@ -103,13 +37,11 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     for (let i = 0; i < lines.length; i++) {
       const lineNum = i + 1;
       const trimmedLine = lines[i].trim();
-      
-      // Пропускаем комментарии и пустые строки
+
       if (!trimmedLine || trimmedLine.startsWith('#')) continue;
 
       let address, name;
-      
-      // Парсим строку: адрес,имя или адрес\tимя или просто адрес
+
       if (trimmedLine.includes(',') || trimmedLine.includes('\t')) {
         const parts = trimmedLine.split(/[,\t]/).map(p => p.trim());
         address = parts[0];
@@ -119,7 +51,6 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
         name = null;
       }
 
-      // Валидация адреса
       if (!address) {
         errors.push(`Line ${lineNum}: Empty address`);
         continue;
@@ -130,7 +61,6 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
         continue;
       }
 
-      // Проверка дубликатов в пределах импорта
       if (seenAddresses.has(address)) {
         errors.push(`Line ${lineNum}: Duplicate address - ${address.substring(0, 20)}...`);
         continue;
@@ -150,7 +80,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
     }
 
     const { wallets, errors } = parseBulkInput(text);
-    
+
     setBulkValidation({
       totalLines: text.trim().split('\n').length,
       totalWallets: wallets.length,
@@ -158,15 +88,14 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
       errors: errors.length,
       canImport: wallets.length > 0 && wallets.length <= 10000,
       tooMany: wallets.length > 10000,
-      errorMessages: errors.slice(0, 10) // Показываем только первые 10 ошибок
+      errorMessages: errors.slice(0, 10)
     });
   }, [parseBulkInput]);
 
   const handleBulkTextChange = (e) => {
     const newText = e.target.value;
     setBulkText(newText);
-    
-    // Debounce validation
+
     clearTimeout(window.bulkValidationTimeout);
     window.bulkValidationTimeout = setTimeout(() => {
       validateBulkText(newText);
@@ -175,14 +104,14 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
 
   const handleBulkSubmit = async (e) => {
     e.preventDefault();
-  
+
     if (!bulkText.trim()) {
       setBulkResults({ type: 'error', message: 'Please enter wallet addresses' });
       return;
     }
-  
+
     const { wallets, errors: parseErrors } = parseBulkInput(bulkText);
-  
+
     if (parseErrors.length > 0 && wallets.length === 0) {
       setBulkResults({
         type: 'error',
@@ -196,7 +125,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
       });
       return;
     }
-  
+
     if (wallets.length === 0) {
       setBulkResults({
         type: 'error',
@@ -204,7 +133,7 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
       });
       return;
     }
-  
+
     if (wallets.length > 10000) {
       setBulkResults({
         type: 'error',
@@ -212,37 +141,36 @@ function WalletManager({ onAddWallet, onAddWalletsBulk, onCreateGroup, groups })
       });
       return;
     }
-  
+
     setBulkLoading(true);
     setShowProgress(true);
     setBulkResults(null);
     setImportProgress({ current: 0, total: wallets.length, batch: 0 });
-  
+
     try {
       console.log(`Starting bulk import of ${wallets.length} wallets...`);
-      
+
       const result = await onAddWalletsBulk(wallets, groupId || null, (progress) => {
         setImportProgress(progress);
       });
-  
-      // Объединяем ошибки парсинга с ошибками импорта
+
       if (parseErrors.length > 0) {
         result.results.errors.unshift(...parseErrors.map(err => ({ address: 'parse_error', error: err })));
         result.results.failed += parseErrors.length;
       }
-  
+
       setBulkResults({
         type: result.results.failed > 0 ? 'warning' : 'success',
         message: result.message,
         details: result.results
       });
-  
+
       if (result.results.successful > 0) {
         setBulkText('');
         setGroupId('');
         setBulkValidation(null);
       }
-  
+
     } catch (error) {
       console.error('Bulk import failed:', error);
       setBulkResults({
@@ -292,7 +220,6 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
     URL.revokeObjectURL(url);
   };
 
-  // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (window.bulkValidationTimeout) {
@@ -305,7 +232,6 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
     <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
       <h2 className="text-xl font-semibold text-gray-900 mb-4">Add Wallets for Monitoring</h2>
 
-      {/* Group Creation */}
       <div className="mb-6">
         <h3 className="text-lg font-medium text-gray-800 mb-2">Create New Group</h3>
         <form onSubmit={handleCreateGroup} className="flex space-x-2">
@@ -327,110 +253,20 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
         </form>
       </div>
 
-      {/* Tabs */}
+      Tabs
       <div className="flex space-x-1 mb-6 bg-gray-100 p-1 rounded-lg">
-        <button
-          onClick={() => setActiveTab('single')}
-          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'single'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          Single Wallet
-        </button>
+
         <button
           onClick={() => setActiveTab('bulk')}
-          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'bulk'
+          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'bulk'
               ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
-          }`}
+            }`}
         >
           Bulk Import (up to 10,000)
         </button>
       </div>
 
-      {/* Single Wallet Tab */}
-      {activeTab === 'single' && (
-        <>
-          {message && (
-            <div className={`mb-4 p-3 rounded-lg ${
-              message.type === 'success'
-                ? 'bg-green-50 border border-green-200 text-green-700'
-                : 'bg-red-50 border border-red-200 text-red-700'
-            }`}>
-              {message.text}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Wallet Address *
-              </label>
-              <input
-                type="text"
-                value={address}
-                onChange={(e) => setAddress(e.target.value.trim())}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                placeholder="Enter Solana wallet address (44 characters)"
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Name (Optional)
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                placeholder="Give this wallet a name..."
-                disabled={loading}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Group (Optional)
-              </label>
-              <select
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                disabled={loading}
-              >
-                <option value="">Select a group (optional)</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.wallet_count} wallets)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading || !address.trim()}
-              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
-            >
-              {loading ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Adding Wallet...
-                </>
-              ) : (
-                'Add Wallet'
-              )}
-            </button>
-          </form>
-        </>
-      )}
-
-      {/* Bulk Import Tab */}
       {activeTab === 'bulk' && (
         <>
           <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
@@ -460,30 +296,27 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
             </div>
           </div>
 
-          {/* Validation Status */}
           {bulkValidation && (
-            <div className={`mb-4 p-4 rounded-lg border ${
-              bulkValidation.canImport 
-                ? 'bg-green-50 border-green-200' 
+            <div className={`mb-4 p-4 rounded-lg border ${bulkValidation.canImport
+                ? 'bg-green-50 border-green-200'
                 : bulkValidation.tooMany
-                ? 'bg-red-50 border-red-200'
-                : 'bg-yellow-50 border-yellow-200'
-            }`}>
+                  ? 'bg-red-50 border-red-200'
+                  : 'bg-yellow-50 border-yellow-200'
+              }`}>
               <div className="flex items-center justify-between mb-3">
-                <h4 className={`text-sm font-medium ${
-                  bulkValidation.canImport 
-                    ? 'text-green-900' 
-                    : bulkValidation.tooMany 
-                    ? 'text-red-900'
-                    : 'text-yellow-900'
-                }`}>
+                <h4 className={`text-sm font-medium ${bulkValidation.canImport
+                    ? 'text-green-900'
+                    : bulkValidation.tooMany
+                      ? 'text-red-900'
+                      : 'text-yellow-900'
+                  }`}>
                   Validation Results
                 </h4>
                 {bulkValidation.canImport && (
                   <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Ready to import</span>
                 )}
               </div>
-              
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3">
                 <div className="text-center">
                   <div className="font-semibold text-lg text-gray-700">{bulkValidation.totalLines}</div>
@@ -531,7 +364,6 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
             </div>
           )}
 
-          {/* Progress Indicator */}
           {showProgress && bulkLoading && (
             <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
               <div className="flex items-center space-x-3 mb-3">
@@ -547,11 +379,11 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
                   </div>
                 </div>
               </div>
-              
+
               {importProgress.total > 0 && (
                 <div className="w-full bg-blue-200 rounded-full h-2">
-                  <div 
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                     style={{ width: `${Math.min((importProgress.current / importProgress.total) * 100, 100)}%` }}
                   ></div>
                 </div>
@@ -560,20 +392,18 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
           )}
 
           {bulkResults && (
-            <div className={`mb-4 p-4 rounded-lg border ${
-              bulkResults.type === 'success'
+            <div className={`mb-4 p-4 rounded-lg border ${bulkResults.type === 'success'
                 ? 'bg-green-50 border-green-200'
                 : bulkResults.type === 'warning'
-                ? 'bg-yellow-50 border-yellow-200'
-                : 'bg-red-50 border-red-200'
-            }`}>
-              <div className={`font-medium mb-3 ${
-                bulkResults.type === 'success' 
-                  ? 'text-green-900' 
-                  : bulkResults.type === 'warning'
-                  ? 'text-yellow-900'
-                  : 'text-red-900'
+                  ? 'bg-yellow-50 border-yellow-200'
+                  : 'bg-red-50 border-red-200'
               }`}>
+              <div className={`font-medium mb-3 ${bulkResults.type === 'success'
+                  ? 'text-green-900'
+                  : bulkResults.type === 'warning'
+                    ? 'text-yellow-900'
+                    : 'text-red-900'
+                }`}>
                 {bulkResults.message}
               </div>
 
@@ -603,8 +433,8 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
                         {bulkResults.details.errors.slice(0, 100).map((error, i) => (
                           <div key={i} className="text-red-800 py-1 border-b border-red-200 last:border-b-0">
                             <span className="font-mono">
-                              {error.address && error.address !== 'parse_error' && error.address !== 'duplicate' 
-                                ? `${error.address.slice(0, 12)}...` 
+                              {error.address && error.address !== 'parse_error' && error.address !== 'duplicate'
+                                ? `${error.address.slice(0, 12)}...`
                                 : 'Error'
                               }
                             </span>

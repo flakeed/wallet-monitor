@@ -67,7 +67,6 @@ function WalletPill({ wallet, tokenMint }) {
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
                 </div>
-                {/* Показываем время первой покупки, если доступно */}
                 {wallet.lastActivity && (
                         <span className="text-blue-600 font-medium">
                             Last buy: {formatTime(wallet.lastActivity)}

@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const { Connection, PublicKey } = require('@solana/web3.js');
 const Redis = require('ioredis');
 require('dotenv').config();
 const { redis } = require('./services/tokenService');
@@ -14,6 +13,12 @@ const port = process.env.PORT || 5001;
 const https = require('https');
 const fs = require('fs');
 
+const monitoringService = new WalletMonitoringService();
+const solanaWebSocketService = new SolanaWebSocketService();
+const db = new Database();
+
+const sseClients = new Set();
+
 app.use(express.json({ 
   limit: '50mb',
   verify: (req, res, buf) => {
@@ -26,20 +31,6 @@ app.use(express.urlencoded({
   parameterLimit: 50000
 }));
 
-app.use('/api/wallets/bulk', (req, res, next) => {
-  console.log(`[${new Date().toISOString()}] 📥 Bulk import request received`);
-  console.log(`- Content-Length: ${req.get('Content-Length')}`);
-  console.log(`- Content-Type: ${req.get('Content-Type')}`);
-  
-  // Устанавливаем увеличенные таймауты именно для этого endpoint
-  req.setTimeout(600000); // 10 минут
-  res.setTimeout(600000); // 10 минут
-  
-  next();
-});
-
-
-// Load SSL certificates
 const sslOptions = {
   key: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/privkey.pem'),
   cert: fs.readFileSync('/etc/letsencrypt/live/api-wallet-monitor.duckdns.org/fullchain.pem'),
@@ -60,16 +51,10 @@ app.use(
 app.use(express.json());
 
 app.use((req, res, next) => {
-  req.setTimeout(300000); // 5 минут
-  res.setTimeout(300000); // 5 минут
+  req.setTimeout(300000); 
+  res.setTimeout(300000);
   next();
 });
-
-const monitoringService = new WalletMonitoringService();
-const solanaWebSocketService = new SolanaWebSocketService();
-const db = new Database();
-
-const sseClients = new Set();
 
 const startWebSocketService = async () => {
   let retries = 0;
@@ -98,8 +83,18 @@ const startWebSocketService = async () => {
 
 setTimeout(startWebSocketService, 2000);
 
+app.use('/api/wallets/bulk', (req, res, next) => {
+  console.log(`[${new Date().toISOString()}] 📥 Bulk import request received`);
+  console.log(`- Content-Length: ${req.get('Content-Length')}`);
+  console.log(`- Content-Type: ${req.get('Content-Type')}`);
+  
+  req.setTimeout(1200000); 
+  res.setTimeout(1200000); 
+  
+  next();
+});
+
 app.get('/api/transactions/stream', (req, res) => {
-  // ИСПРАВЛЕНО: НЕ парсим groupId как число, оставляем как строку (UUID)
   const groupId = req.query.groupId || null;
   
   res.setHeader('Content-Type', 'text/event-stream');
@@ -124,7 +119,6 @@ app.get('/api/transactions/stream', (req, res) => {
       try {
         const transaction = JSON.parse(message);
         
-        // ИСПРАВЛЕНО: сравнение UUID строк
         if (groupId !== null && transaction.groupId !== groupId) {
           console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
           return;
@@ -158,7 +152,7 @@ app.get('/api/transactions/stream', (req, res) => {
 
 app.get('/api/wallets', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const wallets = await db.getActiveWallets(groupId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
@@ -181,58 +175,6 @@ app.get('/api/wallets', async (req, res) => {
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error);
     res.status(500).json({ error: 'Failed to fetch wallets' });
-  }
-});
-
-app.get('/api/wallets/bulk-template', (req, res) => {
-  const template = `# Bulk Wallet Import Template (up to 10,000 wallets)
-# Format: address,name (name is optional)
-# One wallet per line
-# Lines starting with # are ignored
-# Maximum 10,000 wallets per import
-
-# Example wallets (replace with real addresses):
-9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Main Trading Wallet
-53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC,Backup Wallet
-Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y
-7dHbWXmci3dT1DHaV2R7uHWdwKz7V8L2MvX9Gt8kVeHN,Test Environment
-
-# Tips for large imports:
-# - Remove duplicate addresses before importing
-# - Use meaningful names for easier tracking
-# - Consider grouping wallets by strategy or purpose
-# - Monitor import progress in the UI`;
-
-  res.setHeader('Content-Type', 'text/plain');
-  res.setHeader('Content-Disposition', 'attachment; filename="bulk-wallet-import-10k.txt"');
-  res.send(template);
-});
-
-app.post('/api/wallets', async (req, res) => {
-  try {
-    const { address, name, groupId } = req.body;
-
-    if (!address) {
-      return res.status(400).json({ error: 'Wallet address is required' });
-    }
-
-    if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-      return res.status(400).json({ error: 'Invalid Solana wallet address format' });
-    }
-
-    const wallet = await solanaWebSocketService.addWallet(address, name, groupId);
-    res.json({
-      success: true,
-      wallet,
-      message: 'Wallet added for monitoring',
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error adding wallet:`, error);
-    if (error.message.includes('already exists')) {
-      res.status(409).json({ error: 'Wallet is already being monitored' });
-    } else {
-      res.status(500).json({ error: error.message });
-    }
   }
 });
 
@@ -280,7 +222,7 @@ app.get('/api/transactions', async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
 
     const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
     const groupedTransactions = {};
@@ -331,7 +273,7 @@ app.get('/api/transactions', async (req, res) => {
 
 app.get('/api/monitoring/status', async (req, res) => {
   try {
-    const groupId = req.query.groupId || null; // Оставляем как строку
+    const groupId = req.query.groupId || null;
     const monitoringStatus = monitoringService.getStatus();
     const websocketStatus = solanaWebSocketService.getStatus();
     const dbStats = await db.getMonitoringStats(groupId);
@@ -366,108 +308,12 @@ app.post('/api/monitoring/toggle', async (req, res) => {
   }
 });
 
-app.get('/api/wallet/:address', async (req, res) => {
-  try {
-    const address = req.params.address.trim();
-
-    if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-      return res.status(400).json({ error: 'Invalid Solana public key format' });
-    }
-
-    const wallet = await db.getWalletByAddress(address);
-    if (!wallet) {
-      return res.status(404).json({ error: 'Wallet not found in monitoring list' });
-    }
-
-    const connection = new Connection(process.env.SOLANA_RPC_URL, 'confirmed');
-    const publicKey = new PublicKey(address);
-    const balanceLamports = await connection.getBalance(publicKey);
-    const balanceSol = balanceLamports / 1e9;
-
-    const transactions = await db.getRecentTransactions(24 * 7, 100);
-    const walletTransactions = transactions.filter((tx) => tx.wallet_address === address);
-
-    const groupedTransactions = {};
-    walletTransactions.forEach((row) => {
-      if (!groupedTransactions[row.signature]) {
-        groupedTransactions[row.signature] = {
-          signature: row.signature,
-          time: row.block_time,
-          transactionType: row.transaction_type,
-          solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
-          solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
-          wallet: {
-            address: row.wallet_address,
-            name: row.wallet_name,
-            group_id: row.group_id,
-            group_name: row.group_name,
-          },
-          tokensBought: [],
-          tokensSold: [],
-        };
-      }
-
-      if (row.mint) {
-        const tokenData = {
-          mint: row.mint,
-          symbol: row.token_name,
-          name: row.token_name,
-          amount: Number(row.token_amount),
-          decimals: row.decimals || 6,
-        };
-
-        if (row.operation_type === 'buy') {
-          groupedTransactions[row.signature].tokensBought.push(tokenData);
-        } else if (row.operation_type === 'sell') {
-          groupedTransactions[row.signature].tokensSold.push(tokenData);
-        }
-      }
-    });
-
-    const operations = Object.values(groupedTransactions);
-
-    res.json({
-      address,
-      balance: Number(balanceSol).toLocaleString(undefined, { maximumFractionDigits: 6 }),
-      groupId: wallet.group_id,
-      groupName: wallet.group_name,
-      operations,
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in /api/wallet:`, error);
-    res.status(500).json({
-      error: error.message || 'Failed to fetch wallet data',
-    });
-  }
-});
-
-app.get('/api/stats/transactions', async (req, res) => {
-  try {
-    const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null; // Оставляем как строку
-    const stats = await db.getMonitoringStats(groupId);
-
-    res.json({
-      buyTransactions: stats.buy_transactions_today || 0,
-      sellTransactions: stats.sell_transactions_today || 0,
-      totalTransactions: (stats.buy_transactions_today || 0) + (stats.sell_transactions_today || 0),
-      solSpent: Number(stats.sol_spent_today || 0).toFixed(6),
-      solReceived: Number(stats.sol_received_today || 0).toFixed(6),
-      netSOL: (Number(stats.sol_received_today || 0) - Number(stats.sol_spent_today || 0)).toFixed(6),
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching transaction stats:`, error);
-    res.status(500).json({ error: 'Failed to fetch transaction stats' });
-  }
-});
-
 app.post('/api/wallets/bulk', async (req, res) => {
   const startTime = Date.now();
   
   try {
     const { wallets, groupId } = req.body;
 
-    // Валидация входных данных
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ 
         success: false,
@@ -491,7 +337,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets`);
 
-    // Инициализация результатов
     const results = {
       total: wallets.length,
       successful: 0,
@@ -501,7 +346,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
       successfulWallets: []
     };
 
-    // Предварительная валидация адресов
     const validWallets = [];
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 
@@ -544,20 +388,17 @@ app.post('/api/wallets/bulk', async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation`);
 
-    // Обработка пакетами для избежания таймаутов
-    const BATCH_SIZE = 100; // Уменьшаем размер пакета
+    const BATCH_SIZE = 100; 
     const totalBatches = Math.ceil(validWallets.length / BATCH_SIZE);
     
     console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${BATCH_SIZE} wallets each`);
 
-    // Обрабатываем пакеты последовательно, а не параллельно
     for (let i = 0; i < validWallets.length; i += BATCH_SIZE) {
       const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
       const batch = validWallets.slice(i, i + BATCH_SIZE);
       
       console.log(`[${new Date().toISOString()}] 📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} wallets)`);
 
-      // Обрабатываем каждый кошелек в пакете
       for (const wallet of batch) {
         try {
           const addedWallet = await solanaWebSocketService.addWallet(
@@ -584,19 +425,16 @@ app.post('/api/wallets/bulk', async (req, res) => {
         }
       }
 
-      // Небольшая пауза между пакетами
       if (i + BATCH_SIZE < validWallets.length) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
 
-      // Промежуточное логирование прогресса
       console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Total: ${results.successful} successful, ${results.failed} failed`);
     }
 
     const duration = Date.now() - startTime;
     console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful`);
 
-    // Возвращаем результат
     res.json({
       success: results.successful > 0,
       message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
@@ -617,140 +455,6 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
-app.get('/api/stats/tokens', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 10;
-    const type = req.query.type;
-    const groupId = req.query.groupId || null; // Оставляем как строку
-
-    const topTokens = await db.getTopTokens(limit, type, groupId);
-    res.json(topTokens);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching top tokens:`, error);
-    res.status(500).json({ error: 'Failed to fetch top tokens' });
-  }
-});
-
-// Token-centric tracker with wallets and per-wallet PnL-like SOL net
-// Исправленный endpoint в вашем основном файле сервера
-app.get('/api/tokens/tracker', async (req, res) => {
-  try {
-    const hours = parseInt(req.query.hours) || 24;
-    const groupId = req.query.groupId || null;
-    
-    console.log(`[${new Date().toISOString()}] 🔍 Token tracker request: hours=${hours}, groupId=${groupId}`);
-    
-    const rows = await db.getTokenWalletAggregates(hours, groupId);
-    
-    console.log(`[${new Date().toISOString()}] 📊 Token tracker found ${rows.length} wallet-token combinations`);
-
-    const byToken = new Map();
-    for (const row of rows) {
-      if (!byToken.has(row.mint)) {
-        byToken.set(row.mint, {
-          mint: row.mint,
-          symbol: row.symbol,
-          name: row.name,
-          decimals: row.decimals,
-          wallets: [],
-          summary: {
-            uniqueWallets: 0,
-            totalBuys: 0,
-            totalSells: 0,
-            totalSpentSOL: 0,
-            totalReceivedSOL: 0,
-            totalSpentUSDCOriginal: 0,
-            totalReceivedUSDCOriginal: 0,
-            latestActivity: null,  // добавляем время последней активности
-            firstBuyTime: null,    // время первой покупки
-          },
-        });
-      }
-      
-      const token = byToken.get(row.mint);
-      
-      // Обновляем время последней активности и первой покупки на уровне токена
-      if (!token.summary.latestActivity || new Date(row.last_activity) > new Date(token.summary.latestActivity)) {
-        token.summary.latestActivity = row.last_activity;
-      }
-      
-      if (row.first_buy_time) {
-        if (!token.summary.firstBuyTime || new Date(row.first_buy_time) < new Date(token.summary.firstBuyTime)) {
-          token.summary.firstBuyTime = row.first_buy_time;
-        }
-      }
-      
-      // Все значения уже в SOL благодаря конвертации на бэкенде
-      token.wallets.push({
-        address: row.wallet_address,
-        name: row.wallet_name,
-        groupId: row.group_id,
-        groupName: row.group_name,
-        txBuys: Number(row.tx_buys) || 0,
-        txSells: Number(row.tx_sells) || 0,
-        solSpent: Number(row.sol_spent) || 0,
-        solReceived: Number(row.sol_received) || 0,
-        usdcSpentOriginal: Number(row.usdc_spent_original) || 0,
-        usdcReceivedOriginal: Number(row.usdc_received_original) || 0,
-        tokensBought: Number(row.tokens_bought) || 0,
-        tokensSold: Number(row.tokens_sold) || 0,
-        pnlSol: Number(row.pnl_sol) || 0,
-        lastActivity: row.last_activity,
-        firstBuyTime: row.first_buy_time, // добавляем время первой покупки кошелька
-      });
-      
-      // Обновляем summary
-      token.summary.uniqueWallets += 1;
-      token.summary.totalBuys += Number(row.tx_buys) || 0;
-      token.summary.totalSells += Number(row.tx_sells) || 0;
-      token.summary.totalSpentSOL += Number(row.sol_spent) || 0;
-      token.summary.totalReceivedSOL += Number(row.sol_received) || 0;
-      token.summary.totalSpentUSDCOriginal += Number(row.usdc_spent_original) || 0;
-      token.summary.totalReceivedUSDCOriginal += Number(row.usdc_received_original) || 0;
-    }
-
-    const result = Array.from(byToken.values()).map((t) => ({
-      ...t,
-      summary: {
-        ...t.summary,
-        netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
-        netUSDCOriginal: +(t.summary.totalReceivedUSDCOriginal - t.summary.totalSpentUSDCOriginal).toFixed(6),
-      },
-      // Сортируем кошельки внутри токена по времени последней активности (самые свежие первыми)
-      wallets: t.wallets.sort((a, b) => {
-        const timeA = new Date(a.lastActivity || 0);
-        const timeB = new Date(b.lastActivity || 0);
-        return timeB - timeA;
-      })
-    }));
-
-    // Сортируем токены по времени последней активности (самые свежие первыми)
-    result.sort((a, b) => {
-      const timeA = new Date(a.summary.latestActivity || 0);
-      const timeB = new Date(b.summary.latestActivity || 0);
-      return timeB - timeA;
-    });
-
-    console.log(`[${new Date().toISOString()}] 📈 Returning ${result.length} tokens for tracker, sorted by latest activity`);
-    console.log(`[${new Date().toISOString()}] 📊 Sample token summary:`, result[0]?.summary);
-    
-    res.json(result);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error building token tracker:`, error);
-    res.status(500).json({ error: 'Failed to build token tracker' });
-  }
-});
-
-app.get('/api/websocket/status', (req, res) => {
-  try {
-    const status = solanaWebSocketService.getStatus();
-    res.json(status);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error getting WebSocket status:`, error);
-    res.status(500).json({ error: 'Failed to get WebSocket status' });
-  }
-});
-
 app.get('/api/solana/price', async (req, res) => {
   try {
     const solPrice = await monitoringService.fetchSolPrice();
@@ -763,22 +467,6 @@ app.get('/api/solana/price', async (req, res) => {
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);
     res.status(500).json({ error: 'Failed to fetch SOL price' });
-  }
-});
-
-app.post('/api/websocket/reconnect', async (req, res) => {
-  try {
-    const { groupId } = req.body;
-    await solanaWebSocketService.stop();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await solanaWebSocketService.start(groupId);
-    res.json({
-      success: true,
-      message: `WebSocket reconnected successfully${groupId ? ` for group ${groupId}` : ''}`,
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error reconnecting WebSocket:`, error);
-    res.status(500).json({ error: 'Failed to reconnect WebSocket' });
   }
 });
 
@@ -814,89 +502,6 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
-app.post('/api/wallets/validate-bulk', (req, res) => {
-  try {
-    const { text } = req.body;
-
-    if (!text || typeof text !== 'string') {
-      return res.status(400).json({ error: 'Text content is required' });
-    }
-
-    const lines = text.trim().split('\n');
-    const validation = {
-      totalLines: lines.length,
-      validWallets: 0,
-      invalidWallets: 0,
-      duplicates: 0,
-      comments: 0,
-      emptyLines: 0,
-      errors: [],
-      duplicateAddresses: []
-    };
-
-    const seenAddresses = new Set();
-
-    for (let i = 0; i < lines.length; i++) {
-      const lineNum = i + 1;
-      const line = lines[i].trim();
-      
-      if (!line) {
-        validation.emptyLines++;
-        continue;
-      }
-      
-      if (line.startsWith('#')) {
-        validation.comments++;
-        continue;
-      }
-
-      let address, name;
-      if (line.includes(',') || line.includes('\t')) {
-        const parts = line.split(/[,\t]/).map(p => p.trim());
-        address = parts[0];
-        name = parts[1] || null;
-      } else {
-        address = line;
-        name = null;
-      }
-
-      if (!address) {
-        validation.invalidWallets++;
-        validation.errors.push(`Line ${lineNum}: Empty address`);
-        continue;
-      }
-
-      if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-        validation.invalidWallets++;
-        validation.errors.push(`Line ${lineNum}: Invalid address format`);
-        continue;
-      }
-
-      if (seenAddresses.has(address)) {
-        validation.duplicates++;
-        validation.duplicateAddresses.push(address);
-        continue;
-      }
-
-      seenAddresses.add(address);
-      validation.validWallets++;
-    }
-
-    validation.canImport = validation.validWallets > 0 && validation.validWallets <= 10000;
-    validation.warningMessage = validation.validWallets > 10000 ? 
-      'Too many wallets. Maximum 10,000 allowed per import.' : null;
-
-    res.json({
-      success: true,
-      validation
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error validating bulk text:`, error);
-    res.status(500).json({ error: 'Failed to validate bulk text' });
-  }
-});
-
-
 app.post('/api/groups/switch', async (req, res) => {
   try {
     const { groupId } = req.body;
@@ -914,12 +519,10 @@ app.post('/api/groups/switch', async (req, res) => {
 app.use((error, req, res, next) => {
   console.error(`[${new Date().toISOString()}] ❌ Server Error:`, error);
   
-  // Проверяем, не был ли ответ уже отправлен
   if (res.headersSent) {
     return next(error);
   }
 
-  // Обрабатываем различные типы ошибок
   if (error.type === 'entity.too.large') {
     return res.status(413).json({
       success: false,
@@ -944,7 +547,6 @@ app.use((error, req, res, next) => {
     });
   }
 
-  // Общая ошибка сервера
   res.status(500).json({
     success: false,
     error: 'Internal server error',
@@ -956,7 +558,7 @@ app.use((error, req, res, next) => {
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
-  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
+  await solanaWebSocketService.shutdown(); 
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
@@ -965,7 +567,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
-  await solanaWebSocketService.shutdown(); // Используем shutdown вместо stop
+  await solanaWebSocketService.shutdown(); 
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);

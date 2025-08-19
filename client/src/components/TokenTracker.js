@@ -6,20 +6,17 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [hours, setHours] = useState(timeframe || '24');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [sortBy, setSortBy] = useState('latest'); // новое состояние для сортировки
+  const [sortBy, setSortBy] = useState('latest');
 
-// Функция для агрегации данных о токенах из транзакций
 const aggregateTokens = (transactions, hours, groupId) => {
-  // Токены для исключения из трекера
   const EXCLUDED_TOKENS = [
-    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
-    'So11111111111111111111111111111111111111112',   // Wrapped SOL
-    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',  // USDT (опционально)
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'So11111111111111111111111111111111111111112',  
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', 
   ];
 
   const byToken = new Map();
 
-  // Фильтруем транзакции по времени и groupId
   const now = new Date();
   const filteredTransactions = transactions.filter((tx) => {
     const txTime = new Date(tx.time);
@@ -31,13 +28,11 @@ const aggregateTokens = (transactions, hours, groupId) => {
 
   console.log(`Processing ${filteredTransactions.length} filtered transactions`);
 
-  // Агрегируем данные по токенам
   filteredTransactions.forEach((tx) => {
     const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
     if (!tokens || tokens.length === 0) return;
 
     tokens.forEach((token) => {
-      // ИСКЛЮЧАЕМ НЕЖЕЛАТЕЛЬНЫЕ ТОКЕНЫ
       if (EXCLUDED_TOKENS.includes(token.mint)) {
         console.log(`Excluding token ${token.symbol || token.mint} from tracker`);
         return;
@@ -57,8 +52,8 @@ const aggregateTokens = (transactions, hours, groupId) => {
             totalSpentSOL: 0,
             totalReceivedSOL: 0,
             netSOL: 0,
-            latestActivity: null, // время последней активности
-            firstBuyTime: null,   // время первой покупки
+            latestActivity: null,
+            firstBuyTime: null,  
           },
         });
       }
@@ -68,7 +63,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
       const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
       const txTime = new Date(tx.time);
 
-      // Обновляем время последней активности и первой покупки на уровне токена
       if (!tokenData.summary.latestActivity || txTime > new Date(tokenData.summary.latestActivity)) {
         tokenData.summary.latestActivity = tx.time;
       }
@@ -79,7 +73,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
         }
       }
 
-      // Обновляем статистику кошелька
       if (!wallet) {
         tokenData.wallets.push({
           address: walletAddress,
@@ -88,7 +81,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
           groupName: tx.wallet.group_name,
           txBuys: tx.transactionType === 'buy' ? 1 : 0,
           txSells: tx.transactionType === 'sell' ? 1 : 0,
-          // Теперь все значения уже в SOL (включая конвертированные USDC)
           solSpent: tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0,
           solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
           tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
@@ -96,7 +88,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
           pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
                   (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
           lastActivity: tx.time,
-          firstBuyTime: tx.transactionType === 'buy' ? tx.time : null, // время первой покупки кошелька
+          firstBuyTime: tx.transactionType === 'buy' ? tx.time : null,
         });
         tokenData.summary.uniqueWallets.add(walletAddress);
       } else {
@@ -108,12 +100,10 @@ const aggregateTokens = (transactions, hours, groupId) => {
         wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
         wallet.pnlSol = wallet.solReceived - wallet.solSpent;
         
-        // Обновляем время последней активности кошелька
         if (txTime > new Date(wallet.lastActivity)) {
           wallet.lastActivity = tx.time;
         }
         
-        // Обновляем время первой покупки кошелька
         if (tx.transactionType === 'buy') {
           if (!wallet.firstBuyTime || txTime < new Date(wallet.firstBuyTime)) {
             wallet.firstBuyTime = tx.time;
@@ -121,7 +111,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
         }
       }
 
-      // Обновляем summary
       tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
       tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
       tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
@@ -129,7 +118,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
     });
   });
 
-  // Формируем итоговый массив токенов
   const result = Array.from(byToken.values()).map((t) => ({
     ...t,
     summary: {
@@ -137,7 +125,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
       uniqueWallets: t.summary.uniqueWallets.size,
       netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
     },
-    // Сортируем кошельки внутри токена по времени последней активности (самые свежие первыми)
     wallets: t.wallets.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity))
   }));
 
@@ -146,13 +133,11 @@ const aggregateTokens = (transactions, hours, groupId) => {
   return result;
 };
 
-  // Функция сортировки токенов
   const sortTokens = (tokens, sortBy) => {
     const sortedTokens = [...tokens];
     
     switch (sortBy) {
       case 'latest':
-        // Сортировка по времени последней активности (самые свежие первыми)
         return sortedTokens.sort((a, b) => {
           const timeA = new Date(a.summary.latestActivity || 0);
           const timeB = new Date(b.summary.latestActivity || 0);
@@ -160,7 +145,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
         });
       
       case 'firstBuy':
-        // Сортировка по времени первой покупки (самые свежие покупки первыми)
         return sortedTokens.sort((a, b) => {
           const timeA = new Date(a.summary.firstBuyTime || 0);
           const timeB = new Date(b.summary.firstBuyTime || 0);
@@ -168,19 +152,15 @@ const aggregateTokens = (transactions, hours, groupId) => {
         });
       
       case 'profit':
-        // Сортировка по прибыли (самые прибыльные первыми)
         return sortedTokens.sort((a, b) => b.summary.netSOL - a.summary.netSOL);
       
       case 'loss':
-        // Сортировка по убыткам (самые убыточные первыми)
         return sortedTokens.sort((a, b) => a.summary.netSOL - b.summary.netSOL);
       
       case 'volume':
-        // Сортировка по объему (абсолютное значение netSOL)
         return sortedTokens.sort((a, b) => Math.abs(b.summary.netSOL) - Math.abs(a.summary.netSOL));
       
       case 'activity':
-        // Сортировка по количеству транзакций
         return sortedTokens.sort((a, b) => 
           (b.summary.totalBuys + b.summary.totalSells) - (a.summary.totalBuys + a.summary.totalSells)
         );
@@ -190,7 +170,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
     }
   };
 
-  // Обновляем items при изменении transactions, hours, groupId или sortBy
   useEffect(() => {
     setLoading(true);
     try {
@@ -206,7 +185,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
     }
   }, [transactions, hours, groupId, sortBy]);
 
-  // Синхронизируем hours с timeframe из пропсов
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);
@@ -237,7 +215,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
         <div className="flex items-center space-x-4">
-          {/* Селектор сортировки */}
           <div className="flex items-center space-x-2">
             <span className="text-sm text-gray-500">Sort by:</span>
             <select
@@ -254,7 +231,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
             </select>
           </div>
           
-          {/* Селектор периода */}
           <div className="flex items-center space-x-2">
             <span className="text-sm text-gray-500">Period:</span>
             <select
@@ -295,7 +271,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Показываем информацию о сортировке */}
           <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
             <div className="flex items-center justify-between">
               <span>
