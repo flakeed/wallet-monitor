@@ -66,11 +66,6 @@ function WalletPill({ wallet, tokenMint }) {
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
                 </div>
-                {wallet.lastActivity && (
-                        <span className="text-blue-600 font-medium">
-                            Last buy: {formatTime(wallet.lastActivity)}
-                        </span>
-                    )}
             </div>
             <div className="text-right ml-2">
                 <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
