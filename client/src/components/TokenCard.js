@@ -219,25 +219,6 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             </div>
 
-            {(token.summary.latestActivity || token.summary.firstBuyTime) && (
-                <div className="mb-3 p-2 bg-blue-50 rounded border border-blue-200">
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                        {token.summary.latestActivity && (
-                            <div>
-                                <span className="text-gray-600">Latest Activity:</span>
-                                <div className="font-medium text-blue-700">{formatTime(token.summary.latestActivity)}</div>
-                            </div>
-                        )}
-                        {token.summary.firstBuyTime && (
-                            <div>
-                                <span className="text-gray-600">First Purchase:</span>
-                                <div className="font-medium text-green-700">{formatTime(token.summary.firstBuyTime)}</div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-
             {groupPnL && (
                 <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
                     <div className="grid grid-cols-2 gap-3 text-xs">

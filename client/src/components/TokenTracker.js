@@ -274,7 +274,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
           <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
             <div className="flex items-center justify-between">
               <span>
-                Showing {items.length} tokens sorted by{' '}
                 <span className="font-medium">
                   {sortBy === 'latest' && 'Latest Activity'}
                   {sortBy === 'firstBuy' && 'Recent Purchases'}
