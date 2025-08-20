@@ -295,16 +295,17 @@ class Database {
             let typeFilter = '';
             let queryParams = [userId, limit];
             let paramIndex = 3;
-            
-            if (transactionType) {
-                typeFilter = `AND t.transaction_type = $${paramIndex++}`;
+    
+            // Build the typeFilter and queryParams correctly
+            if (transactionType && transactionType !== 'all') {
+                typeFilter += ` AND t.transaction_type = $${paramIndex++}`;
                 queryParams.push(transactionType);
             }
             if (groupId) {
-                typeFilter += ` AND w.group_id = $${paramIndex}`;
+                typeFilter += ` AND w.group_id = $${paramIndex++}`;
                 queryParams.push(groupId);
             }
-
+    
             const uniqueTransactionsQuery = `
                 SELECT 
                     t.signature,
@@ -325,16 +326,16 @@ class Database {
                 ORDER BY t.block_time DESC
                 LIMIT $2
             `;
-
+    
             const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
-            
+    
             if (uniqueTransactions.rows.length === 0) {
                 return [];
             }
-
+    
             const signatures = uniqueTransactions.rows.map(row => row.signature);
             const placeholders = signatures.map((_, index) => `$${index + 1}`).join(',');
-
+    
             const fullDataQuery = `
                 SELECT 
                     t.signature,
@@ -360,13 +361,13 @@ class Database {
                 WHERE t.signature IN (${placeholders})
                 ORDER BY t.block_time DESC, t.signature, to_.id
             `;
-
+    
             const result = await this.pool.query(fullDataQuery, [...signatures, userId]);
-            
+    
             console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens for user ${userId}`);
-            
+    
             return result.rows;
-
+    
         } catch (error) {
             console.error('❌ Error in getRecentTransactions:', error);
             throw error;
