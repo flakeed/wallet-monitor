@@ -254,106 +254,6 @@ app.get('/api/admin/stats', auth.authRequired, auth.adminRequired, async (req, r
   }
 });
 
-// Update existing database methods to include user_id
-const originalAddWallet = db.addWallet.bind(db);
-db.addWallet = async function(address, name = null, groupId = null, userId = null) {
-  const query = `
-    INSERT INTO wallets (address, name, group_id, user_id) 
-    VALUES ($1, $2, $3, $4) 
-    RETURNING id, address, name, group_id, user_id, created_at
-  `;
-  try {
-    const result = await this.pool.query(query, [address, name, groupId, userId]);
-    return result.rows[0];
-  } catch (error) {
-    if (error.code === '23505') {
-      throw new Error('Wallet already exists for this user');
-    }
-    throw error;
-  }
-};
-
-const originalGetActiveWallets = db.getActiveWallets.bind(db);
-db.getActiveWallets = async function(groupId = null, userId = null) {
-  let query = `
-    SELECT w.*, g.name as group_name
-    FROM wallets w
-    LEFT JOIN groups g ON w.group_id = g.id
-    WHERE w.is_active = TRUE
-  `;
-  const params = [];
-  let paramIndex = 1;
-  
-  if (userId) {
-    query += ` AND w.user_id = $${paramIndex++}`;
-    params.push(userId);
-  }
-  
-  if (groupId) {
-    query += ` AND w.group_id = $${paramIndex}`;
-    params.push(groupId);
-  }
-  
-  query += ` ORDER BY w.created_at DESC`;
-  const result = await this.pool.query(query, params);
-  return result.rows;
-};
-
-const originalAddGroup = db.addGroup.bind(db);
-db.addGroup = async function(name, userId = null) {
-  const query = `
-    INSERT INTO groups (name, user_id)
-    VALUES ($1, $2)
-    RETURNING id, name, user_id, created_at
-  `;
-  try {
-    const result = await this.pool.query(query, [name, userId]);
-    return result.rows[0];
-  } catch (error) {
-    if (error.code === '23505') {
-      throw new Error('Group name already exists for this user');
-    }
-    throw error;
-  }
-};
-
-const originalGetGroups = db.getGroups.bind(db);
-db.getGroups = async function(userId = null) {
-  let query = `
-    SELECT g.id, g.name, COUNT(w.id) as wallet_count
-    FROM groups g
-    LEFT JOIN wallets w ON g.id = w.group_id AND w.is_active = true
-  `;
-  const params = [];
-  
-  if (userId) {
-    query += ` WHERE g.user_id = $1`;
-    params.push(userId);
-  }
-  
-  query += ` GROUP BY g.id, g.name ORDER BY g.created_at`;
-  const result = await this.pool.query(query, params);
-  return result.rows;
-};
-
-// Update monitoring service to include user context
-const originalAddWalletMonitoring = solanaWebSocketService.addWallet.bind(solanaWebSocketService);
-solanaWebSocketService.addWallet = async function(walletAddress, name = null, groupId = null, userId = null) {
-  try {
-    if (this.subscriptions.size >= this.maxSubscriptions) {
-      throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
-    }
-    const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId, userId);
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && (!this.activeGroupId || wallet.group_id === this.activeGroupId)) {
-      await this.subscribeToWallet(walletAddress);
-    }
-    return wallet;
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${walletAddress}:`, error.message);
-    throw error;
-  }
-};
-
 // Protected routes - all existing routes now require authentication
 app.get('/api/transactions/stream', async (req, res) => {
   try {
@@ -696,6 +596,7 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
     const validWallets = [];
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 
+    // Валидация кошельков
     for (let i = 0; i < wallets.length; i++) {
       const wallet = wallets[i];
       
@@ -735,50 +636,38 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation`);
 
-    const BATCH_SIZE = 100; 
-    const totalBatches = Math.ceil(validWallets.length / BATCH_SIZE);
-    
-    console.log(`[${new Date().toISOString()}] 🔄 Processing ${totalBatches} batches of ${BATCH_SIZE} wallets each`);
+    // Добавляем кошельки по одному с правильной обработкой ошибок
+    for (const wallet of validWallets) {
+      try {
+        console.log(`[${new Date().toISOString()}] 📝 Adding wallet ${wallet.address.slice(0, 8)}...`);
+        
+        const addedWallet = await solanaWebSocketService.addWallet(
+          wallet.address, 
+          wallet.name, 
+          groupId,
+          userId
+        );
+        
+        results.successful++;
+        results.successfulWallets.push({
+          address: wallet.address,
+          name: wallet.name,
+          id: addedWallet.id,
+          groupId: addedWallet.group_id,
+          userId: addedWallet.user_id,
+        });
 
-    for (let i = 0; i < validWallets.length; i += BATCH_SIZE) {
-      const currentBatch = Math.floor(i / BATCH_SIZE) + 1;
-      const batch = validWallets.slice(i, i + BATCH_SIZE);
-      
-      console.log(`[${new Date().toISOString()}] 📦 Processing batch ${currentBatch}/${totalBatches} (${batch.length} wallets)`);
+        console.log(`[${new Date().toISOString()}] ✅ Successfully added wallet ${wallet.address.slice(0, 8)}...`);
 
-      for (const wallet of batch) {
-        try {
-          const addedWallet = await solanaWebSocketService.addWallet(
-            wallet.address, 
-            wallet.name, 
-            groupId,
-            userId
-          );
-          
-          results.successful++;
-          results.successfulWallets.push({
-            address: wallet.address,
-            name: wallet.name,
-            id: addedWallet.id,
-            groupId: addedWallet.group_id,
-            userId: addedWallet.user_id,
-          });
-
-        } catch (error) {
-          results.failed++;
-          results.errors.push({
-            address: wallet.address,
-            name: wallet.name,
-            error: error.message || 'Unknown error'
-          });
-        }
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${wallet.address}:`, error.message);
+        results.failed++;
+        results.errors.push({
+          address: wallet.address,
+          name: wallet.name,
+          error: error.message || 'Unknown error'
+        });
       }
-
-      if (i + BATCH_SIZE < validWallets.length) {
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-
-      console.log(`[${new Date().toISOString()}] ✅ Batch ${currentBatch}/${totalBatches} complete. Total: ${results.successful} successful, ${results.failed} failed`);
     }
 
     const duration = Date.now() - startTime;

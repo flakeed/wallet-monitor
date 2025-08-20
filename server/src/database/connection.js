@@ -100,7 +100,12 @@ class Database {
         if (!userId) {
             throw new Error('User ID is required');
         }
-
+    
+        // Проверяем валидность адреса Solana
+        if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+            throw new Error('Invalid Solana wallet address format');
+        }
+    
         const query = `
             INSERT INTO wallets (address, name, group_id, user_id) 
             VALUES ($1, $2, $3, $4) 
