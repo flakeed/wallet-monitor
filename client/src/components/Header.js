@@ -145,7 +145,7 @@ function Header({ user, onLogout, onOpenAdmin }) {
         )}
       </div>
 
-      {/* User info banner when not showing menu */}
+      {/* User info banner when not showing menu
       {user && !showUserMenu && (
         <div className="mt-4 flex justify-center">
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 flex items-center space-x-2">
@@ -158,7 +158,7 @@ function Header({ user, onLogout, onOpenAdmin }) {
             </span>
           </div>
         </div>
-      )}
+      )} */}
     </div>
   );
 }
