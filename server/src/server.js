@@ -132,6 +132,55 @@ app.post('/api/auth/telegram', async (req, res) => {
   try {
     const authData = req.body;
     
+    // Development mode bypass
+    if (authData.hash === 'development_mode_hash') {
+      console.log('🔧 Development mode authentication for Telegram ID:', authData.id);
+      
+      // In development, skip hash verification but still check whitelist/admin
+      const result = await db.pool.query(
+        'SELECT * FROM authenticate_user($1, $2, $3, $4)',
+        [
+          parseInt(authData.id),
+          authData.username || null,
+          authData.first_name || null,
+          authData.last_name || null
+        ]
+      );
+
+      const authResult = result.rows[0];
+
+      if (!authResult.success) {
+        return res.status(403).json({
+          success: false,
+          message: authResult.message + ' (Make sure your Telegram ID is in the whitelist)'
+        });
+      }
+
+      const userData = authResult.user_data;
+      const token = generateToken(userData.id);
+
+      // Create session
+      await db.pool.query(
+        `INSERT INTO user_sessions (user_id, session_token, expires_at, ip_address, user_agent) 
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          userData.id,
+          token,
+          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+          req.ip,
+          req.get('User-Agent')
+        ]
+      );
+
+      return res.json({
+        success: true,
+        message: 'Development authentication successful',
+        token,
+        user: userData
+      });
+    }
+
+    // Production mode - verify Telegram auth data
     if (!BOT_TOKEN) {
       return res.status(500).json({ 
         success: false, 

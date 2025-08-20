@@ -16,6 +16,7 @@ const TelegramAuth = ({ onAuthSuccess, onAuthFailure }) => {
     setError(null);
 
     try {
+      // For development mode, we'll use the API_BASE from package.json proxy
       const response = await fetch('/api/auth/telegram', {
         method: 'POST',
         headers: {
@@ -69,14 +70,14 @@ const TelegramAuth = ({ onAuthSuccess, onAuthFailure }) => {
       return;
     }
 
-    // Create auth data for manual testing
+    // Create auth data for manual testing - bypass hash verification for development
     const authData = {
       id: formData.id,
       first_name: formData.first_name || 'Test',
       last_name: formData.last_name || 'User',
       username: formData.username || '',
       auth_date: Math.floor(Date.now() / 1000),
-      hash: 'development_mode_hash'
+      hash: 'development_mode_hash' // Special hash for development
     };
 
     handleTelegramAuth(authData);
@@ -221,7 +222,7 @@ const TelegramAuth = ({ onAuthSuccess, onAuthFailure }) => {
                   disabled={isLoading}
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Get your ID from @userinfobot
+                  Get your ID from @userinfobot on Telegram
                 </p>
               </div>
 
@@ -293,7 +294,7 @@ const TelegramAuth = ({ onAuthSuccess, onAuthFailure }) => {
                 <div>
                   <h4 className="text-sm font-medium text-yellow-800">Development Mode</h4>
                   <p className="text-xs text-yellow-700 mt-1">
-                    This is for testing only. Make sure you've added your Telegram ID to the admin list.
+                    This is for testing only. Make sure you've added your Telegram ID to the whitelist via the admin panel first.
                   </p>
                 </div>
               </div>
