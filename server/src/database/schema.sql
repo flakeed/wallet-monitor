@@ -174,16 +174,16 @@ BEGIN
     
     IF existing_user IS NOT NULL THEN
         -- Update existing user
-UPDATE users 
-SET 
-    username = COALESCE(p_username, username),
-    first_name = COALESCE(p_first_name, first_name),
-    last_name = COALESCE(p_last_name, last_name),
-    last_login = CURRENT_TIMESTAMP,
-    updated_at = CURRENT_TIMESTAMP,
-    is_admin = users.is_admin  -- Explicitly use the table column
-WHERE id = existing_user
-RETURNING *
+        UPDATE users 
+        SET 
+            username = COALESCE(p_username, username),
+            first_name = COALESCE(p_first_name, first_name),
+            last_name = COALESCE(p_last_name, last_name),
+            last_login = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP,
+            is_admin = is_admin  -- Use the function variable explicitly
+        WHERE id = existing_user
+        RETURNING * INTO user_record;
     ELSE
         -- Create new user
         INSERT INTO users (telegram_id, username, first_name, last_name, is_admin, last_login)
