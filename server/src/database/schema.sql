@@ -141,7 +141,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION authenticate_user(
+CREATE OR REPLACE FUNCTION public.authenticate_user(
     p_telegram_id BIGINT,
     p_username VARCHAR(255) DEFAULT NULL,
     p_first_name VARCHAR(255) DEFAULT NULL,
