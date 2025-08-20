@@ -309,7 +309,7 @@ const AdminPanel = ({ user, onClose }) => {
             </div>
           )}
 
-          {activeTab === 'stats' && (
+          {/* {activeTab === 'stats' && (
             <div className="space-y-6">
               <h3 className="text-lg font-medium">System Statistics</h3>
               {loading ? (
@@ -355,7 +355,7 @@ const AdminPanel = ({ user, onClose }) => {
                 <p className="text-gray-500">Unable to load statistics</p>
               )}
             </div>
-          )}
+          )} */}
         </div>
       </div>
     </div>
