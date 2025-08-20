@@ -3,6 +3,11 @@ const { Connection, PublicKey } = require('@solana/web3.js');
 const WalletMonitoringService = require('./monitoringService');
 const Database = require('../database/connection');
 
+const WS_READY_STATE_CONNECTING = 0;
+const WS_READY_STATE_OPEN = 1;
+const WS_READY_STATE_CLOSING = 2;
+const WS_READY_STATE_CLOSED = 3;
+
 class SolanaWebSocketService {
     constructor() {
         this.solanaRpc = process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005';
@@ -204,7 +209,7 @@ class SolanaWebSocketService {
             throw new Error(`Maximum subscription limit of ${this.maxSubscriptions} reached`);
         }
         
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        if (!this.ws || this.ws.readyState !== WS_READY_STATE_OPEN) {
             console.warn(`[${new Date().toISOString()}] ⚠️ Cannot subscribe to wallet ${walletAddress.slice(0, 8)}... - WebSocket not connected`);
             return;
         }
@@ -226,7 +231,7 @@ class SolanaWebSocketService {
         const subData = this.subscriptions.get(walletAddress);
         if (!subData) return;
 
-        if (subData.logs && this.ws && this.ws.readyState === WebSocket.OPEN) {
+        if (subData.logs && this.ws && this.ws.readyState === WS_READY_STATE_OPEN) {
             try {
                 await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
                 console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from logs for ${walletAddress.slice(0, 8)}...`);
@@ -247,7 +252,7 @@ class SolanaWebSocketService {
             const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId, userId);
             
             // Only subscribe if WebSocket is connected and wallet matches current context
-            if (this.ws && this.ws.readyState === WebSocket.OPEN && 
+            if (this.ws && this.ws.readyState === WS_READY_STATE_OPEN && 
                 (!this.activeGroupId || wallet.group_id === this.activeGroupId) &&
                 (!this.activeUserId || wallet.user_id === this.activeUserId)) {
                 await this.subscribeToWallet(walletAddress);
@@ -264,7 +269,7 @@ class SolanaWebSocketService {
 
     async removeWallet(walletAddress, userId = null) {
         try {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            if (this.ws && this.ws.readyState === WS_READY_STATE_OPEN) {
                 await this.unsubscribeFromWallet(walletAddress);
             }
             await this.monitoringService.removeWallet(walletAddress, userId);
@@ -312,7 +317,7 @@ class SolanaWebSocketService {
 
     sendRequest(method, params, type) {
         return new Promise((resolve, reject) => {
-            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            if (!this.ws || this.ws.readyState !== WS_READY_STATE_OPEN) {
                 reject(new Error('WebSocket is not connected'));
                 return;
             }
@@ -370,7 +375,7 @@ class SolanaWebSocketService {
               addedWallets.push(wallet);
               
               // Subscribe to wallet if WebSocket is connected
-              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              if (this.ws && this.ws.readyState ===WS_READY_STATE_OPEN) {
                 await this.subscribeToWallet(wallet.address);
               }
             }
@@ -390,7 +395,7 @@ class SolanaWebSocketService {
         }));
 
         return {
-            isConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
+            isConnected: this.ws && this.ws.readyState === WS_READY_STATE_OPEN,
             isStarted: this.isStarted,
             activeGroupId: this.activeGroupId,
             activeUserId: this.activeUserId,
