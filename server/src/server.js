@@ -257,14 +257,12 @@ app.get('/api/admin/stats', auth.authRequired, auth.adminRequired, async (req, r
 // Protected routes - all existing routes now require authentication
 app.get('/api/transactions/stream', async (req, res) => {
   try {
-    // Get token from query parameter or Authorization header
     const token = req.query.token || (req.headers.authorization && req.headers.authorization.substring(7));
     
     if (!token) {
       return res.status(401).json({ error: 'No authentication token provided' });
     }
 
-    // Validate the session token
     const session = await auth.validateSession(token);
     if (!session) {
       return res.status(401).json({ error: 'Invalid or expired session' });
@@ -299,24 +297,26 @@ app.get('/api/transactions/stream', async (req, res) => {
         try {
           const transaction = JSON.parse(message);
           
-          // ВАЖНО: Проверяем принадлежность транзакции пользователю
-          // Получаем информацию о кошельке из базы данных
-          const wallet = await db.getWalletByAddress(transaction.walletAddress);
+          console.log(`[${new Date().toISOString()}] 📡 Received Redis message:`, {
+            signature: transaction.signature,
+            walletAddress: transaction.walletAddress,
+            transactionType: transaction.transactionType,
+            userId: transaction.userId,
+            groupId: transaction.groupId
+          });
           
-          if (!wallet) {
-            console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${transaction.walletAddress} not found, skipping transaction`);
-            return;
-          }
+          // ВАЖНО: Проверяем принадлежность транзакции пользователю
+          // НЕ делаем дополнительный запрос к БД, используем данные из Redis message
           
           // Фильтруем по пользователю
-          if (wallet.user_id !== userId) {
-            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${wallet.user_id} != ${userId}), skipping`);
+          if (transaction.userId !== userId) {
+            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${transaction.userId} != ${userId}), skipping`);
             return;
           }
           
           // Фильтруем по группе если указана
-          if (groupId !== null && wallet.group_id !== groupId) {
-            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different group (${wallet.group_id} != ${groupId}), skipping`);
+          if (groupId !== null && transaction.groupId !== groupId) {
+            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different group (${transaction.groupId} != ${groupId}), skipping`);
             return;
           }
           

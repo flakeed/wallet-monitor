@@ -67,23 +67,25 @@ constructor() {
     
             const batchResults = await Promise.all(
                 requests.map(async (request) => {
-                    const { signature, walletAddress, blockTime } = request;
+                    const { signature, walletAddress, blockTime, userId, groupId } = request;
                     try {
-                        const wallet = await this.db.getWalletByAddress(walletAddress);
+                        // Получаем кошелек с проверкой пользователя
+                        const wallet = await this.db.getWalletByAddressAndUser(walletAddress, userId);
                         if (!wallet) {
-                            console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
+                            console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found for user ${userId}`);
                             return null;
                         }
     
                         const txData = await this.processTransaction({ signature, blockTime }, wallet);
                         if (txData) {
-                            console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature}`);
+                            console.log(`[${new Date().toISOString()}] ✅ Processed transaction ${signature} for user ${userId}`);
                             return {
                                 signature,
                                 walletAddress,
                                 walletName: wallet.name,
                                 groupId: wallet.group_id,
                                 groupName: wallet.group_name,
+                                userId: wallet.user_id, // ВАЖНО: добавляем userId в результат
                                 transactionType: txData.type,
                                 solAmount: txData.solAmount,
                                 tokens: txData.tokensChanged.map((tc) => ({
@@ -105,8 +107,10 @@ constructor() {
     
             const successfulTxs = batchResults.filter((tx) => tx !== null);
             if (successfulTxs.length > 0) {
+                console.log(`[${new Date().toISOString()}] 📡 Publishing ${successfulTxs.length} transactions to Redis`);
                 const pipeline = this.redis.pipeline();
                 successfulTxs.forEach((tx) => {
+                    console.log(`[${new Date().toISOString()}] 📤 Publishing transaction: ${tx.signature} for user ${tx.userId}, group ${tx.groupId}`);
                     pipeline.publish('transactions', JSON.stringify(tx));
                 });
                 await pipeline.exec();
@@ -121,17 +125,22 @@ constructor() {
     }
 
     async processWebhookMessage(message) {
-        const { signature, walletAddress, blockTime } = message;
+        const { signature, walletAddress, blockTime, userId, groupId } = message;
         const requestId = require('uuid').v4();
+        
+        // ВАЖНО: передаем userId и groupId в очередь
         await this.redis.lpush(this.queueKey, JSON.stringify({
             requestId,
             signature,
             walletAddress,
             blockTime,
+            userId,        // добавляем userId
+            groupId,       // добавляем groupId
             timestamp: Date.now(),
         }));
-        console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature}`);
-
+        
+        console.log(`[${new Date().toISOString()}] 📤 Enqueued signature ${signature} for user ${userId}, group ${groupId}`);
+    
         if (!this.isProcessingQueue) {
             setImmediate(() => this.processQueue());
         }

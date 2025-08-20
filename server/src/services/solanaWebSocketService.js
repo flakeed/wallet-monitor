@@ -145,29 +145,36 @@ class SolanaWebSocketService {
         }
     
         if (result.value && result.value.signature) {
-            console.log(`[${new Date().toISOString()}] 🔍 New transaction detected: ${result.value.signature}`);
+            console.log(`[${new Date().toISOString()}] 🔍 New transaction detected: ${result.value.signature} for wallet ${walletAddress.slice(0, 8)}...`);
+            
+            // Получаем информацию о кошельке из базы данных
             const wallet = await this.db.getWalletByAddress(walletAddress);
             if (!wallet) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
+                console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found in database`);
                 return;
             }
             
+            // Фильтрация по активному пользователю
             if (this.activeUserId && wallet.user_id !== this.activeUserId) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress} (not in active user ${this.activeUserId})`);
+                console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress.slice(0, 8)}... (not in active user ${this.activeUserId})`);
                 return;
             }
             
+            // Фильтрация по активной группе
             if (this.activeGroupId && wallet.group_id !== this.activeGroupId) {
-                console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress} (not in active group ${this.activeGroupId})`);
+                console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress.slice(0, 8)}... (not in active group ${this.activeGroupId})`);
                 return;
             }
             
+            console.log(`[${new Date().toISOString()}] ✅ Processing transaction ${result.value.signature} for user ${wallet.user_id}, group ${wallet.group_id || 'none'}`);
+            
+            // Отправляем в очередь обработки с информацией о пользователе и группе
             await this.monitoringService.processWebhookMessage({
                 signature: result.value.signature,
                 walletAddress,
                 blockTime: result.value.timestamp || Math.floor(Date.now() / 1000),
-                userId: wallet.user_id,
-                groupId: wallet.group_id
+                userId: wallet.user_id,     // ВАЖНО: передаем userId
+                groupId: wallet.group_id    // ВАЖНО: передаем groupId
             });
         }
     }

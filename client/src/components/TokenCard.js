@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
 
-function TokenCard({ token, onOpenChart }) {
+function TokenCard({ token, onOpenChart, isNewPurchase = false }) {
     const [priceData, setPriceData] = useState(null);
     const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
+    const [isHighlighted, setIsHighlighted] = useState(isNewPurchase);
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
+    // Убираем подсветку через 5 секунд
+    useEffect(() => {
+        if (isNewPurchase) {
+            setIsHighlighted(true);
+            const timer = setTimeout(() => {
+                setIsHighlighted(false);
+            }, 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [isNewPurchase]);
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -199,11 +211,28 @@ function TokenCard({ token, onOpenChart }) {
     };
 
     return (
-        <div className="border rounded-lg p-4 bg-gray-50">
+        <div className={`border rounded-lg p-4 transition-all duration-500 ${
+            isHighlighted 
+                ? 'bg-gradient-to-r from-green-50 to-blue-50 border-green-300 shadow-lg transform scale-[1.02]' 
+                : 'bg-gray-50'
+        }`}>
+            {isHighlighted && (
+                <div className="flex items-center mb-2 text-green-700 text-sm font-medium">
+                    <div className="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+                    🎉 New purchase detected!
+                </div>
+            )}
+            
             <div className="flex items-center justify-between mb-3">
                 <div className="min-w-0">
                     <div className="flex items-center space-x-2">
-                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
+                        <span className={`text-sm px-2 py-0.5 rounded-full font-semibold transition-all ${
+                            isHighlighted 
+                                ? 'bg-green-200 text-green-900' 
+                                : 'bg-gray-200 text-gray-800'
+                        }`}>
+                            {token.symbol || 'Unknown'}
+                        </span>
                         <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
                     </div>
                     <div className="flex items-center space-x-1">
@@ -231,7 +260,11 @@ function TokenCard({ token, onOpenChart }) {
             </div>
 
             {groupPnL && (
-                <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div className={`mb-3 p-3 rounded-lg border transition-all ${
+                    isHighlighted 
+                        ? 'bg-green-100 border-green-300' 
+                        : 'bg-blue-50 border-blue-200'
+                }`}>
                     <div className="grid grid-cols-2 gap-3 text-xs">
                         <div className="space-y-1">
                             <div className="flex justify-between">
@@ -270,7 +303,9 @@ function TokenCard({ token, onOpenChart }) {
                                     </div>
                                 </div>
                             </div>
-                            <div className="flex justify-between border-t border-blue-200 pt-1">
+                            <div className={`flex justify-between border-t pt-1 ${
+                                isHighlighted ? 'border-green-300' : 'border-blue-200'
+                            }`}>
                                 <span className="text-gray-600 font-medium">Total PnL:</span>
                                 <div className="text-right">
                                     <div className={`font-bold ${groupPnL.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -295,13 +330,21 @@ function TokenCard({ token, onOpenChart }) {
             <div className="mt-2 flex space-x-2">
                 <button
                     onClick={onOpenChart}
-                    className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+                    className={`flex-1 py-2 rounded transition-colors ${
+                        isHighlighted 
+                            ? 'bg-green-600 hover:bg-green-700' 
+                            : 'bg-blue-600 hover:bg-blue-700'
+                    } text-white`}
                 >
                     Open Chart
                 </button>
                 <button
                     onClick={openGmgnChart}
-                    className="flex-1 bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
+                    className={`flex-1 py-2 rounded transition-colors ${
+                        isHighlighted 
+                            ? 'bg-emerald-600 hover:bg-emerald-700' 
+                            : 'bg-green-600 hover:bg-green-700'
+                    } text-white`}
                 >
                     Open new tab
                 </button>

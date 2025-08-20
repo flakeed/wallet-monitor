@@ -691,9 +691,21 @@ class Database {
 
     // Backward compatibility method
     async getWalletByAddress(address) {
-        const query = `SELECT * FROM wallets WHERE address = $1 LIMIT 1`;
-        const result = await this.pool.query(query, [address]);
-        return result.rows[0];
+        const query = `
+            SELECT w.*, g.name as group_name
+            FROM wallets w
+            LEFT JOIN groups g ON w.group_id = g.id
+            WHERE w.address = $1
+            LIMIT 1
+        `;
+        
+        try {
+            const result = await this.pool.query(query, [address]);
+            return result.rows[0] || null;
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error getting wallet by address:`, error);
+            return null;
+        }
     }
 
     // UPDATED: Transaction methods with user context
