@@ -1,4 +1,4 @@
-const WebSocket = require('ws');
+const WebSocket = require('ws'); // Исправлено: добавлен require
 const { Connection, PublicKey } = require('@solana/web3.js');
 const WalletMonitoringService = require('./monitoringService');
 const Database = require('../database/connection');
@@ -27,6 +27,7 @@ class SolanaWebSocketService {
         this.batchSize = 400;
         this.maxSubscriptions = 10000;
         this.activeGroupId = null;
+        this.activeUserId = null; // Добавлено для пользовательского контекста
     }
 
     async start(groupId = null, userId = null) {
@@ -114,7 +115,7 @@ class SolanaWebSocketService {
             console.warn(`[${new Date().toISOString()}] ⚠️ No wallet found for subscription ${subscription}`);
             return;
         }
-    
+
         if (result.value && result.value.signature) {
             console.log(`[${new Date().toISOString()}] 🔍 New transaction detected: ${result.value.signature}`);
             const wallet = await this.db.getWalletByAddress(walletAddress);
@@ -151,27 +152,26 @@ class SolanaWebSocketService {
         return null;
     }
 
-async subscribeToWallets() {
-    this.subscriptions.clear();
-    const wallets = await this.db.getActiveWallets(this.activeGroupId, this.activeUserId);
-    if (wallets.length > this.maxSubscriptions) {
-        console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
-        wallets.splice(this.maxSubscriptions);
-    }
-    console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}${this.activeUserId ? ` for user ${this.activeUserId}` : ''}`);
+    async subscribeToWallets() {
+        this.subscriptions.clear();
+        const wallets = await this.db.getActiveWallets(this.activeGroupId, this.activeUserId);
+        if (wallets.length > this.maxSubscriptions) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
+            wallets.splice(this.maxSubscriptions);
+        }
+        console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}${this.activeUserId ? ` for user ${this.activeUserId}` : ''}`);
 
-    for (let i = 0; i < wallets.length; i += this.batchSize) {
-        const batch = wallets.slice(i, i + this.batchSize);
-        await Promise.all(
-            batch.map(async (wallet) => {
-                await this.subscribeToWallet(wallet.address);
-            })
-        );
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        for (let i = 0; i < wallets.length; i += this.batchSize) {
+            const batch = wallets.slice(i, i + this.batchSize);
+            await Promise.all(
+                batch.map(async (wallet) => {
+                    await this.subscribeToWallet(wallet.address);
+                })
+            );
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}${this.activeUserId ? ` for user ${this.activeUserId}` : ''}`);
     }
-    console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}${this.activeUserId ? ` for user ${this.activeUserId}` : ''}`);
-}
-
 
     async subscribeToWallet(walletAddress) {
         if (this.subscriptions.size >= this.maxSubscriptions) {
@@ -195,8 +195,12 @@ async subscribeToWallets() {
         if (!subData) return;
 
         if (subData.logs) {
-            await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
-            console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from logs for ${walletAddress.slice(0, 8)}...`);
+            try {
+                await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
+                console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from logs for ${walletAddress.slice(0, 8)}...`);
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ❌ Error unsubscribing from ${walletAddress}:`, error.message);
+            }
         }
         this.subscriptions.delete(walletAddress);
     }
@@ -255,18 +259,17 @@ async subscribeToWallets() {
         }
     }
 
-async switchGroup(groupId, userId = null) {
-    try {
-        console.log(`[${new Date().toISOString()}] 🔄 Switching to group ${groupId || 'all'} for user ${userId || 'all'}`);
-        await this.stop();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        await this.start(groupId, userId);
-    } catch (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error.message);
-        throw error;
+    async switchGroup(groupId, userId = null) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔄 Switching to group ${groupId || 'all'} for user ${userId || 'all'}`);
+            await this.stop();
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            await this.start(groupId, userId);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error.message);
+            throw error;
+        }
     }
-}
-
 
     sendRequest(method, params, type) {
         return new Promise((resolve, reject) => {
@@ -346,12 +349,13 @@ async switchGroup(groupId, userId = null) {
         }
       }
 
-      getStatus() {
+
+    getStatus() {
         const subscriptionDetails = Array.from(this.subscriptions.entries()).map(([walletAddress, subData]) => ({
             address: walletAddress, 
             logsSubscription: subData.logs,
         }));
-    
+
         return {
             isConnected: this.ws && this.ws.readyState === WebSocket.OPEN,
             isStarted: this.isStarted,
@@ -366,13 +370,15 @@ async switchGroup(groupId, userId = null) {
         };
     }
 
-
     async stop() {
         this.isStarted = false;
         for (const walletAddress of this.subscriptions.keys()) {
             await this.unsubscribeFromWallet(walletAddress);
         }
-        if (this.ws) this.ws.close();
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
         console.log(`[${new Date().toISOString()}] ⏹️ WebSocket client stopped`);
     }
 
