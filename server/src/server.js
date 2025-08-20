@@ -394,21 +394,36 @@ app.get('/api/transactions/stream', async (req, res) => {
       sseClients.add(res);
     });
 
-    subscriber.on('message', (channel, message) => {
+    subscriber.on('message', async (channel, message) => {
       if (channel === 'transactions' && res.writable) {
         try {
           const transaction = JSON.parse(message);
           
-          // Filter by user's groups and wallets
-          if (groupId !== null && transaction.groupId !== groupId) {
+          // ВАЖНО: Проверяем принадлежность транзакции пользователю
+          // Получаем информацию о кошельке из базы данных
+          const wallet = await db.getWalletByAddress(transaction.walletAddress);
+          
+          if (!wallet) {
+            console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${transaction.walletAddress} not found, skipping transaction`);
             return;
           }
           
-          console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}:`, message.substring(0, 100) + '...');
+          // Фильтруем по пользователю
+          if (wallet.user_id !== userId) {
+            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${wallet.user_id} != ${userId}), skipping`);
+            return;
+          }
+          
+          // Фильтруем по группе если указана
+          if (groupId !== null && wallet.group_id !== groupId) {
+            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different group (${wallet.group_id} != ${groupId}), skipping`);
+            return;
+          }
+          
+          console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}: ${transaction.signature}`);
           res.write(`data: ${message}\n\n`);
         } catch (error) {
-          console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
-          res.write(`data: ${message}\n\n`);
+          console.error(`[${new Date().toISOString()}] ❌ Error filtering SSE message:`, error.message);
         }
       }
     });

@@ -122,16 +122,18 @@ class SolanaWebSocketService {
             console.warn(`[${new Date().toISOString()}] ⚠️ No wallet found for subscription ${subscription}`);
             return;
         }
-
+    
         if (result.value && result.value.signature) {
             console.log(`[${new Date().toISOString()}] 🔍 New transaction detected: ${result.value.signature}`);
+            
+            // ВАЖНО: Получаем полную информацию о кошельке включая user_id
             const wallet = await this.db.getWalletByAddress(walletAddress);
             if (!wallet) {
                 console.warn(`[${new Date().toISOString()}] ⚠️ Wallet ${walletAddress} not found`);
                 return;
             }
             
-            // Check if transaction belongs to active user/group context
+            // Проверяем контекст пользователя и группы
             if (this.activeUserId && wallet.user_id !== this.activeUserId) {
                 console.log(`[${new Date().toISOString()}] ℹ️ Skipping transaction for wallet ${walletAddress} (not in active user ${this.activeUserId})`);
                 return;
@@ -142,10 +144,14 @@ class SolanaWebSocketService {
                 return;
             }
             
+            console.log(`[${new Date().toISOString()}] ✅ Processing transaction ${result.value.signature} for wallet ${walletAddress} (user: ${wallet.user_id}, group: ${wallet.group_id})`);
+            
             await this.monitoringService.processWebhookMessage({
                 signature: result.value.signature,
                 walletAddress,
                 blockTime: result.value.timestamp || Math.floor(Date.now() / 1000),
+                userId: wallet.user_id,  // Передаем информацию о пользователе
+                groupId: wallet.group_id // Передаем информацию о группе
             });
         }
     }
@@ -161,13 +167,25 @@ class SolanaWebSocketService {
 
     async subscribeToWallets() {
         this.subscriptions.clear();
+        
+        // ВАЖНО: Передаем activeUserId чтобы получить только кошельки текущего пользователя
         const wallets = await this.db.getActiveWallets(this.activeGroupId, this.activeUserId);
+        
         if (wallets.length > this.maxSubscriptions) {
             console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
             wallets.splice(this.maxSubscriptions);
         }
-        console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}${this.activeUserId ? ` for user ${this.activeUserId}` : ''}`);
-
+        
+        console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets for user ${this.activeUserId}${this.activeGroupId ? `, group ${this.activeGroupId}` : ''}`);
+    
+        // Логируем первые несколько кошельков для отладки
+        if (wallets.length > 0) {
+            console.log(`[${new Date().toISOString()}] 🔍 Sample wallets to subscribe:`);
+            wallets.slice(0, 3).forEach(wallet => {
+                console.log(`  - ${wallet.address.slice(0, 8)}... (user: ${wallet.user_id}, group: ${wallet.group_id})`);
+            });
+        }
+    
         for (let i = 0; i < wallets.length; i += this.batchSize) {
             const batch = wallets.slice(i, i + this.batchSize);
             await Promise.all(
@@ -177,7 +195,8 @@ class SolanaWebSocketService {
             );
             await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        console.log(`[${new Date().toISOString()}] ✅ Subscribed to all wallets${this.activeGroupId ? ` for group ${this.activeGroupId}` : ''}${this.activeUserId ? ` for user ${this.activeUserId}` : ''}`);
+        
+        console.log(`[${new Date().toISOString()}] ✅ Subscribed to ${this.subscriptions.size} wallets for user ${this.activeUserId}${this.activeGroupId ? `, group ${this.activeGroupId}` : ''}`);
     }
 
     async subscribeToWallet(walletAddress) {
