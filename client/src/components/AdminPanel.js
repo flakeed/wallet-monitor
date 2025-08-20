@@ -276,7 +276,48 @@ const AdminPanel = ({ user, onClose }) => {
               {loading ? (
                 <div className="text-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                  <p className="mt-2 text-gray-600">Loading...</p>
+                  <p className="mt-2 text-gray-600">Loading whitelist...</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <h4 className="text-md font-medium text-gray-800 mb-3">Whitelisted Users</h4>
+                  {whitelist.length === 0 ? (
+                    <p className="text-gray-500">No users in whitelist</p>
+                  ) : (
+                    whitelist.map((entry, index) => (
+                      <div key={index} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div className="flex-1">
+                          <div className="font-medium">Telegram ID: {entry.telegram_id}</div>
+                          {entry.notes && (
+                            <div className="text-sm text-gray-600">Notes: {entry.notes}</div>
+                          )}
+                          <div className="text-xs text-gray-400">
+                            Added: {new Date(entry.created_at).toLocaleDateString()}
+                            {entry.added_by_username && ` • By: ${entry.added_by_username}`}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeFromWhitelist(entry.telegram_id)}
+                          disabled={loading}
+                          className="px-3 py-1 text-xs rounded bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'users' && (
+            <div className="space-y-6">
+              <h3 className="text-lg font-medium">Registered Users</h3>
+              {loading ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                  <p className="mt-2 text-gray-600">Loading users...</p>
                 </div>
               ) : (
                 <div className="space-y-2">
