@@ -136,90 +136,90 @@ class Database {
         }
     }
 
-   async addWalletsBatchOptimized(wallets) {
-    if (!wallets || wallets.length === 0) {
-        throw new Error('Wallets array is required');
-    }
-
-    const maxBatchSize = 1000;
-    if (wallets.length > maxBatchSize) {
-        throw new Error(`Batch size too large. Maximum ${maxBatchSize} wallets per batch.`);
-    }
-
-    console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert of ${wallets.length} wallets`);
-    const startTime = Date.now();
-
-    // Проверяем, что все кошельки имеют userId
-    const walletsWithUser = wallets.filter(w => w.userId);
-    if (walletsWithUser.length !== wallets.length) {
-        throw new Error('All wallets must have userId specified');
-    }
-
-    try {
-        const client = await this.pool.connect();
-        
-        try {
-            await client.query('BEGIN');
-
-            // Создаем строку для bulk INSERT с VALUES
-            console.log(`[${new Date().toISOString()}] ⚡ Executing optimized bulk INSERT for ${wallets.length} wallets...`);
-            
-            // Подготавливаем данные для bulk insert
-            const values = [];
-            const placeholders = [];
-            
-            for (let i = 0; i < wallets.length; i++) {
-                const wallet = wallets[i];
-                const baseIndex = i * 7; // Changed to 7 since we have 7 columns
-                
-                values.push(
-                    wallet.address,
-                    wallet.name || null,
-                    wallet.groupId || null,
-                    wallet.userId,
-                    new Date(), // created_at
-                    new Date(), // updated_at
-                    true        // is_active
-                );
-                
-                placeholders.push(`(${baseIndex + 1}, ${baseIndex + 2}, ${baseIndex + 3}, ${baseIndex + 4}, ${baseIndex + 5}, ${baseIndex + 6}, ${baseIndex + 7})`);
-            }
-
-            // Выполняем bulk insert с ON CONFLICT для обработки дубликатов
-            const insertQuery = `
-                INSERT INTO wallets (address, name, group_id, user_id, created_at, updated_at, is_active)
-                VALUES ${placeholders.join(', ')}
-                ON CONFLICT (address, user_id) DO NOTHING
-                RETURNING id, address, name, group_id, user_id, created_at
-            `;
-
-            const insertResult = await client.query(insertQuery, values);
-
-            await client.query('COMMIT');
-
-            const insertTime = Date.now() - startTime;
-            const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
-            
-            console.log(`[${new Date().toISOString()}] 🎉 Optimized batch insert completed in ${insertTime}ms:`);
-            console.log(`  - Attempted: ${wallets.length} wallets`);
-            console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
-            console.log(`  - Duplicates: ${wallets.length - insertResult.rows.length} wallets`);
-            console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
-
-            return insertResult.rows;
-
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
+    async addWalletsBatchOptimized(wallets) {
+        if (!wallets || wallets.length === 0) {
+            throw new Error('Wallets array is required');
         }
-
-    } catch (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Optimized batch insert failed:`, error.message);
-        throw new Error(`Optimized batch insert failed: ${error.message}`);
+    
+        const maxBatchSize = 1000;
+        if (wallets.length > maxBatchSize) {
+            throw new Error(`Batch size too large. Maximum ${maxBatchSize} wallets per batch.`);
+        }
+    
+        console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert of ${wallets.length} wallets`);
+        const startTime = Date.now();
+    
+        // Проверяем, что все кошельки имеют userId
+        const walletsWithUser = wallets.filter(w => w.userId);
+        if (walletsWithUser.length !== wallets.length) {
+            throw new Error('All wallets must have userId specified');
+        }
+    
+        try {
+            const client = await this.pool.connect();
+            
+            try {
+                await client.query('BEGIN');
+    
+                // Создаем строку для bulk INSERT с VALUES
+                console.log(`[${new Date().toISOString()}] ⚡ Executing optimized bulk INSERT for ${wallets.length} wallets...`);
+                
+                // Подготавливаем данные для bulk insert
+                const values = [];
+                const placeholders = [];
+                
+                for (let i = 0; i < wallets.length; i++) {
+                    const wallet = wallets[i];
+                    const baseIndex = i * 7; // Changed to 7 since we have 7 columns
+                    
+                    values.push(
+                        wallet.address,
+                        wallet.name || null,
+                        wallet.groupId || null,
+                        wallet.userId,
+                        new Date(), // created_at
+                        new Date(), // updated_at
+                        true        // is_active
+                    );
+                    
+                    placeholders.push(`(${baseIndex + 1}, ${baseIndex + 2}, ${baseIndex + 3}, ${baseIndex + 4}, ${baseIndex + 5}, ${baseIndex + 6}, ${baseIndex + 7})`);
+                }
+    
+                // Выполняем bulk insert с ON CONFLICT для обработки дубликатов
+                const insertQuery = `
+                    INSERT INTO wallets (address, name, group_id, user_id, created_at, updated_at, is_active)
+                    VALUES ${placeholders.join(', ')}
+                    ON CONFLICT (address, user_id) DO NOTHING
+                    RETURNING id, address, name, group_id, user_id, created_at
+                `;
+    
+                const insertResult = await client.query(insertQuery, values);
+    
+                await client.query('COMMIT');
+    
+                const insertTime = Date.now() - startTime;
+                const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
+                
+                console.log(`[${new Date().toISOString()}] 🎉 Optimized batch insert completed in ${insertTime}ms:`);
+                console.log(`  - Attempted: ${wallets.length} wallets`);
+                console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
+                console.log(`  - Duplicates: ${wallets.length - insertResult.rows.length} wallets`);
+                console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
+    
+                return insertResult.rows;
+    
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            } finally {
+                client.release();
+            }
+    
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Optimized batch insert failed:`, error.message);
+            throw new Error(`Optimized batch insert failed: ${error.message}`);
+        }
     }
-}
 
     async addWalletsBatch(wallets) {
         // Если это большой batch, используем оптимизированную версию
