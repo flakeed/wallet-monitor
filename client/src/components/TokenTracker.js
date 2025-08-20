@@ -271,26 +271,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-3">
-            <div className="flex items-center justify-between">
-              <span>
-                <span className="font-medium">
-                  {sortBy === 'latest' && 'Latest Activity'}
-                  {sortBy === 'firstBuy' && 'Recent Purchases'}
-                  {sortBy === 'profit' && 'Most Profitable'}
-                  {sortBy === 'loss' && 'Biggest Losses'}
-                  {sortBy === 'volume' && 'Highest Volume'}
-                  {sortBy === 'activity' && 'Most Active'}
-                </span>
-              </span>
-              {items.length > 0 && items[0].summary.latestActivity && (
-                <span className="text-gray-500">
-                  Latest: {formatTime(items[0].summary.latestActivity)}
-                </span>
-              )}
-            </div>
-          </div>
-
           {items.map((token) => (
             <div key={token.mint}>
               <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
