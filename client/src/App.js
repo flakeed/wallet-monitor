@@ -10,7 +10,7 @@ import TelegramLogin from './components/TelegramLogin';
 import AdminPanel from './components/AdminPanel';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
-const TELEGRAM_BOT_USERNAME = process.env.REACT_APP_TELEGRAM_BOT_USERNAME || 'your_bot_username';
+const TELEGRAM_BOT_USERNAME = process.env.REACT_APP_TELEGRAM_BOT_USERNAME || 'test_walletpulse_bot';
 
 function App() {
   const [user, setUser] = useState(null);
