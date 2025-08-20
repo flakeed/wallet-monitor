@@ -445,6 +445,38 @@ class SolanaWebSocketService {
         this.subscriptions.delete(walletAddress);
     }
 
+    async subscribeToWallet(walletAddress) {
+        if (this.subscriptions.size >= this.maxSubscriptions) {
+            throw new Error(`Maximum subscription limit of ${this.maxSubscriptions} reached`);
+        }
+        
+        if (!this.ws || this.ws.readyState !== WS_READY_STATE_OPEN) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Cannot subscribe to wallet ${walletAddress.slice(0, 8)}... - WebSocket not connected`);
+            return;
+        }
+        
+        try {
+            // Проверяем, не подписаны ли уже
+            if (this.subscriptions.has(walletAddress)) {
+                console.log(`[${new Date().toISOString()}] ℹ️ Wallet ${walletAddress.slice(0, 8)}... already subscribed`);
+                return;
+            }
+
+            const logsSubscriptionId = await this.sendRequest('logsSubscribe', [
+                { mentions: [walletAddress] },
+                { commitment: 'confirmed' },
+            ], 'logsSubscribe');
+            
+            this.subscriptions.set(walletAddress, { logs: logsSubscriptionId });
+            console.log(`[${new Date().toISOString()}] ✅ Subscribed to wallet ${walletAddress.slice(0, 8)}... (logs: ${logsSubscriptionId})`);
+            
+            return { success: true, subscriptionId: logsSubscriptionId };
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error subscribing to wallet ${walletAddress}:`, error.message);
+            throw error;
+        }
+    }
+
     async addWallet(walletAddress, name = null, groupId = null, userId = null) {
         try {
             if (this.subscriptions.size >= this.maxSubscriptions) {
