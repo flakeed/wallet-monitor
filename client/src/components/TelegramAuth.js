@@ -93,7 +93,7 @@ const TelegramAuth = ({ onAuthSuccess, onAuthFailure }) => {
     const botToken = process.env.REACT_APP_TELEGRAM_BOT_TOKEN;
     if (!botToken) return null;
     
-    const botUsername = `${botToken.split(':')[0]}_bot`; // Примерное имя бота
+    const botUsername = `test_walletpulse_bot`; // Примерное имя бота
     return {
       botUsername,
       authUrl: `https://t.me/${botUsername}?start=auth`
