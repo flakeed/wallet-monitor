@@ -154,13 +154,28 @@ function App() {
     }
   };
 
+  // FIXED: SSE connection with authentication
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
-    const eventSource = new EventSource(sseUrl, {
-      headers: getAuthHeaders()
-    });
+    const sessionToken = localStorage.getItem('sessionToken');
+    if (!sessionToken) return;
+
+    // Create SSE URL with token as query parameter
+    const sseUrl = new URL(`${API_BASE}/transactions/stream`);
+    sseUrl.searchParams.append('token', sessionToken);
+    if (selectedGroup) {
+      sseUrl.searchParams.append('groupId', selectedGroup);
+    }
+
+    console.log('🔌 Connecting to SSE:', sseUrl.toString());
+
+    const eventSource = new EventSource(sseUrl.toString());
+
+    eventSource.onopen = () => {
+      console.log('✅ SSE connection opened');
+      setError(null); // Clear any previous SSE errors
+    };
 
     eventSource.onmessage = (event) => {
       try {
@@ -205,19 +220,30 @@ function App() {
       }
     };
 
-    eventSource.onerror = () => {
-      console.error('SSE connection error');
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      
+      // Check if it's an authentication error
+      if (eventSource.readyState === EventSource.CLOSED) {
+        console.error('SSE connection was closed, possibly due to authentication failure');
+        setError('Real-time connection lost. Please refresh the page.');
+      }
+      
       eventSource.close();
+      
+      // Attempt to reconnect after a delay
       setTimeout(() => {
         console.log('Attempting to reconnect to SSE...');
+        // This will trigger a re-render and recreate the connection
+        setRefreshKey(prev => prev + 1);
       }, 5000);
     };
 
     return () => {
+      console.log('🔌 Closing SSE connection');
       eventSource.close();
-      console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets, selectedGroup, isAuthenticated]);
+  }, [timeframe, transactionType, wallets, selectedGroup, isAuthenticated, refreshKey]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);

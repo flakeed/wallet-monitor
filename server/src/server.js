@@ -355,61 +355,84 @@ solanaWebSocketService.addWallet = async function(walletAddress, name = null, gr
 };
 
 // Protected routes - all existing routes now require authentication
-app.get('/api/transactions/stream', auth.authRequired, (req, res) => {
-  const groupId = req.query.groupId || null;
-  const userId = req.user.id;
-  
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const subscriber = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
-
-  subscriber.subscribe('transactions', (err) => {
-    if (err) {
-      console.error(`[${new Date().toISOString()}] ❌ Redis subscription error:`, err.message);
-      res.status(500).end();
-      return;
+app.get('/api/transactions/stream', async (req, res) => {
+  try {
+    // Get token from query parameter or Authorization header
+    const token = req.query.token || (req.headers.authorization && req.headers.authorization.substring(7));
+    
+    if (!token) {
+      return res.status(401).json({ error: 'No authentication token provided' });
     }
-    console.log(`[${new Date().toISOString()}] ✅ New SSE client connected for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
-    sseClients.add(res);
-  });
 
-  subscriber.on('message', (channel, message) => {
-    if (channel === 'transactions' && res.writable) {
-      try {
-        const transaction = JSON.parse(message);
-        
-        // Filter by user's groups and wallets
-        if (groupId !== null && transaction.groupId !== groupId) {
-          return;
-        }
-        
-        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}:`, message.substring(0, 100) + '...');
-        res.write(`data: ${message}\n\n`);
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
-        res.write(`data: ${message}\n\n`);
+    // Validate the session token
+    const session = await auth.validateSession(token);
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+
+    const groupId = req.query.groupId || null;
+    const userId = session.user_id;
+    
+    console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
+    
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Cache-Control');
+    res.flushHeaders();
+
+    const subscriber = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
+
+    subscriber.subscribe('transactions', (err) => {
+      if (err) {
+        console.error(`[${new Date().toISOString()}] ❌ Redis subscription error:`, err.message);
+        res.status(500).end();
+        return;
       }
-    }
-  });
+      console.log(`[${new Date().toISOString()}] ✅ New SSE client connected for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
+      sseClients.add(res);
+    });
 
-  req.on('close', () => {
-    console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected for user ${userId}`);
-    subscriber.unsubscribe();
-    subscriber.quit();
-    sseClients.delete(res);
-    res.end();
-  });
+    subscriber.on('message', (channel, message) => {
+      if (channel === 'transactions' && res.writable) {
+        try {
+          const transaction = JSON.parse(message);
+          
+          // Filter by user's groups and wallets
+          if (groupId !== null && transaction.groupId !== groupId) {
+            return;
+          }
+          
+          console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}:`, message.substring(0, 100) + '...');
+          res.write(`data: ${message}\n\n`);
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
+          res.write(`data: ${message}\n\n`);
+        }
+      }
+    });
 
-  const keepAlive = setInterval(() => {
-    if (res.writable) {
-      res.write(': keep-alive\n\n');
-    } else {
-      clearInterval(keepAlive);
-    }
-  }, 30000);
+    req.on('close', () => {
+      console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected for user ${userId}`);
+      subscriber.unsubscribe();
+      subscriber.quit();
+      sseClients.delete(res);
+      res.end();
+    });
+
+    const keepAlive = setInterval(() => {
+      if (res.writable) {
+        res.write(': keep-alive\n\n');
+      } else {
+        clearInterval(keepAlive);
+      }
+    }, 30000);
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ SSE setup error:`, error.message);
+    res.status(500).json({ error: 'Failed to setup SSE connection' });
+  }
 });
 
 app.get('/api/wallets', auth.authRequired, async (req, res) => {
