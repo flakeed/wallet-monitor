@@ -181,7 +181,7 @@ BEGIN
             last_name = COALESCE(p_last_name, last_name),
             last_login = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP,
-            is_admin = is_admin
+            is_admin = is_admin  -- Use function variable is_admin
         WHERE id = existing_user
         RETURNING * INTO user_record;
     ELSE
