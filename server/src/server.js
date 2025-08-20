@@ -23,7 +23,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVC
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const sseClients = new Set();
-
+const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}${selectedGroup ? '&' : '?'}token=${encodeURIComponent(authToken)}`;
+const eventSource = new EventSource(sseUrl);
 app.use(express.json({ 
   limit: '50mb',
   verify: (req, res, buf) => {
@@ -62,31 +63,39 @@ app.use((req, res, next) => {
 
 // Authentication middleware
 const authenticateToken = async (req, res, next) => {
+  let token = null;
+  // Check Authorization header first
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  if (authHeader) {
+      token = authHeader.split(' ')[1];
+  }
+  // Fallback to query parameter for SSE
+  if (!token && req.query.token) {
+      token = req.query.token;
+  }
 
   if (!token) {
-    return res.status(401).json({ error: 'Access token required' });
+      return res.status(401).json({ error: 'Access token required' });
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user still exists and is active
-    const user = await db.pool.query(
-      'SELECT * FROM users WHERE id = $1 AND is_active = TRUE',
-      [decoded.userId]
-    );
+      const decoded = jwt.verify(token, JWT_SECRET);
+      
+      // Check if user still exists and is active
+      const user = await db.pool.query(
+          'SELECT * FROM users WHERE id = $1 AND is_active = TRUE',
+          [decoded.userId]
+      );
 
-    if (user.rows.length === 0) {
-      return res.status(401).json({ error: 'User not found or inactive' });
-    }
+      if (user.rows.length === 0) {
+          return res.status(401).json({ error: 'User not found or inactive' });
+      }
 
-    req.user = user.rows[0];
-    next();
+      req.user = user.rows[0];
+      next();
   } catch (error) {
-    console.error('JWT verification error:', error);
-    return res.status(403).json({ error: 'Invalid or expired token' });
+      console.error('JWT verification error:', error);
+      return res.status(403).json({ error: 'Invalid or expired token' });
   }
 };
 

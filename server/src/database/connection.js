@@ -292,19 +292,27 @@ class Database {
 
     async getRecentTransactions(hours = 24, limit = 400, transactionType = null, groupId = null, userId) {
         try {
+            if (!userId) {
+                throw new Error('userId is required');
+            }
+    
             let typeFilter = '';
             let queryParams = [userId, limit];
             let paramIndex = 3;
     
-            // Build the typeFilter and queryParams correctly
+            // Only add transactionType filter if it's not 'all' or null
             if (transactionType && transactionType !== 'all') {
                 typeFilter += ` AND t.transaction_type = $${paramIndex++}`;
                 queryParams.push(transactionType);
             }
+            // Only add groupId filter if it's provided
             if (groupId) {
                 typeFilter += ` AND w.group_id = $${paramIndex++}`;
                 queryParams.push(groupId);
             }
+    
+            console.log(`[${new Date().toISOString()}] 🔍 uniqueTransactionsQuery params:`, queryParams);
+            console.log(`[${new Date().toISOString()}] 🔍 typeFilter:`, typeFilter);
     
             const uniqueTransactionsQuery = `
                 SELECT 
@@ -328,6 +336,8 @@ class Database {
             `;
     
             const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
+    
+            console.log(`[${new Date().toISOString()}] 📊 Found ${uniqueTransactions.rows.length} unique transactions`);
     
             if (uniqueTransactions.rows.length === 0) {
                 return [];
@@ -362,14 +372,16 @@ class Database {
                 ORDER BY t.block_time DESC, t.signature, to_.id
             `;
     
+            console.log(`[${new Date().toISOString()}] 🔍 fullDataQuery params count: ${signatures.length + 1}`);
+    
             const result = await this.pool.query(fullDataQuery, [...signatures, userId]);
     
-            console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens for user ${userId}`);
+            console.log(`[${new Date().toISOString()}] 📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens for user ${userId}`);
     
             return result.rows;
     
         } catch (error) {
-            console.error('❌ Error in getRecentTransactions:', error);
+            console.error(`[${new Date().toISOString()}] ❌ Error in getRecentTransactions:`, error);
             throw error;
         }
     }

@@ -161,72 +161,70 @@ function App() {
   useEffect(() => {
     if (!authToken || !user) return;
 
-    const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
-    const eventSource = new EventSource(sseUrl, {
-      headers: getAuthHeaders()
-    });
+    const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}&` : '?'}token=${encodeURIComponent(authToken)}`;
+    const eventSource = new EventSource(sseUrl);
 
     eventSource.onmessage = (event) => {
-      try {
-        const newTransaction = JSON.parse(event.data);
-        console.log('New transaction received via SSE:', newTransaction);
+        try {
+            const newTransaction = JSON.parse(event.data);
+            console.log('New transaction received via SSE:', newTransaction);
 
-        // Check if transaction belongs to current user
-        if (newTransaction.userId !== user.id) {
-          return; // Ignore transactions from other users
-        }
-
-        const now = new Date();
-        const txTime = new Date(newTransaction.timestamp);
-        const hoursDiff = (now - txTime) / (1000 * 60 * 60);
-        const matchesTimeframe = hoursDiff <= parseInt(timeframe);
-        const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
-        const matchesGroup = !selectedGroup || newTransaction.groupId === selectedGroup;
-
-        console.log('Filter check:', { matchesTimeframe, matchesType, matchesGroup });
-
-        if (matchesTimeframe && matchesType && matchesGroup) {
-          setTransactions((prev) => {
-            if (prev.some((tx) => tx.signature === newTransaction.signature)) {
-              return prev;
+            // Check if transaction belongs to current user
+            if (newTransaction.userId !== user.id) {
+                return; // Ignore transactions from other users
             }
-            const formattedTransaction = {
-              signature: newTransaction.signature,
-              time: newTransaction.timestamp,
-              transactionType: newTransaction.transactionType,
-              solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
-              solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
-              wallet: {
-                address: newTransaction.walletAddress,
-                name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
-                group_id: newTransaction.groupId,
-                group_name: newTransaction.groupName,
-              },
-              tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
-              tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
-            };
-            return [formattedTransaction, ...prev].slice(0, 400);
-          });
+
+            const now = new Date();
+            const txTime = new Date(newTransaction.timestamp);
+            const hoursDiff = (now - txTime) / (1000 * 60 * 60);
+            const matchesTimeframe = hoursDiff <= parseInt(timeframe);
+            const matchesType = transactionType === 'all' || newTransaction.transactionType === transactionType;
+            const matchesGroup = !selectedGroup || newTransaction.groupId === selectedGroup;
+
+            console.log('Filter check:', { matchesTimeframe, matchesType, matchesGroup });
+
+            if (matchesTimeframe && matchesType && matchesGroup) {
+                setTransactions((prev) => {
+                    if (prev.some((tx) => tx.signature === newTransaction.signature)) {
+                        return prev;
+                    }
+                    const formattedTransaction = {
+                        signature: newTransaction.signature,
+                        time: newTransaction.timestamp,
+                        transactionType: newTransaction.transactionType,
+                        solSpent: newTransaction.transactionType === 'buy' ? newTransaction.solAmount.toFixed(6) : null,
+                        solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
+                        wallet: {
+                            address: newTransaction.walletAddress,
+                            name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
+                            group_id: newTransaction.groupId,
+                            group_name: newTransaction.groupName,
+                        },
+                        tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
+                        tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
+                    };
+                    return [formattedTransaction, ...prev].slice(0, 400);
+                });
+            }
+        } catch (err) {
+            console.error('Error parsing SSE message:', err);
+            console.error('Event data:', event.data);
         }
-      } catch (err) {
-        console.error('Error parsing SSE message:', err);
-        console.error('Event data:', event.data);
-      }
     };
 
     eventSource.onerror = () => {
-      console.error('SSE connection error');
-      eventSource.close();
-      setTimeout(() => {
-        console.log('Attempting to reconnect to SSE...');
-      }, 5000);
+        console.error('SSE connection error');
+        eventSource.close();
+        setTimeout(() => {
+            console.log('Attempting to reconnect to SSE...');
+        }, 5000);
     };
 
     return () => {
-      eventSource.close();
-      console.log('SSE connection closed');
+        eventSource.close();
+        console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets, selectedGroup, authToken, user]);
+}, [timeframe, transactionType, wallets, selectedGroup, authToken, user]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
