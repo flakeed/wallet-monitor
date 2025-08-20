@@ -524,54 +524,16 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
+    const userId = req.user.id; // Используем ID текущего пользователя
 
-    // Modified query to include user_id filter
-    let query = `
-      SELECT 
-        t.signature,
-        t.block_time,
-        t.transaction_type,
-        t.sol_spent,
-        t.sol_received,
-        w.address as wallet_address,
-        w.name as wallet_name,
-        w.group_id,
-        g.name as group_name,
-        tk.mint,
-        tk.symbol,
-        tk.name as token_name,
-        to_.amount as token_amount,
-        to_.operation_type,
-        tk.decimals
-      FROM transactions t
-      JOIN wallets w ON t.wallet_id = w.id
-      LEFT JOIN groups g ON w.group_id = g.id
-      LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-      LEFT JOIN tokens tk ON to_.token_id = tk.id
-      WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
-        AND w.user_id = $1
-    `;
+    console.log(`[${new Date().toISOString()}] 📊 Fetching transactions for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
+
+    // Используем метод из database с пользовательским фильтром
+    const transactions = await db.getRecentTransactions(hours, limit, type, groupId, userId);
     
-    const params = [userId];
-    let paramIndex = 2;
-    
-    if (type && type !== 'all') {
-      query += ` AND t.transaction_type = $${paramIndex++}`;
-      params.push(type);
-    }
-    
-    if (groupId) {
-      query += ` AND w.group_id = $${paramIndex}`;
-      params.push(groupId);
-    }
-    
-    query += ` ORDER BY t.block_time DESC, t.signature, to_.id LIMIT ${limit}`;
-    
-    const result = await db.pool.query(query, params);
-    
+    // Группируем транзакции по signature
     const groupedTransactions = {};
-    result.rows.forEach((row) => {
+    transactions.forEach((row) => {
       if (!groupedTransactions[row.signature]) {
         groupedTransactions[row.signature] = {
           signature: row.signature,
@@ -590,6 +552,7 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
         };
       }
 
+      // Добавляем токены если они есть
       if (row.mint) {
         const tokenData = {
           mint: row.mint,
@@ -607,8 +570,9 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
       }
     });
 
-    const transactions = Object.values(groupedTransactions);
-    res.json(transactions);
+    const result = Object.values(groupedTransactions);
+    console.log(`[${new Date().toISOString()}] ✅ Returning ${result.length} transactions for user ${userId}`);
+    res.json(result);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching transactions:`, error);
     res.status(500).json({ error: 'Failed to fetch transactions' });

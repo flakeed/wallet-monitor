@@ -43,7 +43,7 @@ class SolanaWebSocketService {
         await this.subscribeToWallets();
     }
 
-    async connect() {
+   async connect() {
         if (this.isConnecting) return;
         this.isConnecting = true;
 
