@@ -181,7 +181,7 @@ BEGIN
             last_name = COALESCE(p_last_name, last_name),
             last_login = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP,
-            is_admin = is_admin  -- Use the function's is_admin variable
+            users.is_admin = is_admin  -- Explicitly qualify the table column
         WHERE id = existing_user
         RETURNING * INTO user_record;
     ELSE
