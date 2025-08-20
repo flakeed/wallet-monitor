@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
 
-function TokenCard({ token, onOpenChart, isNewPurchase = false }) {
+function TokenCard({ token, onOpenChart, isNewPurchase = false, newPurchaseDetails = null }) {
     const [priceData, setPriceData] = useState(null);
     const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
@@ -210,6 +210,15 @@ function TokenCard({ token, onOpenChart, isNewPurchase = false }) {
         return `${Math.floor(diffInMinutes / 1440)}d ago`;
     };
 
+    // Проверяет, была ли активность в последние 10 секунд
+    const isRecentActivity = (timeString) => {
+        if (!timeString) return false;
+        const activityTime = new Date(timeString);
+        const now = new Date();
+        const timeDiff = now - activityTime;
+        return timeDiff <= 10000; // 10 секунд
+    };
+
     return (
         <div className={`border rounded-lg p-4 transition-all duration-500 ${
             isHighlighted 
@@ -322,9 +331,22 @@ function TokenCard({ token, onOpenChart, isNewPurchase = false }) {
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {token.wallets.map((w) => (
-                    <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
-                ))}
+                {token.wallets.map((w) => {
+                    // Проверяем, покупал ли этот кошелек токен недавно
+                    const walletMadeNewPurchase = newPurchaseDetails && 
+                        newPurchaseDetails.wallets && 
+                        newPurchaseDetails.wallets.has(w.address);
+                    
+                    return (
+                        <WalletPill 
+                            key={w.address} 
+                            wallet={w} 
+                            tokenMint={token.mint}
+                            isNewPurchase={walletMadeNewPurchase}
+                            recentPurchaseTime={walletMadeNewPurchase ? newPurchaseDetails.latestPurchaseTime : w.lastActivity}
+                        />
+                    );
+                })}
             </div>
 
             <div className="mt-2 flex space-x-2">

@@ -8,6 +8,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest');
   const [newPurchases, setNewPurchases] = useState(new Set()); // Отслеживание новых покупок
+  const [newPurchaseDetails, setNewPurchaseDetails] = useState(new Map()); // Детали новых покупок
   const previousTransactionsRef = useRef([]);
 
   const aggregateTokens = (transactions, hours, groupId) => {
@@ -135,9 +136,10 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     return result;
   };
 
-  // Функция для обнаружения новых покупок
+  // Функция для обнаружения новых покупок с деталями по кошелькам
   const detectNewPurchases = (currentTransactions, previousTransactions) => {
-    const newPurchaseSignatures = new Set();
+    const newPurchaseTokens = new Set();
+    const newPurchaseDetails = new Map(); // Детали по токенам и кошелькам
     
     // Создаем Set из предыдущих транзакций для быстрого поиска
     const previousSignatures = new Set(previousTransactions.map(tx => tx.signature));
@@ -146,16 +148,33 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     currentTransactions.forEach(tx => {
       if (tx.transactionType === 'buy' && !previousSignatures.has(tx.signature)) {
         // Это новая покупка
-        console.log(`🎉 New purchase detected: ${tx.signature}`);
+        console.log(`🎉 New purchase detected: ${tx.signature} by wallet ${tx.wallet.address.slice(0, 8)}...`);
+        
         if (tx.tokensBought && tx.tokensBought.length > 0) {
           tx.tokensBought.forEach(token => {
-            newPurchaseSignatures.add(token.mint);
+            newPurchaseTokens.add(token.mint);
+            
+            // Сохраняем детали покупки
+            if (!newPurchaseDetails.has(token.mint)) {
+              newPurchaseDetails.set(token.mint, {
+                wallets: new Set(),
+                latestPurchaseTime: tx.time
+              });
+            }
+            
+            const tokenDetails = newPurchaseDetails.get(token.mint);
+            tokenDetails.wallets.add(tx.wallet.address);
+            
+            // Обновляем время последней покупки если эта новее
+            if (new Date(tx.time) > new Date(tokenDetails.latestPurchaseTime)) {
+              tokenDetails.latestPurchaseTime = tx.time;
+            }
           });
         }
       }
     });
     
-    return newPurchaseSignatures;
+    return { tokens: newPurchaseTokens, details: newPurchaseDetails };
   };
 
   const sortTokens = (tokens, sortBy) => {
@@ -199,8 +218,9 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     setLoading(true);
     try {
       // Обнаруживаем новые покупки
-      const newPurchaseTokens = detectNewPurchases(transactions, previousTransactionsRef.current);
+      const { tokens: newPurchaseTokens, details } = detectNewPurchases(transactions, previousTransactionsRef.current);
       setNewPurchases(newPurchaseTokens);
+      setNewPurchaseDetails(details);
       
       // Обновляем ссылку на предыдущие транзакции
       previousTransactionsRef.current = [...transactions];
@@ -212,11 +232,12 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       setItems(sortedTokens);
       setError(null);
       
-      // Очищаем новые покупки через 5 секунд
+      // Очищаем новые покупки через 8 секунд (чуть больше чем у кошельков)
       if (newPurchaseTokens.size > 0) {
         setTimeout(() => {
           setNewPurchases(new Set());
-        }, 5000);
+          setNewPurchaseDetails(new Map());
+        }, 8000);
       }
     } catch (e) {
       setError(e.message);
@@ -319,15 +340,19 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         </div>
       ) : (
         <div className="space-y-4">
-          {items.map((token) => (
-            <div key={token.mint}>
-              <TokenCard 
-                token={token} 
-                onOpenChart={() => openGmgnChart(token.mint)}
-                isNewPurchase={newPurchases.has(token.mint)}
-              />
-            </div>
-          ))}
+          {items.map((token) => {
+            const tokenDetails = newPurchaseDetails.get(token.mint);
+            return (
+              <div key={token.mint}>
+                <TokenCard 
+                  token={token} 
+                  onOpenChart={() => openGmgnChart(token.mint)}
+                  isNewPurchase={newPurchases.has(token.mint)}
+                  newPurchaseDetails={tokenDetails}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

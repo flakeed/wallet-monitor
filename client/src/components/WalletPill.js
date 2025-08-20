@@ -1,8 +1,42 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
-function WalletPill({ wallet, tokenMint }) {
+function WalletPill({ wallet, tokenMint, isNewPurchase = false, recentPurchaseTime = null }) {
+    const [isHighlighted, setIsHighlighted] = useState(isNewPurchase);
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
     const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+
+    // Проверяем, была ли недавняя покупка (в последние 10 секунд)
+    useEffect(() => {
+        if (recentPurchaseTime) {
+            const purchaseTime = new Date(recentPurchaseTime);
+            const now = new Date();
+            const timeDiff = now - purchaseTime;
+            
+            // Если покупка была в последние 10 секунд - подсвечиваем
+            if (timeDiff <= 10000) {
+                setIsHighlighted(true);
+                
+                // Убираем подсветку через оставшееся время
+                const remainingTime = 10000 - timeDiff;
+                const timer = setTimeout(() => {
+                    setIsHighlighted(false);
+                }, remainingTime);
+                
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [recentPurchaseTime]);
+
+    // Обработка prop isNewPurchase
+    useEffect(() => {
+        if (isNewPurchase) {
+            setIsHighlighted(true);
+            const timer = setTimeout(() => {
+                setIsHighlighted(false);
+            }, 8000); // 8 секунд для кошельков
+            return () => clearTimeout(timer);
+        }
+    }, [isNewPurchase]);
 
     const openGmgnTokenWithMaker = () => {
         if (!tokenMint || !wallet.address) {
@@ -30,13 +64,31 @@ function WalletPill({ wallet, tokenMint }) {
     };
 
     return (
-        <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
+        <div className={`flex items-center justify-between border rounded-md px-2 py-1 transition-all duration-500 ${
+            isHighlighted 
+                ? 'bg-gradient-to-r from-green-200 to-emerald-200 border-green-400 shadow-md transform scale-[1.02]' 
+                : 'bg-white'
+        }`}>
             <div className="truncate max-w-xs">
                 <div className="flex items-center space-x-2">
-                    <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
+                    {/* Индикатор новой покупки */}
+                    {isHighlighted && (
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse flex-shrink-0"></div>
+                    )}
+                    
+                    <div className={`text-xs font-medium truncate transition-colors ${
+                        isHighlighted ? 'text-green-900' : 'text-gray-900'
+                    }`}>
+                        {label}
+                    </div>
+                    
                     <button
                         onClick={copyToClipboard}
-                        className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
+                        className={`p-0.5 rounded transition-colors ${
+                            isHighlighted 
+                                ? 'text-green-600 hover:text-green-800' 
+                                : 'text-gray-400 hover:text-blue-600'
+                        }`}
                         title="Copy address"
                     >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -48,9 +100,14 @@ function WalletPill({ wallet, tokenMint }) {
                             />
                         </svg>
                     </button>
+                    
                     <button
                         onClick={openGmgnTokenWithMaker}
-                        className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
+                        className={`p-0.5 rounded transition-colors ${
+                            isHighlighted 
+                                ? 'text-green-600 hover:text-green-800' 
+                                : 'text-gray-400 hover:text-blue-600'
+                        }`}
                         title="Open token chart with this wallet as maker"
                     >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -63,13 +120,26 @@ function WalletPill({ wallet, tokenMint }) {
                         </svg>
                     </button>
                 </div>
+                
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
+                    {isHighlighted && recentPurchaseTime && (
+                        <span className="text-green-600 font-medium animate-pulse">
+                            NEW!
+                        </span>
+                    )}
                 </div>
             </div>
+            
             <div className="text-right ml-2">
-                <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
-                <div className="text-[9px] text-gray-400">
+                <div className={`text-xs font-semibold transition-colors ${
+                    isHighlighted ? 'text-green-800' : pnlColor
+                }`}>
+                    {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL
+                </div>
+                <div className={`text-[9px] transition-colors ${
+                    isHighlighted ? 'text-green-700' : 'text-gray-400'
+                }`}>
                     spent {wallet.solSpent.toFixed(4)} SOL 
                     <br />
                     recv {wallet.solReceived.toFixed(4)} SOL
