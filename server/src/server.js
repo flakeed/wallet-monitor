@@ -23,8 +23,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVC
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const sseClients = new Set();
-const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}${selectedGroup ? '&' : '?'}token=${encodeURIComponent(authToken)}`;
-const eventSource = new EventSource(sseUrl);
+
 app.use(express.json({ 
   limit: '50mb',
   verify: (req, res, buf) => {
