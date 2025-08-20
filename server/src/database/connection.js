@@ -311,10 +311,9 @@ class Database {
                 queryParams.push(groupId);
             }
     
-            console.log(`[${new Date().toISOString()}] 🔍 uniqueTransactionsQuery params:`, queryParams);
-            console.log(`[${new Date().toISOString()}] 🔍 typeFilter:`, typeFilter);
-    
-            const uniqueTransactionsQuery = `
+            console.log(`[2025-08-20 04:06:00 EEST] 🔍 uniqueTransactionsQuery params:`, JSON.stringify(queryParams));
+            console.log(`[2025-08-20 04:06:00 EEST] 🔍 typeFilter:`, typeFilter);
+            console.log(`[2025-08-20 04:06:00 EEST] 🔍 Full query:`, `
                 SELECT 
                     t.signature,
                     t.block_time,
@@ -333,11 +332,11 @@ class Database {
                 ${typeFilter}
                 ORDER BY t.block_time DESC
                 LIMIT $2
-            `;
+            `);
     
             const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
     
-            console.log(`[${new Date().toISOString()}] 📊 Found ${uniqueTransactions.rows.length} unique transactions`);
+            console.log(`[2025-08-20 04:06:00 EEST] 📊 Found ${uniqueTransactions.rows.length} unique transactions`);
     
             if (uniqueTransactions.rows.length === 0) {
                 return [];
@@ -372,16 +371,16 @@ class Database {
                 ORDER BY t.block_time DESC, t.signature, to_.id
             `;
     
-            console.log(`[${new Date().toISOString()}] 🔍 fullDataQuery params count: ${signatures.length + 1}`);
+            console.log(`[2025-08-20 04:06:00 EEST] 🔍 fullDataQuery params count: ${signatures.length + 1}`);
     
             const result = await this.pool.query(fullDataQuery, [...signatures, userId]);
     
-            console.log(`[${new Date().toISOString()}] 📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens for user ${userId}`);
+            console.log(`[2025-08-20 04:06:00 EEST] 📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens for user ${userId}`);
     
             return result.rows;
     
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error in getRecentTransactions:`, error);
+            console.error(`[2025-08-20 04:06:00 EEST] ❌ Error in getRecentTransactions:`, error);
             throw error;
         }
     }
