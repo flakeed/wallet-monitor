@@ -181,7 +181,7 @@ SET
     last_name = COALESCE(p_last_name, last_name),
     last_login = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP,
-    is_admin = is_admin
+    is_admin = users.is_admin  -- Explicitly use the table column
 WHERE id = existing_user
 RETURNING *
     ELSE
