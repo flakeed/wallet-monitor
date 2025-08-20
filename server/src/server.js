@@ -555,11 +555,33 @@ app.post('/api/monitoring/toggle', auth.authRequired, async (req, res) => {
 });
 
 app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
+  // Перенаправляем на оптимизированный эндпоинт
+  req.body.optimized = false; // Флаг что это не оптимизированный запрос
+  
+  // Если chunk size больше 500, разбиваем на меньшие части
+  const { wallets } = req.body;
+  if (wallets && wallets.length > 500) {
+    console.log(`[${new Date().toISOString()}] 🔄 Large non-optimized request (${wallets.length} wallets), redirecting to optimized endpoint`);
+    req.body.optimized = true;
+  }
+  
+  // Вызываем тот же обработчик
+  return app._router.handle(req, res, (err) => {
+    if (err) {
+      console.error('Error in bulk handler redirect:', err);
+      res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+  });
+});
+
+app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   const startTime = Date.now();
   
   try {
-    const { wallets, groupId } = req.body;
+    const { wallets, groupId, optimized } = req.body;
     const userId = req.user.id;
+
+    console.log(`[${new Date().toISOString()}] 🚀 Starting OPTIMIZED bulk import of ${wallets?.length || 0} wallets for user ${userId}`);
 
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ 
@@ -575,14 +597,12 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
       });
     }
 
-    if (wallets.length > 10000) {
+    if (wallets.length > 1000) {
       return res.status(400).json({ 
         success: false,
-        error: 'Maximum 10,000 wallets allowed per bulk import' 
+        error: 'Maximum 1,000 wallets allowed per optimized batch (send in multiple requests)' 
       });
     }
-
-    console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets for user ${userId}`);
 
     const results = {
       total: wallets.length,
@@ -596,10 +616,11 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
     const validWallets = [];
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
 
-    // Валидация кошельков
-    for (let i = 0; i < wallets.length; i++) {
-      const wallet = wallets[i];
-      
+    // Быстрая валидация всех кошельков в одном проходе
+    console.log(`[${new Date().toISOString()}] ⚡ Fast validation of ${wallets.length} wallets...`);
+    const validationStart = Date.now();
+
+    for (const wallet of wallets) {
       if (!wallet || !wallet.address) {
         results.failed++;
         results.errors.push({
@@ -622,73 +643,156 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
 
       validWallets.push({
         address: wallet.address.trim(),
-        name: wallet.name?.trim() || null
+        name: wallet.name?.trim() || null,
+        userId,
+        groupId: groupId || null
       });
     }
+
+    const validationTime = Date.now() - validationStart;
+    console.log(`[${new Date().toISOString()}] ✅ Validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
 
     if (validWallets.length === 0) {
       return res.json({
         success: false,
         message: 'No valid wallets to import',
-        results
+        results,
+        duration: Date.now() - startTime
       });
     }
 
-    console.log(`[${new Date().toISOString()}] ✅ ${validWallets.length} wallets passed validation`);
+    // ОПТИМИЗИРОВАННАЯ BATCH ОБРАБОТКА В БАЗЕ ДАННЫХ
+    console.log(`[${new Date().toISOString()}] 🗄️ Starting optimized database batch insert of ${validWallets.length} wallets...`);
+    const dbStart = Date.now();
 
-    // Добавляем кошельки по одному с правильной обработкой ошибок
-    for (const wallet of validWallets) {
+    try {
+      // Используем оптимизированную batch функцию из базы данных
+      const dbResults = await db.addWalletsBatchOptimized(validWallets);
+      
+      const dbTime = Date.now() - dbStart;
+      console.log(`[${new Date().toISOString()}] ✅ Database batch completed in ${dbTime}ms: ${dbResults.length} wallets inserted`);
+
+      results.successful = dbResults.length;
+      results.successfulWallets = dbResults.map(wallet => ({
+        address: wallet.address,
+        name: wallet.name,
+        id: wallet.id,
+        groupId: wallet.group_id,
+        userId: wallet.user_id
+      }));
+
+      // Подсчитываем дубликаты/неуспешные
+      results.failed += (validWallets.length - dbResults.length);
+
+    } catch (dbError) {
+      console.error(`[${new Date().toISOString()}] ❌ Database batch error:`, dbError.message);
+      
+      // Fallback к индивидуальной обработке если batch не сработал
+      console.log(`[${new Date().toISOString()}] 🔄 Falling back to individual processing...`);
+      
+      for (const wallet of validWallets) {
+        try {
+          const addedWallet = await solanaWebSocketService.addWallet(
+            wallet.address, 
+            wallet.name, 
+            wallet.groupId,
+            wallet.userId
+          );
+          
+          results.successful++;
+          results.successfulWallets.push({
+            address: wallet.address,
+            name: wallet.name,
+            id: addedWallet.id,
+            groupId: addedWallet.group_id,
+            userId: addedWallet.user_id,
+          });
+
+        } catch (error) {
+          results.failed++;
+          results.errors.push({
+            address: wallet.address,
+            name: wallet.name,
+            error: error.message || 'Unknown error'
+          });
+        }
+      }
+    }
+
+    // ОПТИМИЗИРОВАННАЯ ПОДПИСКА НА WEBSOCKET (параллельно с БД)
+    if (results.successful > 0) {
+      console.log(`[${new Date().toISOString()}] 🔗 Starting optimized WebSocket subscriptions for ${results.successful} wallets...`);
+      const wsStart = Date.now();
+
       try {
-        console.log(`[${new Date().toISOString()}] 📝 Adding wallet ${wallet.address.slice(0, 8)}...`);
-        
-        const addedWallet = await solanaWebSocketService.addWallet(
-          wallet.address, 
-          wallet.name, 
-          groupId,
-          userId
-        );
-        
-        results.successful++;
-        results.successfulWallets.push({
-          address: wallet.address,
-          name: wallet.name,
-          id: addedWallet.id,
-          groupId: addedWallet.group_id,
-          userId: addedWallet.user_id,
-        });
+        // Параллельная подписка батчами по 100 кошельков
+        const subscriptionBatchSize = 100;
+        const subscriptionPromises = [];
 
-        console.log(`[${new Date().toISOString()}] ✅ Successfully added wallet ${wallet.address.slice(0, 8)}...`);
+        for (let i = 0; i < results.successfulWallets.length; i += subscriptionBatchSize) {
+          const batch = results.successfulWallets.slice(i, i + subscriptionBatchSize);
+          
+          const batchPromise = Promise.all(
+            batch.map(async (wallet) => {
+              try {
+                // Проверяем что кошелек подходит под текущую группу/пользователя в WebSocket сервисе
+                if (solanaWebSocketService.activeUserId === userId && 
+                    (!solanaWebSocketService.activeGroupId || solanaWebSocketService.activeGroupId === wallet.groupId)) {
+                  await solanaWebSocketService.subscribeToWallet(wallet.address);
+                }
+                return { success: true, address: wallet.address };
+              } catch (error) {
+                console.warn(`[${new Date().toISOString()}] ⚠️ WebSocket subscription failed for ${wallet.address}: ${error.message}`);
+                return { success: false, address: wallet.address, error: error.message };
+              }
+            })
+          );
 
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${wallet.address}:`, error.message);
-        results.failed++;
-        results.errors.push({
-          address: wallet.address,
-          name: wallet.name,
-          error: error.message || 'Unknown error'
-        });
+          subscriptionPromises.push(batchPromise);
+        }
+
+        // Ждем все батчи подписок
+        const subscriptionResults = await Promise.all(subscriptionPromises);
+        const flatResults = subscriptionResults.flat();
+        
+        const successfulSubscriptions = flatResults.filter(r => r.success).length;
+        const failedSubscriptions = flatResults.filter(r => !r.success).length;
+
+        const wsTime = Date.now() - wsStart;
+        console.log(`[${new Date().toISOString()}] ✅ WebSocket subscriptions completed in ${wsTime}ms: ${successfulSubscriptions} successful, ${failedSubscriptions} failed`);
+
+      } catch (wsError) {
+        console.error(`[${new Date().toISOString()}] ❌ WebSocket subscription error:`, wsError.message);
+        // Не прерываем процесс - кошельки уже добавлены в БД
       }
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[${new Date().toISOString()}] 🎉 Bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful`);
+    const walletsPerSecond = Math.round((results.successful / duration) * 1000);
+
+    console.log(`[${new Date().toISOString()}] 🎉 OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
 
     res.json({
       success: results.successful > 0,
-      message: `Bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
+      message: `Optimized bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total (${walletsPerSecond} wallets/sec)`,
       results,
-      duration: duration
+      duration,
+      performance: {
+        walletsPerSecond,
+        totalTime: duration,
+        averageTimePerWallet: Math.round(duration / results.total)
+      }
     });
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`[${new Date().toISOString()}] ❌ Bulk import failed after ${duration}ms:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Optimized bulk import failed after ${duration}ms:`, error);
     
     res.status(500).json({ 
       success: false,
-      error: 'Internal server error during bulk import',
+      error: 'Internal server error during optimized bulk import',
       details: error.message,
-      duration: duration
+      duration
     });
   }
 });

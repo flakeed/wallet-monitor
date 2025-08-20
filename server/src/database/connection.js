@@ -136,7 +136,116 @@ class Database {
         }
     }
 
+    async addWalletsBatchOptimized(wallets) {
+        if (!wallets || wallets.length === 0) {
+            throw new Error('Wallets array is required');
+        }
+
+        const maxBatchSize = 1000;
+        if (wallets.length > maxBatchSize) {
+            throw new Error(`Batch size too large. Maximum ${maxBatchSize} wallets per batch.`);
+        }
+
+        console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert of ${wallets.length} wallets`);
+        const startTime = Date.now();
+
+        // Проверяем, что все кошельки имеют userId
+        const walletsWithUser = wallets.filter(w => w.userId);
+        if (walletsWithUser.length !== wallets.length) {
+            throw new Error('All wallets must have userId specified');
+        }
+
+        try {
+            // Используем COPY для максимальной скорости вставки
+            const client = await this.pool.connect();
+            
+            try {
+                await client.query('BEGIN');
+
+                // Создаем временную таблицу для COPY операции
+                await client.query(`
+                    CREATE TEMP TABLE temp_wallets_batch (
+                        address VARCHAR(44) NOT NULL,
+                        name VARCHAR(255),
+                        group_id UUID,
+                        user_id UUID NOT NULL
+                    )
+                `);
+
+                // Подготавливаем данные для COPY
+                const copyData = wallets.map(wallet => 
+                    `${wallet.address}\t${wallet.name || '\\N'}\t${wallet.groupId || '\\N'}\t${wallet.userId}`
+                ).join('\n');
+
+                console.log(`[${new Date().toISOString()}] ⚡ Executing COPY operation for ${wallets.length} wallets...`);
+                
+                // Используем COPY FROM STDIN для максимальной производительности
+                const copyQuery = `
+                    COPY temp_wallets_batch (address, name, group_id, user_id) 
+                    FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')
+                `;
+                
+                const copyStream = client.query(copyFrom(copyQuery));
+                copyStream.write(copyData);
+                copyStream.end();
+
+                await new Promise((resolve, reject) => {
+                    copyStream.on('end', resolve);
+                    copyStream.on('error', reject);
+                });
+
+                console.log(`[${new Date().toISOString()}] ✅ COPY operation completed`);
+
+                // Выполняем быструю вставку с игнорированием дубликатов
+                const insertResult = await client.query(`
+                    INSERT INTO wallets (address, name, group_id, user_id, created_at, updated_at, is_active)
+                    SELECT DISTINCT 
+                        t.address, 
+                        t.name, 
+                        t.group_id, 
+                        t.user_id,
+                        NOW(),
+                        NOW(),
+                        true
+                    FROM temp_wallets_batch t
+                    LEFT JOIN wallets w ON w.address = t.address AND w.user_id = t.user_id
+                    WHERE w.address IS NULL
+                    RETURNING id, address, name, group_id, user_id, created_at
+                `);
+
+                await client.query('COMMIT');
+
+                const insertTime = Date.now() - startTime;
+                const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
+                
+                console.log(`[${new Date().toISOString()}] 🎉 Optimized batch insert completed in ${insertTime}ms:`);
+                console.log(`  - Attempted: ${wallets.length} wallets`);
+                console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
+                console.log(`  - Duplicates: ${wallets.length - insertResult.rows.length} wallets`);
+                console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
+
+                return insertResult.rows;
+
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            } finally {
+                client.release();
+            }
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Optimized batch insert failed:`, error.message);
+            throw new Error(`Optimized batch insert failed: ${error.message}`);
+        }
+    }
+
     async addWalletsBatch(wallets) {
+        // Если это большой batch, используем оптимизированную версию
+        if (wallets.length > 500) {
+            console.log(`[${new Date().toISOString()}] 🔄 Large batch detected (${wallets.length}), using optimized method`);
+            return this.addWalletsBatchOptimized(wallets);
+        }
+
         if (!wallets || wallets.length === 0) {
             throw new Error('Wallets array is required');
         }
@@ -147,24 +256,37 @@ class Database {
             throw new Error('All wallets must have userId specified');
         }
 
-        const query = `
-          INSERT INTO wallets (address, name, group_id, user_id) 
-          VALUES ${wallets.map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`).join(', ')}
-          ON CONFLICT (address, user_id) DO NOTHING
-          RETURNING id, address, name, group_id, user_id, created_at
-        `;
-        
-        const values = [];
-        wallets.forEach(wallet => {
-          values.push(wallet.address, wallet.name, wallet.groupId, wallet.userId);
-        });
-      
-        try {
-          const result = await this.pool.query(query, values);
-          return result.rows;
-        } catch (error) {
-          throw new Error(`Batch insert failed: ${error.message}`);
+        // Для небольших batch используем существующий метод с VALUES
+        const batchSize = 100; // Уменьшаем batch size для стабильности
+        const results = [];
+
+        for (let i = 0; i < wallets.length; i += batchSize) {
+            const batch = wallets.slice(i, i + batchSize);
+            
+            const query = `
+              INSERT INTO wallets (address, name, group_id, user_id) 
+              VALUES ${batch.map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`).join(', ')}
+              ON CONFLICT (address, user_id) DO NOTHING
+              RETURNING id, address, name, group_id, user_id, created_at
+            `;
+            
+            const values = [];
+            batch.forEach(wallet => {
+              values.push(wallet.address, wallet.name, wallet.groupId, wallet.userId);
+            });
+          
+            try {
+              const result = await this.pool.query(query, values);
+              results.push(...result.rows);
+              
+              console.log(`[${new Date().toISOString()}] ✅ Batch ${Math.floor(i / batchSize) + 1} completed: ${result.rows.length}/${batch.length} inserted`);
+            } catch (error) {
+              console.error(`[${new Date().toISOString()}] ❌ Batch ${Math.floor(i / batchSize) + 1} failed:`, error.message);
+              throw new Error(`Batch insert failed: ${error.message}`);
+            }
         }
+
+        return results;
     }
 
     async removeWallet(address, userId = null) {
@@ -252,6 +374,246 @@ class Database {
         }
         
         return result.rows;
+    }
+
+    async checkWalletsExistBatch(addresses, userId) {
+        if (!addresses || addresses.length === 0) return [];
+        
+        const query = `
+            SELECT address, id, name, group_id, is_active 
+            FROM wallets 
+            WHERE address = ANY($1) AND user_id = $2
+        `;
+        
+        try {
+            const result = await this.pool.query(query, [addresses, userId]);
+            return result.rows;
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error checking wallet existence batch:`, error);
+            return [];
+        }
+    }
+
+    async updateWalletStatsBatch(walletIds) {
+        if (!walletIds || walletIds.length === 0) return [];
+
+        console.log(`[${new Date().toISOString()}] 📊 Updating stats for ${walletIds.length} wallets...`);
+        
+        try {
+            // Используем CTE для эффективного обновления статистики
+            const query = `
+                WITH wallet_stats_calc AS (
+                    SELECT 
+                        w.id as wallet_id,
+                        COALESCE(SUM(t.sol_spent), 0) as total_spent_sol,
+                        COALESCE(SUM(t.sol_received), 0) as total_received_sol,
+                        COUNT(CASE WHEN t.transaction_type = 'buy' THEN 1 END) as total_buy_transactions,
+                        COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as total_sell_transactions,
+                        COUNT(DISTINCT CASE WHEN to_.operation_type = 'buy' THEN to_.token_id END) as unique_tokens_bought,
+                        COUNT(DISTINCT CASE WHEN to_.operation_type = 'sell' THEN to_.token_id END) as unique_tokens_sold,
+                        MAX(t.block_time) as last_transaction_at
+                    FROM wallets w
+                    LEFT JOIN transactions t ON w.id = t.wallet_id
+                    LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+                    WHERE w.id = ANY($1)
+                    GROUP BY w.id
+                )
+                INSERT INTO wallet_stats (
+                    wallet_id, total_spent_sol, total_received_sol,
+                    total_buy_transactions, total_sell_transactions,
+                    unique_tokens_bought, unique_tokens_sold, last_transaction_at,
+                    created_at, updated_at
+                ) 
+                SELECT 
+                    wallet_id, total_spent_sol, total_received_sol,
+                    total_buy_transactions, total_sell_transactions,
+                    unique_tokens_bought, unique_tokens_sold, last_transaction_at,
+                    NOW(), NOW()
+                FROM wallet_stats_calc
+                ON CONFLICT (wallet_id) DO UPDATE SET
+                    total_spent_sol = EXCLUDED.total_spent_sol,
+                    total_received_sol = EXCLUDED.total_received_sol,
+                    total_buy_transactions = EXCLUDED.total_buy_transactions,
+                    total_sell_transactions = EXCLUDED.total_sell_transactions,
+                    unique_tokens_bought = EXCLUDED.unique_tokens_bought,
+                    unique_tokens_sold = EXCLUDED.unique_tokens_sold,
+                    last_transaction_at = EXCLUDED.last_transaction_at,
+                    updated_at = NOW()
+                RETURNING *
+            `;
+
+            const result = await this.pool.query(query, [walletIds]);
+            console.log(`[${new Date().toISOString()}] ✅ Updated stats for ${result.rows.length} wallets`);
+            return result.rows;
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error updating wallet stats batch:`, error);
+            throw error;
+        }
+    }
+
+    async getActiveWalletsPaginated(offset = 0, limit = 1000, groupId = null, userId = null) {
+        let query = `
+            SELECT w.*, g.name as group_name,
+                   COUNT(w.id) OVER() as total_count
+            FROM wallets w
+            LEFT JOIN groups g ON w.group_id = g.id
+            WHERE w.is_active = TRUE
+        `;
+        const params = [];
+        let paramIndex = 1;
+        
+        if (userId) {
+            query += ` AND w.user_id = ${paramIndex++}`;
+            params.push(userId);
+        }
+        
+        if (groupId) {
+            query += ` AND w.group_id = ${paramIndex++}`;
+            params.push(groupId);
+        }
+        
+        query += ` ORDER BY w.created_at DESC LIMIT ${paramIndex++} OFFSET ${paramIndex}`;
+        params.push(limit, offset);
+        
+        const result = await this.pool.query(query, params);
+        
+        return {
+            wallets: result.rows,
+            totalCount: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0,
+            hasMore: result.rows.length === limit
+        };
+    }
+
+    async removeWalletsBatch(addresses, userId = null) {
+        if (!addresses || addresses.length === 0) return { deletedCount: 0 };
+
+        console.log(`[${new Date().toISOString()}] 🗑️ Removing ${addresses.length} wallets...`);
+
+        try {
+            let query = `DELETE FROM wallets WHERE address = ANY($1)`;
+            const params = [addresses];
+            
+            if (userId) {
+                query += ` AND user_id = $2`;
+                params.push(userId);
+            }
+            
+            query += ` RETURNING id, address`;
+            
+            const result = await this.pool.query(query, params);
+            
+            console.log(`[${new Date().toISOString()}] ✅ Removed ${result.rowCount} wallets`);
+            
+            return { 
+                deletedCount: result.rowCount,
+                deletedWallets: result.rows 
+            };
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error removing wallets batch:`, error);
+            throw new Error(`Failed to remove wallets: ${error.message}`);
+        }
+    }
+
+    // НОВАЯ функция для оптимизации базы данных после bulk операций
+    async optimizeAfterBulkOperation() {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔧 Starting database optimization...`);
+            const startTime = Date.now();
+
+            const client = await this.pool.connect();
+            
+            try {
+                // Обновляем статистику таблиц
+                await client.query('ANALYZE wallets');
+                await client.query('ANALYZE groups');
+                await client.query('ANALYZE transactions');
+                await client.query('ANALYZE tokens');
+                
+                // Очищаем устаревшие записи
+                const cleanupResult = await client.query(`
+                    DELETE FROM wallets 
+                    WHERE is_active = false 
+                    AND updated_at < NOW() - INTERVAL '7 days'
+                `);
+
+                // Обновляем счетчики групп
+                await client.query(`
+                    UPDATE groups 
+                    SET updated_at = CURRENT_TIMESTAMP
+                    FROM (
+                        SELECT group_id, COUNT(*) as wallet_count
+                        FROM wallets 
+                        WHERE is_active = true AND group_id IS NOT NULL
+                        GROUP BY group_id
+                    ) counts
+                    WHERE groups.id = counts.group_id
+                `);
+
+                const duration = Date.now() - startTime;
+                console.log(`[${new Date().toISOString()}] ✅ Database optimization completed in ${duration}ms`);
+                console.log(`  - Cleaned up ${cleanupResult.rowCount} inactive wallets`);
+
+            } finally {
+                client.release();
+            }
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Database optimization failed:`, error);
+            // Не бросаем ошибку, так как оптимизация не критична
+        }
+    }
+
+    // НОВАЯ функция для проверки производительности базы данных
+    async getPerformanceMetrics() {
+        try {
+            const query = `
+                SELECT 
+                    schemaname,
+                    tablename,
+                    n_tup_ins as inserts_count,
+                    n_tup_upd as updates_count,
+                    n_tup_del as deletes_count,
+                    n_live_tup as live_tuples,
+                    n_dead_tup as dead_tuples,
+                    last_vacuum,
+                    last_autovacuum,
+                    last_analyze,
+                    last_autoanalyze
+                FROM pg_stat_user_tables 
+                WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
+                ORDER BY n_tup_ins DESC
+            `;
+
+            const result = await this.pool.query(query);
+            
+            // Получаем размеры таблиц
+            const sizeQuery = `
+                SELECT 
+                    tablename,
+                    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+                FROM pg_tables 
+                WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
+                ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+            `;
+
+            const sizeResult = await this.pool.query(sizeQuery);
+
+            return {
+                tableStats: result.rows,
+                tableSizes: sizeResult.rows,
+                connectionPool: {
+                    total: this.pool.totalCount,
+                    idle: this.pool.idleCount,
+                    waiting: this.pool.waitingCount
+                }
+            };
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error getting performance metrics:`, error);
+            return null;
+        }
     }
 
     // NEW: User-specific wallet methods

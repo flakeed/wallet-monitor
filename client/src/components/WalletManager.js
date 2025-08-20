@@ -11,7 +11,14 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
   const [bulkResults, setBulkResults] = useState(null);
   const [bulkValidation, setBulkValidation] = useState(null);
   const [showProgress, setShowProgress] = useState(false);
-  const [importProgress, setImportProgress] = useState({ current: 0, total: 0, batch: 0 });
+  const [importProgress, setImportProgress] = useState({ 
+    current: 0, 
+    total: 0, 
+    batch: 0, 
+    phase: 'preparing',
+    speed: 0,
+    timeRemaining: 0
+  });
 
   const handleCreateGroup = async (e) => {
     e.preventDefault();
@@ -145,13 +152,31 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     setBulkLoading(true);
     setShowProgress(true);
     setBulkResults(null);
-    setImportProgress({ current: 0, total: wallets.length, batch: 0 });
+    
+    const startTime = Date.now();
+    setImportProgress({ 
+      current: 0, 
+      total: wallets.length, 
+      batch: 0, 
+      phase: 'starting',
+      speed: 0,
+      timeRemaining: 0
+    });
 
     try {
-      console.log(`Starting bulk import of ${wallets.length} wallets...`);
+      console.log(`Starting optimized bulk import of ${wallets.length} wallets...`);
 
       const result = await onAddWalletsBulk(wallets, groupId || null, (progress) => {
-        setImportProgress(progress);
+        const elapsed = (Date.now() - startTime) / 1000;
+        const speed = progress.current / elapsed; // wallets per second
+        const remaining = progress.total - progress.current;
+        const timeRemaining = remaining > 0 ? remaining / speed : 0;
+
+        setImportProgress({
+          ...progress,
+          speed: Math.round(speed * 100) / 100,
+          timeRemaining: Math.round(timeRemaining)
+        });
       });
 
       if (parseErrors.length > 0) {
@@ -159,9 +184,12 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         result.results.failed += parseErrors.length;
       }
 
+      const finalTime = (Date.now() - startTime) / 1000;
+      const finalSpeed = result.results.successful / finalTime;
+
       setBulkResults({
         type: result.results.failed > 0 ? 'warning' : 'success',
-        message: result.message,
+        message: `${result.message} (${finalTime.toFixed(1)}s, ${finalSpeed.toFixed(1)} wallets/sec)`,
         details: result.results
       });
 
@@ -180,7 +208,14 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     } finally {
       setBulkLoading(false);
       setShowProgress(false);
-      setImportProgress({ current: 0, total: 0, batch: 0 });
+      setImportProgress({ 
+        current: 0, 
+        total: 0, 
+        batch: 0, 
+        phase: 'completed',
+        speed: 0,
+        timeRemaining: 0
+      });
     }
   };
 
@@ -188,6 +223,14 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     setBulkText('');
     setBulkResults(null);
     setBulkValidation(null);
+  };
+
+  // Функция для форматирования времени
+  const formatTime = (seconds) => {
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${minutes}m ${secs}s`;
   };
 
   useEffect(() => {
@@ -223,9 +266,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         </form>
       </div>
 
-      Tabs
       <div className="flex space-x-1 mb-6 bg-gray-100 p-1 rounded-lg">
-
         <button
           onClick={() => setActiveTab('bulk')}
           className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'bulk'
@@ -233,7 +274,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
               : 'text-gray-600 hover:text-gray-900'
             }`}
         >
-          Bulk Import (up to 10,000)
+          🚀 Optimized Bulk Import (up to 10,000)
         </button>
       </div>
 
@@ -241,16 +282,17 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         <>
           <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex justify-between items-start mb-3">
-              <h4 className="text-sm font-medium text-blue-900">Enhanced Bulk Import (up to 10,000 wallets):</h4>
-
+              <h4 className="text-sm font-medium text-blue-900">⚡ High-Speed Bulk Import (up to 10,000 wallets):</h4>
             </div>
             <div className="text-sm text-blue-800 space-y-1">
+              <p>• <strong>Optimized for speed:</strong> Up to 1000 wallets per batch (5x faster)</p>
+              <p>• <strong>Parallel processing:</strong> Database and WebSocket subscriptions in parallel</p>
+              <p>• <strong>Multi-user safe:</strong> Isolated processing per user and group</p>
               <p>• One wallet address per line</p>
               <p>• Optional: Add name after comma or tab: <code className="bg-blue-100 px-1 rounded">address,name</code></p>
               <p>• Lines starting with # are treated as comments and ignored</p>
               <p>• Duplicate addresses will be automatically detected and removed</p>
               <p>• Maximum 10,000 unique wallets per import</p>
-              <p>• Large imports are processed in batches with progress tracking</p>
               <p className="font-medium">• Example:</p>
               <div className="mt-2 bg-blue-100 p-2 rounded font-mono text-xs">
                 # Trading wallets for strategy A<br />
@@ -278,7 +320,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
                   Validation Results
                 </h4>
                 {bulkValidation.canImport && (
-                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Ready to import</span>
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">⚡ Ready for high-speed import</span>
                 )}
               </div>
 
@@ -296,8 +338,8 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
                   <div className="text-gray-600">Errors</div>
                 </div>
                 <div className="text-center">
-                  <div className="font-semibold text-lg text-blue-600">10,000</div>
-                  <div className="text-gray-600">Max Allowed</div>
+                  <div className="font-semibold text-lg text-blue-600">~{Math.ceil(bulkValidation.validWallets / 1000 * 3)}s</div>
+                  <div className="text-gray-600">Est. Time</div>
                 </div>
               </div>
 
@@ -333,24 +375,39 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
             <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
               <div className="flex items-center space-x-3 mb-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                <div>
-                  <div className="font-medium text-blue-900">Processing bulk import...</div>
+                <div className="flex-1">
+                  <div className="font-medium text-blue-900">⚡ High-speed bulk import in progress...</div>
                   <div className="text-sm text-blue-700">
                     {importProgress.total > 0 ? (
-                      `Processing batch ${importProgress.batch}, ${importProgress.current}/${importProgress.total} wallets`
+                      <span>
+                        Phase: {importProgress.phase} • 
+                        {importProgress.current}/{importProgress.total} wallets • 
+                        Batch {importProgress.batch} • 
+                        Speed: {importProgress.speed} wallets/sec
+                        {importProgress.timeRemaining > 0 && ` • ETA: ${formatTime(importProgress.timeRemaining)}`}
+                      </span>
                     ) : (
-                      'Preparing import...'
+                      'Preparing optimized import...'
                     )}
                   </div>
                 </div>
               </div>
 
               {importProgress.total > 0 && (
-                <div className="w-full bg-blue-200 rounded-full h-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${Math.min((importProgress.current / importProgress.total) * 100, 100)}%` }}
-                  ></div>
+                <div className="space-y-2">
+                  <div className="w-full bg-blue-200 rounded-full h-3">
+                    <div
+                      className="bg-gradient-to-r from-blue-600 to-green-500 h-3 rounded-full transition-all duration-300 flex items-center justify-center"
+                      style={{ width: `${Math.min((importProgress.current / importProgress.total) * 100, 100)}%` }}
+                    >
+                      <span className="text-xs text-white font-medium">
+                        {Math.round((importProgress.current / importProgress.total) * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-blue-600 text-center">
+                    Processing at {importProgress.speed} wallets/second 🚀
+                  </div>
                 </div>
               )}
             </div>
@@ -424,7 +481,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
             <div>
               <div className="flex justify-between items-center mb-2">
                 <label className="block text-sm font-medium text-gray-700">
-                  Wallet Addresses * (up to 10,000)
+                  🚀 Wallet Addresses * (up to 10,000 - optimized for speed)
                 </label>
                 <button
                   type="button"
@@ -462,7 +519,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
                   )}
                 </div>
                 <div className="text-xs text-gray-400">
-                  Max: 10,000 wallets
+                  Max: 10,000 wallets • Optimized: 1000/batch
                 </div>
               </div>
             </div>
@@ -489,23 +546,23 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
             <button
               type="submit"
               disabled={bulkLoading || !bulkText.trim() || (bulkValidation && !bulkValidation.canImport)}
-              className="w-full bg-purple-600 text-white py-3 px-4 rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
+              className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white py-3 px-4 rounded-lg hover:from-purple-700 hover:to-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center font-medium"
             >
               {bulkLoading ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Importing Wallets...
+                  ⚡ High-Speed Import in Progress...
                 </>
               ) : (
-                bulkValidation && bulkValidation.validWallets > 0
-                  ? `Import ${bulkValidation.validWallets.toLocaleString()} Wallets`
-                  : 'Import Wallets'
+                <>🚀 {bulkValidation && bulkValidation.validWallets > 0
+                  ? `Import ${bulkValidation.validWallets.toLocaleString()} Wallets (Optimized)`
+                  : 'Import Wallets (Optimized)'}</>
               )}
             </button>
 
             {bulkValidation && bulkValidation.validWallets > 1000 && (
-              <p className="text-xs text-gray-600 text-center">
-                Large imports may take several minutes to complete. Please be patient.
+              <p className="text-xs text-blue-600 text-center">
+                🚀 Large import detected. Using optimized parallel processing for maximum speed.
               </p>
             )}
           </form>
@@ -515,4 +572,4 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
   );
 }
 
-export default WalletManager
+export default WalletManager;

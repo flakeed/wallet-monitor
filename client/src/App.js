@@ -277,32 +277,41 @@ function App() {
 
   const handleAddWalletsBulk = async (wallets, groupId, progressCallback) => {
     const MAX_RETRIES = 3;
-    const RETRY_DELAY = 2000;
+    const RETRY_DELAY = 1000; // Уменьшено с 2000ms
+    const OPTIMIZED_CHUNK_SIZE = 1000; // Увеличено с 200-500 до 1000
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     const sendChunkWithRetry = async (chunk, chunkIndex, totalChunks, attempt = 1) => {
       try {
-        console.log(`Sending chunk ${chunkIndex + 1}/${totalChunks} (attempt ${attempt})`);
+        console.log(`🚀 Sending optimized chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} wallets, attempt ${attempt})`);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 180000);
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 минут timeout
 
-        const response = await fetch('/api/wallets/bulk', {
+        if (progressCallback) {
+          progressCallback({
+            current: chunkIndex * OPTIMIZED_CHUNK_SIZE,
+            total: wallets.length,
+            batch: chunkIndex + 1,
+            phase: 'uploading'
+          });
+        }
+
+        const response = await fetch('/api/wallets/bulk-optimized', {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
             wallets: chunk,
-            groupId
+            groupId,
+            optimized: true // Флаг для оптимизированной обработки
           }),
           signal: controller.signal
         });
 
         clearTimeout(timeoutId);
 
-        console.log(`Response status: ${response.status}`);
-        console.log(`Response headers:`, Object.fromEntries(response.headers.entries()));
-
+        console.log(`📊 Response status: ${response.status}`);
         const contentType = response.headers.get('Content-Type');
 
         if (!response.ok) {
@@ -315,12 +324,9 @@ function App() {
             } else {
               const errorText = await response.text();
               console.error('Non-JSON error response:', errorText.substring(0, 500));
-
-              if (errorText.includes('<!DOCTYPE') || errorText.includes('<html')) {
-                errorMessage = 'Server returned HTML error page instead of JSON. Check server logs.';
-              } else {
-                errorMessage = errorText.substring(0, 200);
-              }
+              errorMessage = errorText.includes('<!DOCTYPE') || errorText.includes('<html') 
+                ? 'Server returned HTML error page instead of JSON. Check server logs.' 
+                : errorText.substring(0, 200);
             }
           } catch (parseError) {
             console.error('Error parsing error response:', parseError);
@@ -342,10 +348,11 @@ function App() {
           throw new Error(result.error || 'Unknown server error');
         }
 
+        console.log(`✅ Chunk ${chunkIndex + 1} completed: +${result.results.successful} successful, +${result.results.failed} failed`);
         return result;
 
       } catch (error) {
-        console.error(`Chunk ${chunkIndex + 1} attempt ${attempt} failed:`, error.message);
+        console.error(`❌ Chunk ${chunkIndex + 1} attempt ${attempt} failed:`, error.message);
 
         if (error.name === 'AbortError') {
           throw new Error('Request timeout - chunk took too long to process');
@@ -357,7 +364,7 @@ function App() {
           error.message.includes('timeout') ||
           error.message.includes('TIMEOUT')
         )) {
-          console.log(`Retrying chunk ${chunkIndex + 1} in ${RETRY_DELAY}ms...`);
+          console.log(`⏳ Retrying chunk ${chunkIndex + 1} in ${RETRY_DELAY * attempt}ms...`);
           await sleep(RETRY_DELAY * attempt);
           return sendChunkWithRetry(chunk, chunkIndex, totalChunks, attempt + 1);
         }
@@ -367,23 +374,14 @@ function App() {
     };
 
     try {
-      let CHUNK_SIZE;
-      if (wallets.length > 5000) {
-        CHUNK_SIZE = 200;
-      } else if (wallets.length > 2000) {
-        CHUNK_SIZE = 300;
-      } else if (wallets.length > 1000) {
-        CHUNK_SIZE = 400;
-      } else {
-        CHUNK_SIZE = 500;
-      }
+      console.log(`🚀 Starting OPTIMIZED bulk import of ${wallets.length} wallets with ${OPTIMIZED_CHUNK_SIZE} wallets per chunk`);
 
       const chunks = [];
-      for (let i = 0; i < wallets.length; i += CHUNK_SIZE) {
-        chunks.push(wallets.slice(i, i + CHUNK_SIZE));
+      for (let i = 0; i < wallets.length; i += OPTIMIZED_CHUNK_SIZE) {
+        chunks.push(wallets.slice(i, i + OPTIMIZED_CHUNK_SIZE));
       }
 
-      console.log(`Processing ${wallets.length} wallets in ${chunks.length} chunks (${CHUNK_SIZE} wallets per chunk)`);
+      console.log(`📦 Created ${chunks.length} optimized chunks (${OPTIMIZED_CHUNK_SIZE} wallets per chunk)`);
 
       let totalResults = {
         total: wallets.length,
@@ -393,46 +391,61 @@ function App() {
         successfulWallets: []
       };
 
-      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-        const chunk = chunks[chunkIndex];
-
+      // Параллельная обработка небольших батчей для ускорения
+      const PARALLEL_BATCHES = Math.min(3, chunks.length); // Максимум 3 параллельных запроса
+      
+      for (let i = 0; i < chunks.length; i += PARALLEL_BATCHES) {
+        const batchChunks = chunks.slice(i, Math.min(i + PARALLEL_BATCHES, chunks.length));
+        
         if (progressCallback) {
           progressCallback({
-            current: chunkIndex * CHUNK_SIZE,
+            current: i * OPTIMIZED_CHUNK_SIZE,
             total: wallets.length,
-            batch: chunkIndex + 1
+            batch: i + 1,
+            phase: 'processing'
           });
         }
+
+        // Параллельная обработка батча
+        const batchPromises = batchChunks.map((chunk, batchIndex) => 
+          sendChunkWithRetry(chunk, i + batchIndex, chunks.length)
+        );
 
         try {
-          const chunkResult = await sendChunkWithRetry(chunk, chunkIndex, chunks.length);
+          const batchResults = await Promise.all(batchPromises);
+          
+          batchResults.forEach(chunkResult => {
+            totalResults.successful += chunkResult.results.successful || 0;
+            totalResults.failed += chunkResult.results.failed || 0;
 
-          totalResults.successful += chunkResult.results.successful || 0;
-          totalResults.failed += chunkResult.results.failed || 0;
+            if (chunkResult.results.errors) {
+              totalResults.errors.push(...chunkResult.results.errors);
+            }
 
-          if (chunkResult.results.errors) {
-            totalResults.errors.push(...chunkResult.results.errors);
-          }
+            if (chunkResult.results.successfulWallets) {
+              totalResults.successfulWallets.push(...chunkResult.results.successfulWallets);
+            }
+          });
 
-          if (chunkResult.results.successfulWallets) {
-            totalResults.successfulWallets.push(...chunkResult.results.successfulWallets);
-          }
+          console.log(`🎯 Batch ${Math.floor(i / PARALLEL_BATCHES) + 1} completed: ${totalResults.successful} total successful`);
 
-          console.log(`Chunk ${chunkIndex + 1}/${chunks.length} completed: +${chunkResult.results.successful} successful, +${chunkResult.results.failed} failed`);
-
-        } catch (chunkError) {
-          console.error(`Chunk ${chunkIndex + 1} failed completely:`, chunkError.message);
-
-          totalResults.failed += chunk.length;
-          totalResults.errors.push({
-            address: `chunk_${chunkIndex + 1}`,
-            error: `Entire chunk failed: ${chunkError.message}`,
-            walletCount: chunk.length
+        } catch (batchError) {
+          console.error(`❌ Batch ${Math.floor(i / PARALLEL_BATCHES) + 1} failed:`, batchError.message);
+          
+          // При ошибке батча помечаем все кошельки в нем как failed
+          batchChunks.forEach(chunk => {
+            totalResults.failed += chunk.length;
+            totalResults.errors.push({
+              address: `batch_${Math.floor(i / PARALLEL_BATCHES) + 1}`,
+              error: `Entire batch failed: ${batchError.message}`,
+              walletCount: chunk.length
+            });
           });
         }
 
-        if (chunkIndex < chunks.length - 1) {
-          await sleep(200);
+        // Короткая пауза между батчами для снижения нагрузки на сервер
+        if (i + PARALLEL_BATCHES < chunks.length) {
+          await sleep(100);
         }
       }
 
@@ -440,22 +453,23 @@ function App() {
         progressCallback({
           current: wallets.length,
           total: wallets.length,
-          batch: chunks.length
+          batch: chunks.length,
+          phase: 'completed'
         });
       }
 
       const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
-      console.log(`Bulk import completed: ${totalResults.successful}/${totalResults.total} successful (${successRate}%)`);
+      console.log(`🎉 OPTIMIZED bulk import completed: ${totalResults.successful}/${totalResults.total} successful (${successRate}%)`);
 
       return {
         success: totalResults.successful > 0,
-        message: `Bulk import completed: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
+        message: `Optimized bulk import completed: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
         results: totalResults
       };
 
     } catch (error) {
-      console.error('Bulk import failed:', error);
-      throw new Error(`Bulk import failed: ${error.message}`);
+      console.error('❌ Optimized bulk import failed:', error);
+      throw new Error(`Optimized bulk import failed: ${error.message}`);
     }
   };
 

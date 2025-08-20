@@ -176,51 +176,259 @@ class SolanaWebSocketService {
         return Array.from(this.subscriptions.entries()).find(([_, subData]) => subData.logs === subscriptionId)?.[0] || null;
     }
 
+    async subscribeToWalletsBatch(walletAddresses, batchSize = 100) {
+        if (!walletAddresses || walletAddresses.length === 0) return;
+        
+        if (!this.ws || this.ws.readyState !== WS_READY_STATE_OPEN) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Cannot batch subscribe - WebSocket not connected`);
+            return;
+        }
+
+        console.log(`[${new Date().toISOString()}] 🚀 Starting batch subscription for ${walletAddresses.length} wallets`);
+        const startTime = Date.now();
+
+        const results = {
+            successful: 0,
+            failed: 0,
+            errors: []
+        };
+
+        // Обрабатываем в батчах для избежания перегрузки WebSocket
+        for (let i = 0; i < walletAddresses.length; i += batchSize) {
+            const batch = walletAddresses.slice(i, i + batchSize);
+            
+            console.log(`[${new Date().toISOString()}] 📦 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(walletAddresses.length / batchSize)} (${batch.length} wallets)`);
+
+            // Параллельная подписка в рамках батча
+            const batchPromises = batch.map(async (walletAddress) => {
+                try {
+                    if (this.subscriptions.has(walletAddress)) {
+                        console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${walletAddress.slice(0, 8)}... already subscribed`);
+                        return { success: true, address: walletAddress, action: 'already_subscribed' };
+                    }
+
+                    if (this.subscriptions.size >= this.maxSubscriptions) {
+                        throw new Error(`Maximum subscription limit of ${this.maxSubscriptions} reached`);
+                    }
+
+                    const logsSubscriptionId = await this.sendRequest('logsSubscribe', [
+                        { mentions: [walletAddress] },
+                        { commitment: 'confirmed' },
+                    ], 'logsSubscribe');
+
+                    this.subscriptions.set(walletAddress, { logs: logsSubscriptionId });
+                    results.successful++;
+                    
+                    return { success: true, address: walletAddress, subscriptionId: logsSubscriptionId };
+
+                } catch (error) {
+                    results.failed++;
+                    results.errors.push({ address: walletAddress, error: error.message });
+                    console.error(`[${new Date().toISOString()}] ❌ Failed to subscribe to ${walletAddress.slice(0, 8)}...: ${error.message}`);
+                    return { success: false, address: walletAddress, error: error.message };
+                }
+            });
+
+            // Ждем завершения текущего батча
+            await Promise.all(batchPromises);
+
+            // Короткая пауза между батчами для снижения нагрузки
+            if (i + batchSize < walletAddresses.length) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+
+        const duration = Date.now() - startTime;
+        const walletsPerSecond = Math.round((results.successful / duration) * 1000);
+
+        console.log(`[${new Date().toISOString()}] ✅ Batch subscription completed in ${duration}ms:`);
+        console.log(`  - Successful: ${results.successful}`);
+        console.log(`  - Failed: ${results.failed}`);
+        console.log(`  - Performance: ${walletsPerSecond} subscriptions/second`);
+        console.log(`  - Total active subscriptions: ${this.subscriptions.size}`);
+
+        return results;
+    }
+
+    async unsubscribeFromWalletsBatch(walletAddresses, batchSize = 100) {
+        if (!walletAddresses || walletAddresses.length === 0) return;
+
+        console.log(`[${new Date().toISOString()}] 🗑️ Starting batch unsubscription for ${walletAddresses.length} wallets`);
+        const startTime = Date.now();
+
+        const results = {
+            successful: 0,
+            failed: 0,
+            errors: []
+        };
+
+        for (let i = 0; i < walletAddresses.length; i += batchSize) {
+            const batch = walletAddresses.slice(i, i + batchSize);
+
+            const batchPromises = batch.map(async (walletAddress) => {
+                try {
+                    const subData = this.subscriptions.get(walletAddress);
+                    if (!subData?.logs) {
+                        results.successful++; // Считаем как успешную, так как цель достигнута
+                        return { success: true, address: walletAddress, action: 'not_subscribed' };
+                    }
+
+                    if (this.ws && this.ws.readyState === WS_READY_STATE_OPEN) {
+                        await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
+                    }
+
+                    this.subscriptions.delete(walletAddress);
+                    results.successful++;
+                    
+                    return { success: true, address: walletAddress };
+
+                } catch (error) {
+                    results.failed++;
+                    results.errors.push({ address: walletAddress, error: error.message });
+                    console.error(`[${new Date().toISOString()}] ❌ Failed to unsubscribe from ${walletAddress.slice(0, 8)}...: ${error.message}`);
+                    
+                    // Удаляем из локального кэша даже при ошибке
+                    this.subscriptions.delete(walletAddress);
+                    
+                    return { success: false, address: walletAddress, error: error.message };
+                }
+            });
+
+            await Promise.all(batchPromises);
+
+            if (i + batchSize < walletAddresses.length) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+
+        const duration = Date.now() - startTime;
+        console.log(`[${new Date().toISOString()}] ✅ Batch unsubscription completed in ${duration}ms: ${results.successful} successful, ${results.failed} failed`);
+
+        return results;
+    }
+
     async subscribeToWallets() {
         this.subscriptions.clear();
         const wallets = await this.db.getActiveWallets(this.activeGroupId, this.activeUserId);
         
-        if (wallets.length > this.maxSubscriptions) {
-            console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions})`);
-            wallets.length = this.maxSubscriptions; // Truncate array
+        if (wallets.length === 0) {
+            console.log(`[${new Date().toISOString()}] ℹ️ No wallets to subscribe for user ${this.activeUserId}${this.activeGroupId ? `, group ${this.activeGroupId}` : ''}`);
+            return;
         }
         
-        console.log(`[${new Date().toISOString()}] 📋 Subscribing to ${wallets.length} wallets for user ${this.activeUserId}${this.activeGroupId ? `, group ${this.activeGroupId}` : ''}`);
+        if (wallets.length > this.maxSubscriptions) {
+            console.warn(`[${new Date().toISOString()}] ⚠️ Wallet count (${wallets.length}) exceeds maximum (${this.maxSubscriptions}), truncating`);
+            wallets.length = this.maxSubscriptions;
+        }
+        
+        console.log(`[${new Date().toISOString()}] 📋 Starting optimized subscription for ${wallets.length} wallets (user: ${this.activeUserId}${this.activeGroupId ? `, group: ${this.activeGroupId}` : ''})`);
+        
         if (wallets.length > 0) {
             console.log(`[${new Date().toISOString()}] 🔍 Sample wallets to subscribe:`);
             wallets.slice(0, 3).forEach(wallet => {
                 console.log(`  - ${wallet.address.slice(0, 8)}... (user: ${wallet.user_id}, group: ${wallet.group_id})`);
             });
         }
-    
-        for (let i = 0; i < wallets.length; i += this.batchSize) {
-            const batch = wallets.slice(i, i + this.batchSize);
-            await Promise.all(batch.map(wallet => this.subscribeToWallet(wallet.address)));
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        
-        console.log(`[${new Date().toISOString()}] ✅ Subscribed to ${this.subscriptions.size} wallets for user ${this.activeUserId}${this.activeGroupId ? `, group ${this.activeGroupId}` : ''}`);
+
+        // Используем оптимизированную batch подписку
+        const walletAddresses = wallets.map(w => w.address);
+        const results = await this.subscribeToWalletsBatch(walletAddresses, 150); // Увеличенный batch size
+
+        console.log(`[${new Date().toISOString()}] 🎉 Optimized subscription summary:`);
+        console.log(`  - Total wallets: ${wallets.length}`);
+        console.log(`  - Successful subscriptions: ${results.successful}`);
+        console.log(`  - Failed subscriptions: ${results.failed}`);
+        console.log(`  - Active subscriptions: ${this.subscriptions.size}`);
+
+        return results;
     }
 
-    async subscribeToWallet(walletAddress) {
-        if (this.subscriptions.size >= this.maxSubscriptions) {
-            throw new Error(`Maximum subscription limit of ${this.maxSubscriptions} reached`);
-        }
-        
-        if (!this.ws || this.ws.readyState !== WS_READY_STATE_OPEN) {
-            console.warn(`[${new Date().toISOString()}] ⚠️ Cannot subscribe to wallet ${walletAddress.slice(0, 8)}... - WebSocket not connected`);
-            return;
-        }
-        
+    async addWallet(walletAddress, name = null, groupId = null, userId = null) {
         try {
-            const logsSubscriptionId = await this.sendRequest('logsSubscribe', [
-                { mentions: [walletAddress] },
-                { commitment: 'confirmed' },
-            ], 'logsSubscribe');
-            this.subscriptions.set(walletAddress, { logs: logsSubscriptionId });
-            console.log(`[${new Date().toISOString()}] ✅ Subscribed to wallet ${walletAddress.slice(0, 8)}... (logs: ${logsSubscriptionId})`);
+            if (this.subscriptions.size >= this.maxSubscriptions) {
+                throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
+            }
+            
+            console.log(`[${new Date().toISOString()}] 📝 Adding wallet ${walletAddress.slice(0, 8)}... for user ${userId}`);
+            
+            const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId, userId);
+            
+            // Подписываемся только если кошелек соответствует активной группе/пользователю
+            if (this.ws && this.ws.readyState === WS_READY_STATE_OPEN && 
+                (!this.activeGroupId || wallet.group_id === this.activeGroupId) &&
+                (!this.activeUserId || wallet.user_id === this.activeUserId)) {
+                
+                console.log(`[${new Date().toISOString()}] 🔗 Subscribing to new wallet ${walletAddress.slice(0, 8)}...`);
+                await this.subscribeToWallet(walletAddress);
+            } else {
+                console.log(`[${new Date().toISOString()}] ⏭️ Skipping subscription for wallet ${walletAddress.slice(0, 8)}... (not in active scope)`);
+            }
+            
+            return wallet;
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error subscribing to wallet ${walletAddress}:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${walletAddress}:`, error.message);
+            throw error;
+        }
+    }
+
+    async addWalletsBatchOptimized(wallets) {
+        const startTime = Date.now();
+        console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch wallet addition: ${wallets.length} wallets`);
+
+        const results = {
+            addedWallets: [],
+            errors: [],
+            subscriptionResults: null
+        };
+
+        try {
+            // 1. Добавляем кошельки в базу данных (batch операция)
+            console.log(`[${new Date().toISOString()}] 🗄️ Adding wallets to database...`);
+            const dbWallets = wallets.map(w => ({
+                address: w.address,
+                name: w.name,
+                groupId: w.groupId,
+                userId: w.userId
+            }));
+
+            const insertedWallets = await this.db.addWalletsBatchOptimized(dbWallets);
+            results.addedWallets = insertedWallets;
+
+            console.log(`[${new Date().toISOString()}] ✅ Database insertion completed: ${insertedWallets.length} wallets added`);
+
+            // 2. Подписываемся на WebSocket (только для кошельков в активной области)
+            const relevantWallets = insertedWallets.filter(wallet => 
+                (!this.activeGroupId || wallet.group_id === this.activeGroupId) &&
+                (!this.activeUserId || wallet.user_id === this.activeUserId)
+            );
+
+            if (relevantWallets.length > 0 && this.ws && this.ws.readyState === WS_READY_STATE_OPEN) {
+                console.log(`[${new Date().toISOString()}] 🔗 Starting WebSocket subscriptions for ${relevantWallets.length} relevant wallets...`);
+                
+                const walletAddresses = relevantWallets.map(w => w.address);
+                results.subscriptionResults = await this.subscribeToWalletsBatch(walletAddresses, 200);
+                
+                console.log(`[${new Date().toISOString()}] ✅ WebSocket subscriptions completed: ${results.subscriptionResults.successful} successful`);
+            } else {
+                console.log(`[${new Date().toISOString()}] ⏭️ Skipping WebSocket subscriptions (${relevantWallets.length} relevant wallets, WS connected: ${this.ws?.readyState === WS_READY_STATE_OPEN})`);
+            }
+
+            const duration = Date.now() - startTime;
+            const walletsPerSecond = Math.round((insertedWallets.length / duration) * 1000);
+
+            console.log(`[${new Date().toISOString()}] 🎉 Optimized batch wallet addition completed in ${duration}ms:`);
+            console.log(`  - Total processed: ${wallets.length}`);
+            console.log(`  - Database insertions: ${insertedWallets.length}`);
+            console.log(`  - WebSocket subscriptions: ${results.subscriptionResults?.successful || 0}`);
+            console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
+            console.log(`  - Total active subscriptions: ${this.subscriptions.size}`);
+
+            return results;
+
+        } catch (error) {
+            const duration = Date.now() - startTime;
+            console.error(`[${new Date().toISOString()}] ❌ Optimized batch wallet addition failed after ${duration}ms:`, error.message);
+            throw error;
         }
     }
 
@@ -270,31 +478,84 @@ class SolanaWebSocketService {
 
     async removeAllWallets(groupId = null, userId = null) {
         try {
-            if ((!groupId || groupId === this.activeGroupId) && (!userId || userId === this.activeUserId)) {
-                for (const walletAddress of this.subscriptions.keys()) {
-                    await this.unsubscribeFromWallet(walletAddress);
-                }
-                this.subscriptions.clear();
+            console.log(`[${new Date().toISOString()}] 🗑️ Starting optimized removal of all wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
+            
+            // Сначала получаем список кошельков для отписки
+            const walletsToRemove = await this.db.getActiveWallets(groupId, userId);
+            const addressesToUnsubscribe = walletsToRemove.map(w => w.address);
+
+            // Отписываемся от WebSocket batch операцией
+            if (addressesToUnsubscribe.length > 0) {
+                await this.unsubscribeFromWalletsBatch(addressesToUnsubscribe);
             }
+
+            // Удаляем из базы данных
             await this.monitoringService.removeAllWallets(groupId, userId);
+
+            // Если это текущая активная группа/пользователь, переподписываемся
             if ((groupId && groupId === this.activeGroupId) || (userId && userId === this.activeUserId)) {
+                console.log(`[${new Date().toISOString()}] 🔄 Resubscribing after removal...`);
                 await this.subscribeToWallets();
             }
+
+            console.log(`[${new Date().toISOString()}] ✅ Optimized removal completed: ${addressesToUnsubscribe.length} wallets removed`);
+
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from WebSocket service:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error in optimized removeAllWallets:`, error.message);
             throw error;
         }
     }
 
     async switchGroup(groupId, userId = null) {
         try {
-            await this.stop();
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            await this.start(groupId, userId);
+            console.log(`[${new Date().toISOString()}] 🔄 Starting optimized group switch to ${groupId || 'all'} for user ${userId}`);
+            const startTime = Date.now();
+
+            // Отписываемся от всех текущих подписок batch операцией
+            if (this.subscriptions.size > 0) {
+                const currentAddresses = Array.from(this.subscriptions.keys());
+                console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${currentAddresses.length} current wallets...`);
+                await this.unsubscribeFromWalletsBatch(currentAddresses);
+            }
+
+            // Обновляем активные параметры
+            this.activeGroupId = groupId;
+            this.activeUserId = userId;
+
+            // Подписываемся на новую группу
+            console.log(`[${new Date().toISOString()}] 📥 Subscribing to new group/user scope...`);
+            await this.subscribeToWallets();
+
+            const duration = Date.now() - startTime;
+            console.log(`[${new Date().toISOString()}] ✅ Optimized group switch completed in ${duration}ms to ${groupId || 'all'} (${this.subscriptions.size} active subscriptions)`);
+
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error in optimized switchGroup:`, error.message);
             throw error;
         }
+    }
+
+    getDetailedStatus() {
+        const baseStatus = this.getStatus();
+        
+        return {
+            ...baseStatus,
+            performance: {
+                subscriptionsPerSecond: this.subscriptions.size > 0 ? Math.round(this.subscriptions.size / ((Date.now() - this.startTime) / 1000)) : 0,
+                messagesPerSecond: this.messageCount > 0 ? Math.round(this.messageCount / ((Date.now() - this.startTime) / 1000)) : 0,
+                averageLatency: this.averageLatency || 0
+            },
+            limits: {
+                maxSubscriptions: this.maxSubscriptions,
+                currentSubscriptions: this.subscriptions.size,
+                utilizationPercent: Math.round((this.subscriptions.size / this.maxSubscriptions) * 100)
+            },
+            scope: {
+                activeUserId: this.activeUserId,
+                activeGroupId: this.activeGroupId,
+                filterActive: Boolean(this.activeUserId || this.activeGroupId)
+            }
+        };
     }
 
     sendRequest(method, params, type) {
