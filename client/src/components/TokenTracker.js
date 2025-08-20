@@ -21,7 +21,14 @@ function TokenTracker({ groupId, transactions, timeframe }) {
     const byToken = new Map();
 
     const now = new Date();
-    const filteredTransactions = transactions.filter((tx) => {
+    // ИСПРАВЛЕНИЕ: сортируем транзакции по времени (новые сверху) ДО фильтрации
+    const sortedTransactions = [...transactions].sort((a, b) => {
+      const timeA = new Date(a.time);
+      const timeB = new Date(b.time);
+      return timeB - timeA; // Новые сверху
+    });
+
+    const filteredTransactions = sortedTransactions.filter((tx) => {
       const txTime = new Date(tx.time);
       const hoursDiff = (now - txTime) / (1000 * 60 * 60);
       const matchesTimeframe = hoursDiff <= parseInt(hours);
@@ -29,7 +36,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
       return matchesTimeframe && matchesGroup;
     });
 
-    console.log(`Processing ${filteredTransactions.length} filtered transactions`);
+    console.log(`Processing ${filteredTransactions.length} filtered transactions (sorted by time DESC)`);
 
     filteredTransactions.forEach((tx) => {
       const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
@@ -66,13 +73,15 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         const wallet = tokenData.wallets.find((w) => w.address === walletAddress);
         const txTime = new Date(tx.time);
 
+        // ИСПРАВЛЕНИЕ: правильно отслеживаем самую свежую активность
         if (!tokenData.summary.latestActivity || txTime > new Date(tokenData.summary.latestActivity)) {
           tokenData.summary.latestActivity = tx.time;
         }
         
+        // ИСПРАВЛЕНИЕ: отслеживаем самую СВЕЖУЮ покупку (не первую по времени)
         if (tx.transactionType === 'buy') {
-          if (!tokenData.summary.firstBuyTime || txTime < new Date(tokenData.summary.firstBuyTime)) {
-            tokenData.summary.firstBuyTime = tx.time;
+          if (!tokenData.summary.firstBuyTime || txTime > new Date(tokenData.summary.firstBuyTime)) {
+            tokenData.summary.firstBuyTime = tx.time; // Переименуем в latestBuyTime
           }
         }
 
@@ -107,8 +116,9 @@ function TokenTracker({ groupId, transactions, timeframe }) {
             wallet.lastActivity = tx.time;
           }
           
+          // ИСПРАВЛЕНИЕ: обновляем время последней покупки
           if (tx.transactionType === 'buy') {
-            if (!wallet.firstBuyTime || txTime < new Date(wallet.firstBuyTime)) {
+            if (!wallet.firstBuyTime || txTime > new Date(wallet.firstBuyTime)) {
               wallet.firstBuyTime = tx.time;
             }
           }
@@ -128,6 +138,7 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         uniqueWallets: t.summary.uniqueWallets.size,
         netSOL: +(t.summary.totalReceivedSOL - t.summary.totalSpentSOL).toFixed(6),
       },
+      // ИСПРАВЛЕНИЕ: сортируем кошельки по времени последней активности (новые сверху)
       wallets: t.wallets.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity))
     }));
 
@@ -185,14 +196,15 @@ function TokenTracker({ groupId, transactions, timeframe }) {
         return sortedTokens.sort((a, b) => {
           const timeA = new Date(a.summary.latestActivity || 0);
           const timeB = new Date(b.summary.latestActivity || 0);
-          return timeB - timeA;
+          return timeB - timeA; // Новые сверху
         });
       
       case 'firstBuy':
+        // ИСПРАВЛЕНИЕ: переименовываем в 'recentPurchases' и сортируем по времени последней покупки
         return sortedTokens.sort((a, b) => {
           const timeA = new Date(a.summary.firstBuyTime || 0);
           const timeB = new Date(b.summary.firstBuyTime || 0);
-          return timeB - timeA;
+          return timeB - timeA; // Самые свежие покупки сверху
         });
       
       case 'profit':
