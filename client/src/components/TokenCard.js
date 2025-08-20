@@ -9,6 +9,15 @@ function TokenCard({ token, onOpenChart }) {
     const [groupPnL, setGroupPnL] = useState(null);
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
+    // Helper function to get auth headers
+    const getAuthHeaders = () => {
+        const sessionToken = localStorage.getItem('sessionToken');
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+        };
+    };
+
     const fetchTokenPrice = async () => {
         if (!token.mint || loadingPrice) return;
         setLoadingPrice(true);
@@ -39,7 +48,9 @@ function TokenCard({ token, onOpenChart }) {
         if (loadingSolPrice) return;
         setLoadingSolPrice(true);
         try {
-            const response = await fetch('/api/solana/price');
+            const response = await fetch('/api/solana/price', {
+                headers: getAuthHeaders()
+            });
             const data = await response.json();
             if (data.success) {
                 setSolPrice(data.price);
@@ -159,7 +170,7 @@ function TokenCard({ token, onOpenChart }) {
             console.warn('No mint address available for chart');
             return;
         }
-        const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(mintAddress)}`;
+        const gmgnUrl = `https://gmgn.ai/sol/token/${encodeURIComponent(token.mint)}`;
         window.open(gmgnUrl, '_blank');
     };
 
