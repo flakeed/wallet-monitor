@@ -1,7 +1,7 @@
-const WebSocket = require('ws');
-const { Connection, PublicKey } = require('@solana/web3.js');
-const WalletMonitoringService = require('./monitoringService');
-const Database = require('../database/connection');
+import WebSocket from 'ws';
+import { Connection, PublicKey } from '@solana/web3.js';
+import WalletMonitoringService from './monitoringService.js';
+import Database from '../database/connection.js';
 
 const WS_READY_STATE_CONNECTING = 0;
 const WS_READY_STATE_OPEN = 1;
