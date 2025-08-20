@@ -140,81 +140,60 @@ class Database {
         if (!wallets || wallets.length === 0) {
             throw new Error('Wallets array is required');
         }
-
+    
         const maxBatchSize = 1000;
         if (wallets.length > maxBatchSize) {
             throw new Error(`Batch size too large. Maximum ${maxBatchSize} wallets per batch.`);
         }
-
+    
         console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert of ${wallets.length} wallets`);
         const startTime = Date.now();
-
+    
         // Проверяем, что все кошельки имеют userId
         const walletsWithUser = wallets.filter(w => w.userId);
         if (walletsWithUser.length !== wallets.length) {
             throw new Error('All wallets must have userId specified');
         }
-
+    
         try {
-            // Используем COPY для максимальной скорости вставки
             const client = await this.pool.connect();
             
             try {
                 await client.query('BEGIN');
-
-                // Создаем временную таблицу для COPY операции
-                await client.query(`
-                    CREATE TEMP TABLE temp_wallets_batch (
-                        address VARCHAR(44) NOT NULL,
-                        name VARCHAR(255),
-                        group_id UUID,
-                        user_id UUID NOT NULL
-                    )
-                `);
-
-                // Подготавливаем данные для COPY
-                const copyData = wallets.map(wallet => 
-                    `${wallet.address}\t${wallet.name || '\\N'}\t${wallet.groupId || '\\N'}\t${wallet.userId}`
-                ).join('\n');
-
-                console.log(`[${new Date().toISOString()}] ⚡ Executing COPY operation for ${wallets.length} wallets...`);
+    
+                // Создаем строку для bulk INSERT с VALUES
+                console.log(`[${new Date().toISOString()}] ⚡ Executing optimized bulk INSERT for ${wallets.length} wallets...`);
                 
-                // Используем COPY FROM STDIN для максимальной производительности
-                const copyQuery = `
-                    COPY temp_wallets_batch (address, name, group_id, user_id) 
-                    FROM STDIN WITH (FORMAT text, DELIMITER E'\\t', NULL '\\N')
-                `;
+                // Подготавливаем данные для bulk insert
+                const values = [];
+                const placeholders = [];
                 
-                const copyStream = client.query(copyFrom(copyQuery));
-                copyStream.write(copyData);
-                copyStream.end();
-
-                await new Promise((resolve, reject) => {
-                    copyStream.on('end', resolve);
-                    copyStream.on('error', reject);
-                });
-
-                console.log(`[${new Date().toISOString()}] ✅ COPY operation completed`);
-
-                // Выполняем быструю вставку с игнорированием дубликатов
-                const insertResult = await client.query(`
+                for (let i = 0; i < wallets.length; i++) {
+                    const wallet = wallets[i];
+                    const baseIndex = i * 4;
+                    
+                    values.push(
+                        wallet.address,
+                        wallet.name || null,
+                        wallet.groupId || null,
+                        wallet.userId
+                    );
+                    
+                    placeholders.push(`($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4})`);
+                }
+    
+                // Выполняем bulk insert с ON CONFLICT для обработки дубликатов
+                const insertQuery = `
                     INSERT INTO wallets (address, name, group_id, user_id, created_at, updated_at, is_active)
-                    SELECT DISTINCT 
-                        t.address, 
-                        t.name, 
-                        t.group_id, 
-                        t.user_id,
-                        NOW(),
-                        NOW(),
-                        true
-                    FROM temp_wallets_batch t
-                    LEFT JOIN wallets w ON w.address = t.address AND w.user_id = t.user_id
-                    WHERE w.address IS NULL
+                    VALUES ${placeholders.join(', ')}
+                    ON CONFLICT (address, user_id) DO NOTHING
                     RETURNING id, address, name, group_id, user_id, created_at
-                `);
-
+                `;
+    
+                const insertResult = await client.query(insertQuery, values);
+    
                 await client.query('COMMIT');
-
+    
                 const insertTime = Date.now() - startTime;
                 const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
                 
@@ -223,16 +202,16 @@ class Database {
                 console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
                 console.log(`  - Duplicates: ${wallets.length - insertResult.rows.length} wallets`);
                 console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
-
+    
                 return insertResult.rows;
-
+    
             } catch (error) {
                 await client.query('ROLLBACK');
                 throw error;
             } finally {
                 client.release();
             }
-
+    
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Optimized batch insert failed:`, error.message);
             throw new Error(`Optimized batch insert failed: ${error.message}`);
