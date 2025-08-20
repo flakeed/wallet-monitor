@@ -616,28 +616,33 @@ async analyzeTokenChanges(meta, transactionType, walletAddress) {
         }
     }
 
-    async addWallet(address, name = null, groupId = null) {
+    async addWallet(address, name = null, groupId = null, userId = null) {
         try {
             new PublicKey(address);
-            const wallet = await this.db.addWallet(address, name, groupId);
-            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}... to group ${groupId || 'none'}`);
+            const wallet = await this.db.addWallet(address, name, groupId, userId);
+            console.log(`[${new Date().toISOString()}] ✅ Added wallet: ${name || address.slice(0, 8)}... to group ${groupId || 'none'} for user ${userId}`);
             return wallet;
         } catch (error) {
             throw new Error(`Failed to add wallet: ${error.message}`);
         }
     }
 
-    async removeWallet(address) {
+    async removeWallet(address, userId = null) {
         try {
             const wallet = await this.db.getWalletByAddress(address);
             if (wallet) {
+                // Check if wallet belongs to user (if userId provided)
+                if (userId && wallet.user_id !== userId) {
+                    throw new Error('Access denied: Wallet does not belong to user');
+                }
+                
                 const transactions = await this.db.getRecentTransactions(24 * 7);
                 const walletSignatures = transactions
                     .filter((tx) => tx.wallet_address === address)
                     .map((tx) => tx.signature);
                 walletSignatures.forEach((sig) => this.processedSignatures.delete(sig));
                 await this.db.removeWallet(address);
-                console.log(`[${new Date().toISOString()}] 🗑️ Removed wallet: ${address.slice(0, 8)}...`);
+                console.log(`[${new Date().toISOString()}] 🗑️ Removed wallet: ${address.slice(0, 8)}... for user ${userId || 'system'}`);
             } else {
                 throw new Error('Wallet not found');
             }
@@ -646,18 +651,52 @@ async analyzeTokenChanges(meta, transactionType, walletAddress) {
         }
     }
 
-    async removeAllWallets(groupId = null) {
+    async removeAllWallets(groupId = null, userId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallets from monitoring service${groupId ? ` for group ${groupId}` : ''}`);
-            const transactions = await this.db.getRecentTransactions(24 * 7, 400, null, groupId);
-            const allSignatures = transactions.map((tx) => tx.signature);
+            console.log(`[${new Date().toISOString()}] 🗑️ Removing all wallets from monitoring service${groupId ? ` for group ${groupId}` : ''}${userId ? ` for user ${userId}` : ''}`);
+            
+            // Build query based on parameters
+            let query = `SELECT signature FROM transactions t JOIN wallets w ON t.wallet_id = w.id WHERE 1=1`;
+            const params = [];
+            let paramIndex = 1;
+            
+            if (userId) {
+                query += ` AND w.user_id = $${paramIndex++}`;
+                params.push(userId);
+            }
+            
+            if (groupId) {
+                query += ` AND w.group_id = $${paramIndex}`;
+                params.push(groupId);
+            }
+            
+            const transactions = await this.db.pool.query(query, params);
+            const allSignatures = transactions.rows.map((tx) => tx.signature);
             allSignatures.forEach((sig) => this.processedSignatures.delete(sig));
-            if (!groupId) {
+            
+            if (!groupId && !userId) {
                 this.processedSignatures.clear();
                 this.recentlyProcessed.clear();
             }
-            await this.db.removeAllWallets(groupId);
-            console.log(`[${new Date().toISOString()}] ✅ All wallets removed from monitoring service${groupId ? ` for group ${groupId}` : ''}`);
+            
+            // Remove wallets with user/group filter
+            let deleteQuery = `DELETE FROM wallets WHERE 1=1`;
+            const deleteParams = [];
+            let deleteParamIndex = 1;
+            
+            if (userId) {
+                deleteQuery += ` AND user_id = $${deleteParamIndex++}`;
+                deleteParams.push(userId);
+            }
+            
+            if (groupId) {
+                deleteQuery += ` AND group_id = $${deleteParamIndex}`;
+                deleteParams.push(groupId);
+            }
+            
+            const result = await this.db.pool.query(deleteQuery, deleteParams);
+            
+            console.log(`[${new Date().toISOString()}] ✅ All wallets removed from monitoring service${groupId ? ` for group ${groupId}` : ''}${userId ? ` for user ${userId}` : ''} (${result.rowCount} wallets)`);
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets from monitoring service:`, error.message);
             throw error;

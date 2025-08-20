@@ -6,10 +6,19 @@ import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
+import TelegramLogin from './components/TelegramLogin';
+import AdminPanel from './components/AdminPanel';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
+const TELEGRAM_BOT_USERNAME = process.env.REACT_APP_TELEGRAM_BOT_USERNAME || 'your_bot_username';
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  
+  // Existing state
   const [wallets, setWallets] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
@@ -22,14 +31,75 @@ function App() {
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
 
+  // Check authentication on app load
+  useEffect(() => {
+    checkAuthentication();
+  }, []);
+
+  const checkAuthentication = async () => {
+    const sessionToken = localStorage.getItem('sessionToken');
+    const savedUser = localStorage.getItem('user');
+
+    if (!sessionToken || !savedUser) {
+      setIsCheckingAuth(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/auth/validate`, {
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`
+        }
+      });
+
+      if (response.ok) {
+        const userData = JSON.parse(savedUser);
+        setUser(userData);
+        setIsAuthenticated(true);
+      } else {
+        // Invalid session, clear local storage
+        localStorage.removeItem('sessionToken');
+        localStorage.removeItem('user');
+      }
+    } catch (error) {
+      console.error('Auth check error:', error);
+      localStorage.removeItem('sessionToken');
+      localStorage.removeItem('user');
+    } finally {
+      setIsCheckingAuth(false);
+    }
+  };
+
+  const handleLogin = (authData) => {
+    setUser(authData.user);
+    setIsAuthenticated(true);
+    setLoading(true);
+    fetchData();
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('sessionToken');
+    localStorage.removeItem('user');
+    setUser(null);
+    setIsAuthenticated(false);
+    setShowAdminPanel(false);
+  };
+
+  // Helper function to get auth headers
+  const getAuthHeaders = () => {
+    const sessionToken = localStorage.getItem('sessionToken');
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${sessionToken}`
+    };
+  };
+
   const removeAllWallets = async () => {
     try {
       const url = selectedGroup ? `${API_BASE}/wallets?groupId=${selectedGroup}` : `${API_BASE}/wallets`;
       const response = await fetch(url, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -49,15 +119,16 @@ function App() {
       setError(null);
       console.log(`🔍 Fetching data: hours=${hours}, type=${type}, groupId=${groupId}`);
 
+      const headers = getAuthHeaders();
       const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
       const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
       const groupsUrl = `${API_BASE}/groups`;
 
       const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
-        fetch(walletsUrl),
-        fetch(transactionsUrl),
-        fetch(`${API_BASE}/monitoring/status${groupId ? `?groupId=${groupId}` : ''}`),
-        fetch(groupsUrl),
+        fetch(walletsUrl, { headers }),
+        fetch(transactionsUrl, { headers }),
+        fetch(`${API_BASE}/monitoring/status${groupId ? `?groupId=${groupId}` : ''}`, { headers }),
+        fetch(groupsUrl, { headers }),
       ]);
 
       if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
@@ -84,8 +155,12 @@ function App() {
   };
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     const sseUrl = `${API_BASE}/transactions/stream${selectedGroup ? `?groupId=${selectedGroup}` : ''}`;
-    const eventSource = new EventSource(sseUrl);
+    const eventSource = new EventSource(sseUrl, {
+      headers: getAuthHeaders()
+    });
 
     eventSource.onmessage = (event) => {
       try {
@@ -142,7 +217,7 @@ function App() {
       eventSource.close();
       console.log('SSE connection closed');
     };
-  }, [timeframe, transactionType, wallets, selectedGroup]);
+  }, [timeframe, transactionType, wallets, selectedGroup, isAuthenticated]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
@@ -164,7 +239,7 @@ function App() {
     try {
       await fetch(`${API_BASE}/groups/switch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ groupId: selectedGroupId }),
       });
       fetchData(timeframe, transactionType, selectedGroupId);
@@ -189,9 +264,7 @@ function App() {
 
         const response = await fetch('/api/wallets/bulk', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: getAuthHeaders(),
           body: JSON.stringify({
             wallets: chunk,
             groupId
@@ -364,6 +437,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/wallets/${address}`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
 
       const data = await response.json();
@@ -383,7 +457,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/groups`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ name }),
       });
 
@@ -404,7 +478,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE}/monitoring/toggle`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ action, groupId: selectedGroup }),
       });
 
@@ -421,10 +495,13 @@ function App() {
   };
 
   useEffect(() => {
-    fetchData();
-  }, [refreshKey]);
+    if (isAuthenticated) {
+      fetchData();
+    }
+  }, [refreshKey, isAuthenticated]);
 
-  if (loading) {
+  // Show loading while checking authentication
+  if (isCheckingAuth) {
     return (
       <div className="min-h-screen bg-gray-50 py-8 px-4">
         <div className="max-w-6xl mx-auto">
@@ -435,10 +512,26 @@ function App() {
     );
   }
 
+  // Show login if not authenticated
+  if (!isAuthenticated) {
+    return <TelegramLogin onLogin={handleLogin} botUsername={TELEGRAM_BOT_USERNAME} />;
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-8 px-4">
+        <div className="max-w-6xl mx-auto">
+          <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+          <LoadingSpinner />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
       <div className="max-w-6xl mx-auto">
-        <Header />
+        <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
         {error && <ErrorMessage error={error} />}
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
@@ -488,6 +581,10 @@ function App() {
           </div>
         </div>
       </div>
+
+      {showAdminPanel && user?.isAdmin && (
+        <AdminPanel user={user} onClose={() => setShowAdminPanel(false)} />
+      )}
     </div>
   );
 }

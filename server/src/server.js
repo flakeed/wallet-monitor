@@ -6,6 +6,7 @@ const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
+const AuthMiddleware = require('./middleware/authMiddleware');
 
 const app = express();
 const port = process.env.PORT || 5001;
@@ -16,6 +17,7 @@ const fs = require('fs');
 const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
+const auth = new AuthMiddleware(db);
 
 const sseClients = new Set();
 
@@ -48,7 +50,6 @@ app.use(
     optionsSuccessStatus: 200,
   })
 );
-app.use(express.json());
 
 app.use((req, res, next) => {
   req.setTimeout(300000); 
@@ -56,46 +57,307 @@ app.use((req, res, next) => {
   next();
 });
 
-const startWebSocketService = async () => {
-  let retries = 0;
-  const maxRetries = 5;
-  const retryDelay = 5000;
-
-  while (retries < maxRetries) {
-    try {
-      await solanaWebSocketService.start();
-      console.log(`[${new Date().toISOString()}] 🚀 Solana WebSocket service started successfully`);
-      return;
-    } catch (error) {
-      retries++;
-      console.error(
-        `[${new Date().toISOString()}] ❌ Failed to start Solana WebSocket service (attempt ${retries}/${maxRetries}):`,
-        error.message
-      );
-      if (retries < maxRetries) {
-        console.log(`[${new Date().toISOString()}] ⏳ Retrying in ${retryDelay / 1000} seconds...`);
-        await new Promise((resolve) => setTimeout(resolve, retryDelay));
-      }
+// Authentication routes
+app.post('/api/auth/telegram', async (req, res) => {
+  try {
+    const telegramData = req.body;
+    
+    // Verify Telegram auth data
+    auth.verifyTelegramAuth(telegramData);
+    
+    // Check if user is whitelisted
+    const isWhitelisted = await auth.isUserWhitelisted(telegramData.id);
+    if (!isWhitelisted) {
+      return res.status(403).json({ 
+        error: 'Access denied. You are not in the whitelist. Please contact an administrator.' 
+      });
     }
+    
+    // Create or update user
+    const user = await auth.createOrUpdateUser(telegramData);
+    
+    if (!user.is_active) {
+      return res.status(403).json({ 
+        error: 'Your account has been deactivated. Please contact an administrator.' 
+      });
+    }
+    
+    // Create session
+    const session = await auth.createUserSession(user.id);
+    
+    console.log(`[${new Date().toISOString()}] ✅ User authenticated: ${user.username || user.first_name} (${user.telegram_id})`);
+    
+    res.json({
+      success: true,
+      sessionToken: session.session_token,
+      expiresAt: session.expires_at,
+      user: {
+        id: user.id,
+        telegramId: user.telegram_id,
+        username: user.username,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        isAdmin: user.is_admin,
+        isActive: user.is_active
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Auth error:`, error.message);
+    res.status(401).json({ error: error.message });
   }
-  console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
-};
-
-setTimeout(startWebSocketService, 2000);
-
-app.use('/api/wallets/bulk', (req, res, next) => {
-  console.log(`[${new Date().toISOString()}] 📥 Bulk import request received`);
-  console.log(`- Content-Length: ${req.get('Content-Length')}`);
-  console.log(`- Content-Type: ${req.get('Content-Type')}`);
-  
-  req.setTimeout(1200000); 
-  res.setTimeout(1200000); 
-  
-  next();
 });
 
-app.get('/api/transactions/stream', (req, res) => {
+app.get('/api/auth/validate', auth.authRequired, (req, res) => {
+  res.json({
+    success: true,
+    user: req.user
+  });
+});
+
+app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const sessionToken = authHeader.substring(7);
+    await auth.revokeSession(sessionToken);
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Logout error:`, error.message);
+    res.status(500).json({ error: 'Failed to logout' });
+  }
+});
+
+// Admin routes
+app.get('/api/admin/whitelist', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const whitelist = await auth.getWhitelist();
+    res.json(whitelist);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching whitelist:`, error);
+    res.status(500).json({ error: 'Failed to fetch whitelist' });
+  }
+});
+
+app.post('/api/admin/whitelist', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const { telegramId, notes } = req.body;
+    
+    if (!telegramId) {
+      return res.status(400).json({ error: 'Telegram ID is required' });
+    }
+    
+    const result = await auth.addToWhitelist(telegramId, req.user.id, notes);
+    res.json({ success: true, message: 'User added to whitelist', result });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error adding to whitelist:`, error);
+    res.status(500).json({ error: 'Failed to add user to whitelist' });
+  }
+});
+
+app.delete('/api/admin/whitelist/:telegramId', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const { telegramId } = req.params;
+    await auth.removeFromWhitelist(telegramId);
+    res.json({ success: true, message: 'User removed from whitelist' });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error removing from whitelist:`, error);
+    res.status(500).json({ error: 'Failed to remove user from whitelist' });
+  }
+});
+
+app.get('/api/admin/users', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const query = `
+      SELECT id, telegram_id, username, first_name, last_name, 
+             is_active, is_admin, created_at, last_login
+      FROM users 
+      ORDER BY created_at DESC
+    `;
+    const result = await db.pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching users:`, error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+app.patch('/api/admin/users/:userId/status', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { isActive } = req.body;
+    
+    const query = `
+      UPDATE users 
+      SET is_active = $1, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $2 
+      RETURNING *
+    `;
+    const result = await db.pool.query(query, [isActive, userId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({ success: true, message: 'User status updated', user: result.rows[0] });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error updating user status:`, error);
+    res.status(500).json({ error: 'Failed to update user status' });
+  }
+});
+
+app.patch('/api/admin/users/:userId/admin', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { isAdmin } = req.body;
+    
+    // Prevent removing admin from yourself
+    if (userId === req.user.id && !isAdmin) {
+      return res.status(400).json({ error: 'You cannot remove admin privileges from yourself' });
+    }
+    
+    const query = `
+      UPDATE users 
+      SET is_admin = $1, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $2 
+      RETURNING *
+    `;
+    const result = await db.pool.query(query, [isAdmin, userId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({ success: true, message: 'Admin status updated', user: result.rows[0] });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error updating admin status:`, error);
+    res.status(500).json({ error: 'Failed to update admin status' });
+  }
+});
+
+app.get('/api/admin/stats', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        (SELECT COUNT(*) FROM users) as total_users,
+        (SELECT COUNT(*) FROM users WHERE is_active = true) as active_users,
+        (SELECT COUNT(*) FROM wallets) as total_wallets,
+        (SELECT COUNT(*) FROM transactions) as total_transactions,
+        (SELECT COUNT(*) FROM groups) as total_groups,
+        (SELECT COUNT(*) FROM whitelist) as whitelist_size,
+        (SELECT COALESCE(SUM(sol_spent), 0) FROM transactions) as total_sol_spent,
+        (SELECT COALESCE(SUM(sol_received), 0) FROM transactions) as total_sol_received
+    `;
+    const result = await db.pool.query(query);
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching admin stats:`, error);
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+});
+
+// Update existing database methods to include user_id
+const originalAddWallet = db.addWallet.bind(db);
+db.addWallet = async function(address, name = null, groupId = null, userId = null) {
+  const query = `
+    INSERT INTO wallets (address, name, group_id, user_id) 
+    VALUES ($1, $2, $3, $4) 
+    RETURNING id, address, name, group_id, user_id, created_at
+  `;
+  try {
+    const result = await this.pool.query(query, [address, name, groupId, userId]);
+    return result.rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      throw new Error('Wallet already exists for this user');
+    }
+    throw error;
+  }
+};
+
+const originalGetActiveWallets = db.getActiveWallets.bind(db);
+db.getActiveWallets = async function(groupId = null, userId = null) {
+  let query = `
+    SELECT w.*, g.name as group_name
+    FROM wallets w
+    LEFT JOIN groups g ON w.group_id = g.id
+    WHERE w.is_active = TRUE
+  `;
+  const params = [];
+  let paramIndex = 1;
+  
+  if (userId) {
+    query += ` AND w.user_id = $${paramIndex++}`;
+    params.push(userId);
+  }
+  
+  if (groupId) {
+    query += ` AND w.group_id = $${paramIndex}`;
+    params.push(groupId);
+  }
+  
+  query += ` ORDER BY w.created_at DESC`;
+  const result = await this.pool.query(query, params);
+  return result.rows;
+};
+
+const originalAddGroup = db.addGroup.bind(db);
+db.addGroup = async function(name, userId = null) {
+  const query = `
+    INSERT INTO groups (name, user_id)
+    VALUES ($1, $2)
+    RETURNING id, name, user_id, created_at
+  `;
+  try {
+    const result = await this.pool.query(query, [name, userId]);
+    return result.rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      throw new Error('Group name already exists for this user');
+    }
+    throw error;
+  }
+};
+
+const originalGetGroups = db.getGroups.bind(db);
+db.getGroups = async function(userId = null) {
+  let query = `
+    SELECT g.id, g.name, COUNT(w.id) as wallet_count
+    FROM groups g
+    LEFT JOIN wallets w ON g.id = w.group_id AND w.is_active = true
+  `;
+  const params = [];
+  
+  if (userId) {
+    query += ` WHERE g.user_id = $1`;
+    params.push(userId);
+  }
+  
+  query += ` GROUP BY g.id, g.name ORDER BY g.created_at`;
+  const result = await this.pool.query(query, params);
+  return result.rows;
+};
+
+// Update monitoring service to include user context
+const originalAddWalletMonitoring = solanaWebSocketService.addWallet.bind(solanaWebSocketService);
+solanaWebSocketService.addWallet = async function(walletAddress, name = null, groupId = null, userId = null) {
+  try {
+    if (this.subscriptions.size >= this.maxSubscriptions) {
+      throw new Error(`Cannot add wallet: Maximum limit of ${this.maxSubscriptions} wallets reached`);
+    }
+    const wallet = await this.monitoringService.addWallet(walletAddress, name, groupId, userId);
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && (!this.activeGroupId || wallet.group_id === this.activeGroupId)) {
+      await this.subscribeToWallet(walletAddress);
+    }
+    return wallet;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error adding wallet ${walletAddress}:`, error.message);
+    throw error;
+  }
+};
+
+// Protected routes - all existing routes now require authentication
+app.get('/api/transactions/stream', auth.authRequired, (req, res) => {
   const groupId = req.query.groupId || null;
+  const userId = req.user.id;
   
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -110,7 +372,7 @@ app.get('/api/transactions/stream', (req, res) => {
       res.status(500).end();
       return;
     }
-    console.log(`[${new Date().toISOString()}] ✅ New SSE client connected${groupId ? ` for group ${groupId}` : ''}`);
+    console.log(`[${new Date().toISOString()}] ✅ New SSE client connected for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
     sseClients.add(res);
   });
 
@@ -119,12 +381,12 @@ app.get('/api/transactions/stream', (req, res) => {
       try {
         const transaction = JSON.parse(message);
         
+        // Filter by user's groups and wallets
         if (groupId !== null && transaction.groupId !== groupId) {
-          console.log(`[${new Date().toISOString()}] 🔍 Filtering out transaction for group ${transaction.groupId} (client wants ${groupId})`);
           return;
         }
         
-        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for group ${transaction.groupId}:`, message.substring(0, 100) + '...');
+        console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}:`, message.substring(0, 100) + '...');
         res.write(`data: ${message}\n\n`);
       } catch (error) {
         console.error(`[${new Date().toISOString()}] ❌ Error parsing SSE message:`, error.message);
@@ -134,7 +396,7 @@ app.get('/api/transactions/stream', (req, res) => {
   });
 
   req.on('close', () => {
-    console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected`);
+    console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected for user ${userId}`);
     subscriber.unsubscribe();
     subscriber.quit();
     sseClients.delete(res);
@@ -150,10 +412,11 @@ app.get('/api/transactions/stream', (req, res) => {
   }, 30000);
 });
 
-app.get('/api/wallets', async (req, res) => {
+app.get('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const wallets = await db.getActiveWallets(groupId);
+    const userId = req.user.id;
+    const wallets = await db.getActiveWallets(groupId, userId);
     const walletsWithStats = await Promise.all(
       wallets.map(async (wallet) => {
         const stats = await db.getWalletStats(wallet.id);
@@ -178,12 +441,19 @@ app.get('/api/wallets', async (req, res) => {
   }
 });
 
-app.delete('/api/wallets/:address', async (req, res) => {
+app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
   try {
     const address = req.params.address.trim();
+    const userId = req.user.id;
 
     if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+    }
+
+    // Check if wallet belongs to user
+    const wallet = await db.getWalletByAddress(address);
+    if (!wallet || wallet.user_id !== userId) {
+      return res.status(404).json({ error: 'Wallet not found or access denied' });
     }
 
     await solanaWebSocketService.removeWallet(address);
@@ -201,15 +471,23 @@ app.delete('/api/wallets/:address', async (req, res) => {
   }
 });
 
-app.delete('/api/wallets', async (req, res) => {
+app.delete('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    await solanaWebSocketService.removeAllWallets(groupId);
-    const result = await db.removeAllWallets(groupId);
+    const userId = req.user.id;
+    
+    // Remove only user's wallets
+    const query = groupId 
+      ? `DELETE FROM wallets WHERE user_id = $1 AND group_id = $2`
+      : `DELETE FROM wallets WHERE user_id = $1`;
+    const params = groupId ? [userId, groupId] : [userId];
+    
+    const result = await db.pool.query(query, params);
+    
     res.json({
       success: true,
       message: `Successfully removed wallets and associated data${groupId ? ` for group ${groupId}` : ''}`,
-      deletedCount: result.deletedCount,
+      deletedCount: result.rowCount,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
@@ -217,17 +495,60 @@ app.delete('/api/wallets', async (req, res) => {
   }
 });
 
-app.get('/api/transactions', async (req, res) => {
+app.get('/api/transactions', auth.authRequired, async (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
     const groupId = req.query.groupId || null;
+    const userId = req.user.id;
 
-    const transactions = await db.getRecentTransactions(hours, limit, type, groupId);
+    // Modified query to include user_id filter
+    let query = `
+      SELECT 
+        t.signature,
+        t.block_time,
+        t.transaction_type,
+        t.sol_spent,
+        t.sol_received,
+        w.address as wallet_address,
+        w.name as wallet_name,
+        w.group_id,
+        g.name as group_name,
+        tk.mint,
+        tk.symbol,
+        tk.name as token_name,
+        to_.amount as token_amount,
+        to_.operation_type,
+        tk.decimals
+      FROM transactions t
+      JOIN wallets w ON t.wallet_id = w.id
+      LEFT JOIN groups g ON w.group_id = g.id
+      LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+      LEFT JOIN tokens tk ON to_.token_id = tk.id
+      WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+        AND w.user_id = $1
+    `;
+    
+    const params = [userId];
+    let paramIndex = 2;
+    
+    if (type && type !== 'all') {
+      query += ` AND t.transaction_type = $${paramIndex++}`;
+      params.push(type);
+    }
+    
+    if (groupId) {
+      query += ` AND w.group_id = $${paramIndex}`;
+      params.push(groupId);
+    }
+    
+    query += ` ORDER BY t.block_time DESC, t.signature, to_.id LIMIT ${limit}`;
+    
+    const result = await db.pool.query(query, params);
+    
     const groupedTransactions = {};
-
-    transactions.forEach((row) => {
+    result.rows.forEach((row) => {
       if (!groupedTransactions[row.signature]) {
         groupedTransactions[row.signature] = {
           signature: row.signature,
@@ -263,20 +584,42 @@ app.get('/api/transactions', async (req, res) => {
       }
     });
 
-    const result = Object.values(groupedTransactions);
-    res.json(result);
+    const transactions = Object.values(groupedTransactions);
+    res.json(transactions);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching transactions:`, error);
     res.status(500).json({ error: 'Failed to fetch transactions' });
   }
 });
 
-app.get('/api/monitoring/status', async (req, res) => {
+app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
+    const userId = req.user.id;
     const monitoringStatus = monitoringService.getStatus();
     const websocketStatus = solanaWebSocketService.getStatus();
-    const dbStats = await db.getMonitoringStats(groupId);
+    
+    // Get user-specific stats
+    const query = `
+      SELECT 
+        COUNT(w.id) as active_wallets,
+        COUNT(CASE WHEN t.transaction_type = 'buy' THEN 1 END) as buy_transactions_today,
+        COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as sell_transactions_today,
+        COALESCE(SUM(t.sol_spent), 0) as sol_spent_today,
+        COALESCE(SUM(t.sol_received), 0) as sol_received_today,
+        COUNT(DISTINCT to_.token_id) as unique_tokens_today
+      FROM wallets w
+      LEFT JOIN transactions t ON w.id = t.wallet_id 
+        AND t.block_time >= CURRENT_DATE
+      LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+      WHERE w.is_active = TRUE AND w.user_id = $1
+      ${groupId ? 'AND w.group_id = $2' : ''}
+    `;
+    
+    const params = groupId ? [userId, groupId] : [userId];
+    const result = await db.pool.query(query, params);
+    const dbStats = result.rows[0];
+    
     res.json({
       isMonitoring: websocketStatus.isConnected,
       processedSignatures: websocketStatus.messageCount,
@@ -289,12 +632,13 @@ app.get('/api/monitoring/status', async (req, res) => {
   }
 });
 
-app.post('/api/monitoring/toggle', async (req, res) => {
+app.post('/api/monitoring/toggle', auth.authRequired, async (req, res) => {
   try {
     const { action, groupId } = req.body;
+    const userId = req.user.id;
 
     if (action === 'start') {
-      await solanaWebSocketService.start(groupId);
+      await solanaWebSocketService.start(groupId, userId);
       res.json({ success: true, message: `WebSocket monitoring started${groupId ? ` for group ${groupId}` : ''}` });
     } else if (action === 'stop') {
       await solanaWebSocketService.stop();
@@ -308,11 +652,12 @@ app.post('/api/monitoring/toggle', async (req, res) => {
   }
 });
 
-app.post('/api/wallets/bulk', async (req, res) => {
+app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
   const startTime = Date.now();
   
   try {
     const { wallets, groupId } = req.body;
+    const userId = req.user.id;
 
     if (!wallets || !Array.isArray(wallets)) {
       return res.status(400).json({ 
@@ -335,7 +680,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
       });
     }
 
-    console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets`);
+    console.log(`[${new Date().toISOString()}] 📥 Starting bulk import of ${wallets.length} wallets for user ${userId}`);
 
     const results = {
       total: wallets.length,
@@ -404,7 +749,8 @@ app.post('/api/wallets/bulk', async (req, res) => {
           const addedWallet = await solanaWebSocketService.addWallet(
             wallet.address, 
             wallet.name, 
-            groupId
+            groupId,
+            userId
           );
           
           results.successful++;
@@ -413,6 +759,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
             name: wallet.name,
             id: addedWallet.id,
             groupId: addedWallet.group_id,
+            userId: addedWallet.user_id,
           });
 
         } catch (error) {
@@ -455,7 +802,7 @@ app.post('/api/wallets/bulk', async (req, res) => {
   }
 });
 
-app.get('/api/solana/price', async (req, res) => {
+app.get('/api/solana/price', auth.authRequired, async (req, res) => {
   try {
     const solPrice = await monitoringService.fetchSolPrice();
     res.json({
@@ -470,9 +817,10 @@ app.get('/api/solana/price', async (req, res) => {
   }
 });
 
-app.get('/api/groups', async (req, res) => {
+app.get('/api/groups', auth.authRequired, async (req, res) => {
   try {
-    const groups = await db.getGroups();
+    const userId = req.user.id;
+    const groups = await db.getGroups(userId);
     res.json(groups);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching groups:`, error);
@@ -480,13 +828,16 @@ app.get('/api/groups', async (req, res) => {
   }
 });
 
-app.post('/api/groups', async (req, res) => {
+app.post('/api/groups', auth.authRequired, async (req, res) => {
   try {
     const { name } = req.body;
+    const userId = req.user.id;
+    
     if (!name || name.trim().length === 0) {
       return res.status(400).json({ error: 'Group name is required' });
     }
-    const group = await db.addGroup(name.trim());
+    
+    const group = await db.addGroup(name.trim(), userId);
     res.json({
       success: true,
       group,
@@ -502,10 +853,21 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
-app.post('/api/groups/switch', async (req, res) => {
+app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
   try {
     const { groupId } = req.body;
-    await solanaWebSocketService.switchGroup(groupId);
+    const userId = req.user.id;
+    
+    // Verify group belongs to user if groupId is provided
+    if (groupId) {
+      const query = `SELECT id FROM groups WHERE id = $1 AND user_id = $2`;
+      const result = await db.pool.query(query, [groupId, userId]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'Group not found or access denied' });
+      }
+    }
+    
+    await solanaWebSocketService.switchGroup(groupId, userId);
     res.json({
       success: true,
       message: `Switched to group ${groupId || 'all'}`,
@@ -515,6 +877,18 @@ app.post('/api/groups/switch', async (req, res) => {
     res.status(500).json({ error: 'Failed to switch group' });
   }
 });
+
+// Clean expired sessions periodically
+setInterval(async () => {
+  try {
+    const cleaned = await auth.cleanExpiredSessions();
+    if (cleaned > 0) {
+      console.log(`[${new Date().toISOString()}] 🧹 Cleaned ${cleaned} expired sessions`);
+    }
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error cleaning sessions:`, error);
+  }
+}, 60 * 60 * 1000); // Every hour
 
 app.use((error, req, res, next) => {
   console.error(`[${new Date().toISOString()}] ❌ Server Error:`, error);
@@ -572,6 +946,33 @@ process.on('SIGTERM', async () => {
   sseClients.forEach((client) => client.end());
   process.exit(0);
 });
+
+const startWebSocketService = async () => {
+  let retries = 0;
+  const maxRetries = 5;
+  const retryDelay = 5000;
+
+  while (retries < maxRetries) {
+    try {
+      await solanaWebSocketService.start();
+      console.log(`[${new Date().toISOString()}] 🚀 Solana WebSocket service started successfully`);
+      return;
+    } catch (error) {
+      retries++;
+      console.error(
+        `[${new Date().toISOString()}] ❌ Failed to start Solana WebSocket service (attempt ${retries}/${maxRetries}):`,
+        error.message
+      );
+      if (retries < maxRetries) {
+        console.log(`[${new Date().toISOString()}] ⏳ Retrying in ${retryDelay / 1000} seconds...`);
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      }
+    }
+  }
+  console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
+};
+
+setTimeout(startWebSocketService, 2000);
 
 https.createServer(sslOptions, app).listen(port, '0.0.0.0', () => {
     console.log(`[${new Date().toISOString()}] 🚀 Server running on https://0.0.0.0:${port}`);

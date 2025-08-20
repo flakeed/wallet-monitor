@@ -210,3 +210,113 @@ SELECT
 FROM pg_stat_user_tables 
 WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
 ORDER BY n_tup_ins DESC;
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Users table
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    telegram_id BIGINT UNIQUE NOT NULL,
+    username VARCHAR(255),
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    is_active BOOLEAN DEFAULT true,
+    is_admin BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP WITH TIME ZONE
+);
+
+-- Add user_id to existing tables
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+
+-- Update groups table
+CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_name_user ON groups(name, user_id);
+DROP INDEX IF EXISTS groups_name_key; -- Remove old unique constraint
+
+-- Update wallets table
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wallets_address_user ON wallets(address, user_id);
+DROP INDEX IF EXISTS wallets_address_key; -- Remove old unique constraint
+
+-- Sessions table for managing user sessions
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    session_token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Whitelist table for managing access
+CREATE TABLE IF NOT EXISTS whitelist (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    telegram_id BIGINT UNIQUE NOT NULL,
+    added_by UUID REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT
+);
+
+-- Update wallet_stats to include user_id
+ALTER TABLE wallet_stats ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+
+-- Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_whitelist_telegram_id ON whitelist(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_groups_user_id ON groups(user_id);
+CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
+
+-- Function to clean expired sessions
+CREATE OR REPLACE FUNCTION clean_expired_sessions()
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM user_sessions WHERE expires_at < NOW();
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to get user stats
+CREATE OR REPLACE FUNCTION get_user_stats(user_uuid UUID)
+RETURNS TABLE(
+    total_wallets BIGINT,
+    active_wallets BIGINT,
+    total_groups BIGINT,
+    total_transactions BIGINT,
+    total_sol_spent NUMERIC,
+    total_sol_received NUMERIC
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT 
+        COUNT(w.id) as total_wallets,
+        COUNT(w.id) FILTER (WHERE w.is_active = true) as active_wallets,
+        COUNT(DISTINCT g.id) as total_groups,
+        COUNT(t.id) as total_transactions,
+        COALESCE(SUM(t.sol_spent), 0) as total_sol_spent,
+        COALESCE(SUM(t.sol_received), 0) as total_sol_received
+    FROM users u
+    LEFT JOIN wallets w ON u.id = w.user_id
+    LEFT JOIN groups g ON u.id = g.user_id
+    LEFT JOIN transactions t ON w.id = t.wallet_id
+    WHERE u.id = user_uuid
+    GROUP BY u.id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Insert initial admin user (replace with your Telegram ID)
+INSERT INTO users (telegram_id, username, first_name, is_admin, is_active)
+VALUES (789676557, 'admin', 'Admin', true, true)
+ON CONFLICT (telegram_id) DO UPDATE SET
+    is_admin = true,
+    is_active = true;
+
+-- Insert into whitelist
+INSERT INTO whitelist (telegram_id, notes)
+VALUES (789676557, 'Initial admin user')
+ON CONFLICT (telegram_id) DO NOTHING;
