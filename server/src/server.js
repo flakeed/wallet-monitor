@@ -860,7 +860,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
     res.json({
       success: results.successful > 0,
-      message: `Ultra-optimized import: ${results.successful} successful, ${results.failed} failed out of ${results.total} total (${walletsPerSecond} wallets/sec)`,
+      message: `Import: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
       results,
       duration,
       performance: {

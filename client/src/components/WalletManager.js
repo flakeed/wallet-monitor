@@ -311,7 +311,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
                   Validation Results
                 </h4>
                 {bulkValidation.canImport && (
-                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">⚡ Ready for import</span>
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Ready for import</span>
                 )}
               </div>
 
@@ -397,7 +397,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
                     </div>
                   </div>
                   <div className="text-xs text-blue-600 text-center">
-                    Processing at {importProgress.speed} wallets/second 🚀
+                    Processing..
                   </div>
                 </div>
               )}
@@ -546,14 +546,14 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
                 </>
               ) : (
                 <>🚀 {bulkValidation && bulkValidation.validWallets > 0
-                  ? `Import ${bulkValidation.validWallets.toLocaleString()} Wallets (Optimized)`
-                  : 'Import Wallets (Optimized)'}</>
+                  ? `Import ${bulkValidation.validWallets.toLocaleString()} Wallets`
+                  : 'Import Wallets'}</>
               )}
             </button>
 
             {bulkValidation && bulkValidation.validWallets > 1000 && (
               <p className="text-xs text-blue-600 text-center">
-                🚀 Large import detected. Using optimized parallel processing for maximum speed.
+                Large import detected. Using optimized parallel processing for maximum speed.
               </p>
             )}
           </form>

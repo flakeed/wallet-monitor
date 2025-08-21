@@ -438,7 +438,7 @@ function App() {
 
       return {
         success: totalResults.successful > 0,
-        message: `Ultra-optimized import: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate, ${walletsPerSecond} wallets/sec)`,
+        message: `Import: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
         results: totalResults
       };
 
