@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const Redis = require('ioredis');
+const compression = require('compression');
 require('dotenv').config();
 const { redis } = require('./services/tokenService');
 const WalletMonitoringService = require('./services/monitoringService');
@@ -20,7 +21,7 @@ const db = new Database();
 const auth = new AuthMiddleware(db);
 
 const sseClients = new Set();
-
+app.use(compression());
 app.use(express.json({ 
   limit: '50mb',
   verify: (req, res, buf) => {
@@ -354,8 +355,10 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
-    const wallets = await db.getActiveWallets(groupId, userId);
-    res.json(wallets); // Return wallets directly without stats
+    const offset = parseInt(req.query.offset) || 0;
+    const limit = parseInt(req.query.limit) || 100; // Default to 100 wallets per page
+    const wallets = await db.getActiveWalletsMinimalPaginated(offset, limit, groupId, userId);
+    res.json(wallets);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error);
     res.status(500).json({ error: 'Failed to fetch wallets' });

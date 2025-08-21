@@ -313,6 +313,40 @@ class Database {
         }
     }
 
+    async getActiveWalletsMinimalPaginated(offset = 0, limit = 100, groupId = null, userId = null) {
+        let query = `
+          SELECT 
+            w.id, w.address, w.name, w.group_id, g.name as group_name,
+            COUNT(w.id) OVER() as total_count
+          FROM wallets w
+          LEFT JOIN groups g ON w.group_id = g.id
+          WHERE w.is_active = TRUE
+        `;
+        const params = [];
+        let paramIndex = 1;
+      
+        if (userId) {
+          query += ` AND w.user_id = $${paramIndex++}`;
+          params.push(userId);
+        }
+      
+        if (groupId) {
+          query += ` AND w.group_id = $${paramIndex++}`;
+          params.push(groupId);
+        }
+      
+        query += ` ORDER BY w.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+        params.push(limit, offset);
+      
+        const result = await this.pool.query(query, params);
+      
+        return {
+          wallets: result.rows,
+          totalCount: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0,
+          hasMore: result.rows.length === limit
+        };
+      }
+    
     async getActiveWallets(groupId = null, userId = null) {
         let query = `
           SELECT w.*, g.name as group_name
@@ -536,53 +570,64 @@ class Database {
     // НОВАЯ функция для проверки производительности базы данных
     async getPerformanceMetrics() {
         try {
-            const query = `
-                SELECT 
-                    schemaname,
-                    tablename,
-                    n_tup_ins as inserts_count,
-                    n_tup_upd as updates_count,
-                    n_tup_del as deletes_count,
-                    n_live_tup as live_tuples,
-                    n_dead_tup as dead_tuples,
-                    last_vacuum,
-                    last_autovacuum,
-                    last_analyze,
-                    last_autoanalyze
-                FROM pg_stat_user_tables 
-                WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
-                ORDER BY n_tup_ins DESC
-            `;
-
-            const result = await this.pool.query(query);
-            
-            // Получаем размеры таблиц
-            const sizeQuery = `
-                SELECT 
-                    tablename,
-                    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
-                FROM pg_tables 
-                WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
-                ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
-            `;
-
-            const sizeResult = await this.pool.query(sizeQuery);
-
-            return {
-                tableStats: result.rows,
-                tableSizes: sizeResult.rows,
-                connectionPool: {
-                    total: this.pool.totalCount,
-                    idle: this.pool.idleCount,
-                    waiting: this.pool.waitingCount
-                }
-            };
-
+          const query = `
+            SELECT 
+              schemaname,
+              tablename,
+              n_tup_ins as inserts_count,
+              n_tup_upd as updates_count,
+              n_tup_del as deletes_count,
+              n_live_tup as live_tuples,
+              n_dead_tup as dead_tuples,
+              last_vacuum,
+              last_autovacuum,
+              last_analyze,
+              last_autoanalyze
+            FROM pg_stat_user_tables 
+            WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
+            ORDER BY n_tup_ins DESC
+          `;
+      
+          const sizeQuery = `
+            SELECT 
+              tablename,
+              pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+            FROM pg_tables 
+            WHERE tablename IN ('wallets', 'groups', 'transactions', 'tokens')
+            ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+          `;
+      
+          const poolQuery = `
+            SELECT 
+              active as active_connections,
+              idle as idle_connections,
+              total as total_connections
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+            GROUP BY active, idle, total
+          `;
+      
+          const [statsResult, sizeResult, poolResult] = await Promise.all([
+            this.pool.query(query),
+            this.pool.query(sizeQuery),
+            this.pool.query(poolQuery)
+          ]);
+      
+          return {
+            tableStats: statsResult.rows,
+            tableSizes: sizeResult.rows,
+            connectionPool: {
+              total: this.pool.totalCount,
+              idle: this.pool.idleCount,
+              waiting: this.pool.waitingCount,
+              active: poolResult.rows[0]?.active_connections || 0
+            }
+          };
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error getting performance metrics:`, error);
-            return null;
+          console.error(`[${new Date().toISOString()}] ❌ Error getting performance metrics:`, error);
+          return null;
         }
-    }
+      }
 
     // NEW: User-specific wallet methods
     async checkWalletExistsForUser(address, userId) {

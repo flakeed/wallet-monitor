@@ -20,6 +20,7 @@ function App() {
   
   // Existing state
   const [wallets, setWallets] = useState([]);
+  const [walletCount, setWalletCount] = useState(0); // New state for wallet count
   const [transactions, setTransactions] = useState([]);
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
   const [loading, setLoading] = useState(true);
@@ -57,7 +58,6 @@ function App() {
         setUser(userData);
         setIsAuthenticated(true);
       } else {
-        // Invalid session, clear local storage
         localStorage.removeItem('sessionToken');
         localStorage.removeItem('user');
       }
@@ -83,6 +83,10 @@ function App() {
     setUser(null);
     setIsAuthenticated(false);
     setShowAdminPanel(false);
+    setWallets([]);
+    setWalletCount(0);
+    setTransactions([]);
+    setGroups([]);
   };
 
   // Helper function to get auth headers
@@ -94,26 +98,6 @@ function App() {
     };
   };
 
-  const removeAllWallets = async () => {
-    try {
-      const url = selectedGroup ? `${API_BASE}/wallets?groupId=${selectedGroup}` : `${API_BASE}/wallets`;
-      const response = await fetch(url, {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to remove all wallets');
-      }
-
-      const data = await response.json();
-      setRefreshKey((prev) => prev + 1);
-      return data;
-    } catch (err) {
-      throw new Error(err.message);
-    }
-  };
-
   const fetchData = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
@@ -121,28 +105,31 @@ function App() {
 
       const headers = getAuthHeaders();
       const transactionsUrl = `${API_BASE}/transactions?hours=${hours}&limit=400${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
-      const walletsUrl = groupId ? `${API_BASE}/wallets?groupId=${groupId}` : `${API_BASE}/wallets`;
+      const walletCountUrl = groupId 
+        ? `${API_BASE}/wallets/count?groupId=${groupId}`
+        : `${API_BASE}/wallets/count`;
       const groupsUrl = `${API_BASE}/groups`;
 
-      const [walletsRes, transactionsRes, statusRes, groupsRes] = await Promise.all([
-        fetch(walletsUrl, { headers }),
+      const [transactionsRes, statusRes, walletCountRes, groupsRes] = await Promise.all([
         fetch(transactionsUrl, { headers }),
         fetch(`${API_BASE}/monitoring/status${groupId ? `?groupId=${groupId}` : ''}`, { headers }),
+        fetch(walletCountUrl, { headers }),
         fetch(groupsUrl, { headers }),
       ]);
 
-      if (!walletsRes.ok || !transactionsRes.ok || !statusRes.ok || !groupsRes.ok) {
+      if (!transactionsRes.ok || !statusRes.ok || !walletCountRes.ok || !groupsRes.ok) {
         throw new Error('Failed to fetch data');
       }
 
-      const [walletsData, transactionsData, statusData, groupsData] = await Promise.all([
-        walletsRes.json(),
+      const [transactionsData, statusData, walletCountData, groupsData] = await Promise.all([
         transactionsRes.json(),
         statusRes.json(),
+        walletCountRes.json(),
         groupsRes.json(),
       ]);
 
-      setWallets(walletsData);
+      setWallets([]); // Clear wallets since we defer fetching
+      setWalletCount(walletCountData.totalCount);
       setTransactions(transactionsData);
       setMonitoringStatus(statusData);
       setGroups(groupsData);
@@ -154,14 +141,32 @@ function App() {
     }
   };
 
-  // FIXED: SSE connection with authentication
+  const fetchWallets = async (groupId = selectedGroup) => {
+    try {
+      const headers = getAuthHeaders();
+      const walletsUrl = groupId 
+        ? `${API_BASE}/wallets?groupId=${groupId}&limit=100&offset=0`
+        : `${API_BASE}/wallets?limit=100&offset=0`;
+      
+      const response = await fetch(walletsUrl, { headers });
+      if (!response.ok) {
+        throw new Error('Failed to fetch wallets');
+      }
+      const walletsData = await response.json();
+      setWallets(walletsData.wallets);
+    } catch (err) {
+      setError(err.message);
+      console.error('Error fetching wallets:', err);
+    }
+  };
+
+  // SSE connection with authentication
   useEffect(() => {
     if (!isAuthenticated) return;
 
     const sessionToken = localStorage.getItem('sessionToken');
     if (!sessionToken) return;
 
-    // Create SSE URL with token as query parameter
     const sseUrl = new URL(`${API_BASE}/transactions/stream`);
     sseUrl.searchParams.append('token', sessionToken);
     if (selectedGroup) {
@@ -174,7 +179,7 @@ function App() {
 
     eventSource.onopen = () => {
       console.log('✅ SSE connection opened');
-      setError(null); // Clear any previous SSE errors
+      setError(null);
     };
 
     eventSource.onmessage = (event) => {
@@ -204,7 +209,7 @@ function App() {
               solReceived: newTransaction.transactionType === 'sell' ? newTransaction.solAmount.toFixed(6) : null,
               wallet: {
                 address: newTransaction.walletAddress,
-                name: newTransaction.walletName || wallets.find((w) => w.address === newTransaction.walletAddress)?.name || null,
+                name: newTransaction.walletName || null, // Rely on SSE payload
                 group_id: newTransaction.groupId,
                 group_name: newTransaction.groupName,
               },
@@ -222,19 +227,12 @@ function App() {
 
     eventSource.onerror = (error) => {
       console.error('SSE connection error:', error);
-      
-      // Check if it's an authentication error
       if (eventSource.readyState === EventSource.CLOSED) {
-        console.error('SSE connection was closed, possibly due to authentication failure');
         setError('Real-time connection lost. Please refresh the page.');
       }
-      
       eventSource.close();
-      
-      // Attempt to reconnect after a delay
       setTimeout(() => {
         console.log('Attempting to reconnect to SSE...');
-        // This will trigger a re-render and recreate the connection
         setRefreshKey(prev => prev + 1);
       }, 5000);
     };
@@ -243,42 +241,98 @@ function App() {
       console.log('🔌 Closing SSE connection');
       eventSource.close();
     };
-  }, [timeframe, transactionType, wallets, selectedGroup, isAuthenticated, refreshKey]);
+  }, [timeframe, transactionType, selectedGroup, isAuthenticated, refreshKey]);
 
-  const handleTimeframeChange = (newTimeframe) => {
-    setTimeframe(newTimeframe);
-    setLoading(true);
-    fetchData(newTimeframe, transactionType, selectedGroup);
-  };
-
-  const handleTransactionTypeChange = (newType) => {
-    setTransactionType(newType);
-    setLoading(true);
-    fetchData(timeframe, newType, selectedGroup);
-  };
-
-  const handleGroupChange = async (groupId) => {
-    const selectedGroupId = groupId || null;
-    setSelectedGroup(selectedGroupId);
-    setLoading(true);
-
+  const removeAllWallets = async () => {
     try {
-      await fetch(`${API_BASE}/groups/switch`, {
+      const url = selectedGroup ? `${API_BASE}/wallets?groupId=${selectedGroup}` : `${API_BASE}/wallets`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to remove all wallets');
+      }
+
+      const data = await response.json();
+      setRefreshKey((prev) => prev + 1);
+      await fetchWallets(); // Refresh wallets after deletion
+      return data;
+    } catch (err) {
+      setError(err.message);
+      throw new Error(err.message);
+    }
+  };
+
+  const removeWallet = async (address) => {
+    try {
+      const response = await fetch(`${API_BASE}/wallets/${address}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to remove wallet');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      await fetchWallets(); // Refresh wallets after deletion
+      return { success: true, message: data.message };
+    } catch (err) {
+      setError(err.message);
+      throw new Error(err.message);
+    }
+  };
+
+  const createGroup = async (name) => {
+    try {
+      const response = await fetch(`${API_BASE}/groups`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ groupId: selectedGroupId }),
+        body: JSON.stringify({ name }),
       });
-      fetchData(timeframe, transactionType, selectedGroupId);
-    } catch (error) {
-      console.error('Error switching group:', error);
-      setError('Failed to switch group');
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create group');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+      return { success: true, message: data.message, group: data.group };
+    } catch (err) {
+      setError(err.message);
+      throw new Error(err.message);
+    }
+  };
+
+  const toggleMonitoring = async (action) => {
+    try {
+      const response = await fetch(`${API_BASE}/monitoring/toggle`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ action, groupId: selectedGroup }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to toggle monitoring');
+      }
+
+      setRefreshKey((prev) => prev + 1);
+    } catch (err) {
+      setError(err.message);
     }
   };
 
   const handleAddWalletsBulk = async (wallets, groupId, progressCallback) => {
     const MAX_RETRIES = 3;
-    const RETRY_DELAY = 1000; // Уменьшено с 2000ms
-    const OPTIMIZED_CHUNK_SIZE = 1000; // Увеличено с 200-500 до 1000
+    const RETRY_DELAY = 1000;
+    const OPTIMIZED_CHUNK_SIZE = 1000;
 
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -287,7 +341,7 @@ function App() {
         console.log(`🚀 Sending optimized chunk ${chunkIndex + 1}/${totalChunks} (${chunk.length} wallets, attempt ${attempt})`);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 минут timeout
+        const timeoutId = setTimeout(() => controller.abort(), 300000);
 
         if (progressCallback) {
           progressCallback({
@@ -298,13 +352,13 @@ function App() {
           });
         }
 
-        const response = await fetch('/api/wallets/bulk-optimized', {
+        const response = await fetch(`${API_BASE}/wallets/bulk-optimized`, {
           method: 'POST',
           headers: getAuthHeaders(),
           body: JSON.stringify({
             wallets: chunk,
             groupId,
-            optimized: true // Флаг для оптимизированной обработки
+            optimized: true
           }),
           signal: controller.signal
         });
@@ -316,7 +370,6 @@ function App() {
 
         if (!response.ok) {
           let errorMessage = `HTTP ${response.status}`;
-
           try {
             if (contentType && contentType.includes('application/json')) {
               const errorData = await response.json();
@@ -332,7 +385,6 @@ function App() {
             console.error('Error parsing error response:', parseError);
             errorMessage = `HTTP ${response.status} - Could not parse error response`;
           }
-
           throw new Error(errorMessage);
         }
 
@@ -391,8 +443,7 @@ function App() {
         successfulWallets: []
       };
 
-      // Параллельная обработка небольших батчей для ускорения
-      const PARALLEL_BATCHES = Math.min(3, chunks.length); // Максимум 3 параллельных запроса
+      const PARALLEL_BATCHES = Math.min(3, chunks.length);
       
       for (let i = 0; i < chunks.length; i += PARALLEL_BATCHES) {
         const batchChunks = chunks.slice(i, Math.min(i + PARALLEL_BATCHES, chunks.length));
@@ -406,7 +457,6 @@ function App() {
           });
         }
 
-        // Параллельная обработка батча
         const batchPromises = batchChunks.map((chunk, batchIndex) => 
           sendChunkWithRetry(chunk, i + batchIndex, chunks.length)
         );
@@ -432,7 +482,6 @@ function App() {
         } catch (batchError) {
           console.error(`❌ Batch ${Math.floor(i / PARALLEL_BATCHES) + 1} failed:`, batchError.message);
           
-          // При ошибке батча помечаем все кошельки в нем как failed
           batchChunks.forEach(chunk => {
             totalResults.failed += chunk.length;
             totalResults.errors.push({
@@ -443,7 +492,6 @@ function App() {
           });
         }
 
-        // Короткая пауза между батчами для снижения нагрузки на сервер
         if (i + PARALLEL_BATCHES < chunks.length) {
           await sleep(100);
         }
@@ -461,6 +509,7 @@ function App() {
       const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
       console.log(`🎉 OPTIMIZED bulk import completed: ${totalResults.successful}/${totalResults.total} successful (${successRate}%)`);
 
+      setRefreshKey((prev) => prev + 1); // Refresh data after bulk import
       return {
         success: totalResults.successful > 0,
         message: `Optimized bulk import completed: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
@@ -469,68 +518,38 @@ function App() {
 
     } catch (error) {
       console.error('❌ Optimized bulk import failed:', error);
+      setError(`Optimized bulk import failed: ${error.message}`);
       throw new Error(`Optimized bulk import failed: ${error.message}`);
     }
   };
 
-  const removeWallet = async (address) => {
-    try {
-      const response = await fetch(`${API_BASE}/wallets/${address}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders(),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to remove wallet');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message };
-    } catch (err) {
-      throw new Error(err.message);
-    }
+  const handleTimeframeChange = (newTimeframe) => {
+    setTimeframe(newTimeframe);
+    setLoading(true);
+    fetchData(newTimeframe, transactionType, selectedGroup);
   };
 
-  const createGroup = async (name) => {
-    try {
-      const response = await fetch(`${API_BASE}/groups`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ name }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to create group');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-      return { success: true, message: data.message, group: data.group };
-    } catch (err) {
-      throw new Error(err.message);
-    }
+  const handleTransactionTypeChange = (newType) => {
+    setTransactionType(newType);
+    setLoading(true);
+    fetchData(timeframe, newType, selectedGroup);
   };
 
-  const toggleMonitoring = async (action) => {
+  const handleGroupChange = async (groupId) => {
+    const selectedGroupId = groupId || null;
+    setSelectedGroup(selectedGroupId);
+    setLoading(true);
+
     try {
-      const response = await fetch(`${API_BASE}/monitoring/toggle`, {
+      await fetch(`${API_BASE}/groups/switch`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ action, groupId: selectedGroup }),
+        body: JSON.stringify({ groupId: selectedGroupId }),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to toggle monitoring');
-      }
-
-      setRefreshKey((prev) => prev + 1);
-    } catch (err) {
-      setError(err.message);
+      fetchData(timeframe, transactionType, selectedGroupId);
+    } catch (error) {
+      console.error('Error switching group:', error);
+      setError('Failed to switch group');
     }
   };
 
@@ -609,9 +628,12 @@ function App() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <WalletList
-              wallets={wallets}
+              wallets={{ wallets, hasMore: walletCount > wallets.length }}
+              walletCount={walletCount}
               onRemoveWallet={removeWallet}
               onRemoveAllWallets={removeAllWallets}
+              fetchWallets={fetchWallets}
+              selectedGroup={selectedGroup}
             />
           </div>
           <div className="lg:col-span-2">
