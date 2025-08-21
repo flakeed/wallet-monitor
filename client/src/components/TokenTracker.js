@@ -53,7 +53,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
             totalReceivedSOL: 0,
             netSOL: 0,
             latestActivity: null,
-            firstBuyTime: null,  
+            // firstBuyTime: null,  
           },
         });
       }
@@ -67,11 +67,11 @@ const aggregateTokens = (transactions, hours, groupId) => {
         tokenData.summary.latestActivity = tx.time;
       }
       
-      if (tx.transactionType === 'buy') {
-        if (!tokenData.summary.firstBuyTime || txTime < new Date(tokenData.summary.firstBuyTime)) {
-          tokenData.summary.firstBuyTime = tx.time;
-        }
-      }
+      // if (tx.transactionType === 'buy') {
+      //   if (!tokenData.summary.firstBuyTime || txTime < new Date(tokenData.summary.firstBuyTime)) {
+      //     tokenData.summary.firstBuyTime = tx.time;
+      //   }
+      // }
 
       if (!wallet) {
         tokenData.wallets.push({
@@ -88,7 +88,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
           pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
                   (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
           lastActivity: tx.time,
-          firstBuyTime: tx.transactionType === 'buy' ? tx.time : null,
+          // firstBuyTime: tx.transactionType === 'buy' ? tx.time : null,
         });
         tokenData.summary.uniqueWallets.add(walletAddress);
       } else {
@@ -104,11 +104,11 @@ const aggregateTokens = (transactions, hours, groupId) => {
           wallet.lastActivity = tx.time;
         }
         
-        if (tx.transactionType === 'buy') {
-          if (!wallet.firstBuyTime || txTime < new Date(wallet.firstBuyTime)) {
-            wallet.firstBuyTime = tx.time;
-          }
-        }
+        // if (tx.transactionType === 'buy') {
+        //   if (!wallet.firstBuyTime || txTime < new Date(wallet.firstBuyTime)) {
+        //     wallet.firstBuyTime = tx.time;
+        //   }
+        // }
       }
 
       tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
@@ -144,12 +144,12 @@ const aggregateTokens = (transactions, hours, groupId) => {
           return timeB - timeA;
         });
       
-      case 'firstBuy':
-        return sortedTokens.sort((a, b) => {
-          const timeA = new Date(a.summary.firstBuyTime || 0);
-          const timeB = new Date(b.summary.firstBuyTime || 0);
-          return timeB - timeA;
-        });
+      // case 'firstBuy':
+      //   return sortedTokens.sort((a, b) => {
+      //     const timeA = new Date(a.summary.firstBuyTime || 0);
+      //     const timeB = new Date(b.summary.firstBuyTime || 0);
+      //     return timeB - timeA;
+      //   });
       
       case 'profit':
         return sortedTokens.sort((a, b) => b.summary.netSOL - a.summary.netSOL);
@@ -223,7 +223,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
               className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="latest">Latest Activity</option>
-              <option value="firstBuy">Recent Purchases</option>
+              {/* <option value="firstBuy">Recent Purchases</option> */}
               <option value="profit">Most Profitable</option>
               <option value="loss">Biggest Losses</option>
               <option value="volume">Highest Volume</option>
