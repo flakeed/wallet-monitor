@@ -6,7 +6,7 @@ function TokenCard({ token, onOpenChart }) {
     const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
-    const [groupPnL, setGroupPnL] = useState(null);
+    const [groupPnL, setGroupPnL] = useState(0);
     const netColor = groupPnL.totalPnLSOL > 0 ? 'text-green-700' : groupPnL.totalPnLSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
     // Helper function to get auth headers
