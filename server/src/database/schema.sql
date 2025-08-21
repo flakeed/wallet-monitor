@@ -1,3 +1,11 @@
+SET work_mem = '256MB';
+
+SET maintenance_work_mem = '1GB';
+
+SET shared_buffers = '512MB';
+
+SET autocommit = off;
+
 -- Creating users table for storing user information
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,7 +48,6 @@ CREATE TABLE IF NOT EXISTS groups (
     CONSTRAINT unique_group_name_per_user UNIQUE (user_id, name)
 );
 
--- Creating wallets table for storing wallet information
 CREATE TABLE IF NOT EXISTS wallets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     address VARCHAR(44) NOT NULL,
@@ -124,3 +131,16 @@ CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_whitelist_telegram_id ON whitelist(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_groups_user_id ON groups(user_id);
+
+ALTER TABLE wallets
+ADD COLUMN IF NOT EXISTS group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
+INSERT INTO users (telegram_id, username, first_name, is_admin, is_active)
+VALUES (789676557, 'admin', 'Admin', true, true)
+ON CONFLICT (telegram_id) DO UPDATE SET
+    is_admin = true,
+    is_active = true;
+
+-- Insert into whitelist
+INSERT INTO whitelist (telegram_id, notes)
+VALUES (789676557, 'Initial admin user')
+ON CONFLICT (telegram_id) DO NOTHING;
