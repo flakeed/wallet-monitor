@@ -7,7 +7,15 @@ function TokenCard({ token, onOpenChart }) {
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
+    const [showAllWallets, setShowAllWallets] = useState(false);
+    
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
+    // Константы для отображения кошельков
+    const VISIBLE_WALLETS_LIMIT = 6;
+    const shouldShowExpand = token.wallets.length > VISIBLE_WALLETS_LIMIT;
+    const visibleWallets = showAllWallets ? token.wallets : token.wallets.slice(0, VISIBLE_WALLETS_LIMIT);
+    const hiddenWalletsCount = token.wallets.length - VISIBLE_WALLETS_LIMIT;
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -198,6 +206,10 @@ function TokenCard({ token, onOpenChart }) {
         return `${Math.floor(diffInMinutes / 1440)}d ago`;
     };
 
+    const toggleWalletDisplay = () => {
+        setShowAllWallets(!showAllWallets);
+    };
+
     return (
         <div className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
@@ -286,13 +298,54 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {token.wallets.map((w) => (
-                    <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
-                ))}
+            {/* Wallets section with expand/collapse */}
+            <div className="space-y-2">
+                {/* Wallet count and expand button */}
+                {shouldShowExpand && (
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs text-gray-500 font-medium">
+                            Showing {visibleWallets.length} of {token.wallets.length} wallets
+                        </span>
+                        <button
+                            onClick={toggleWalletDisplay}
+                            className="text-xs text-blue-600 hover:text-blue-800 flex items-center space-x-1 px-2 py-1 rounded hover:bg-blue-50 transition-colors"
+                        >
+                            <span>
+                                {showAllWallets ? 'Show less' : `Show ${hiddenWalletsCount} more`}
+                            </span>
+                            <svg 
+                                className={`w-3 h-3 transition-transform ${showAllWallets ? 'rotate-180' : ''}`} 
+                                fill="none" 
+                                stroke="currentColor" 
+                                viewBox="0 0 24 24"
+                            >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </button>
+                    </div>
+                )}
+
+                {/* Wallets grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {visibleWallets.map((w) => (
+                        <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
+                    ))}
+                </div>
+
+                {/* Collapsed state indicator */}
+                {shouldShowExpand && !showAllWallets && (
+                    <div className="text-center">
+                        <button
+                            onClick={toggleWalletDisplay}
+                            className="text-xs text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded-full transition-colors"
+                        >
+                            + {hiddenWalletsCount} more wallets
+                        </button>
+                    </div>
+                )}
             </div>
 
-            <div className="mt-2 flex space-x-2">
+            <div className="mt-3 flex space-x-2">
                 <button
                     onClick={onOpenChart}
                     className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
