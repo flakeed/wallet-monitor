@@ -348,11 +348,11 @@ class SolanaWebSocketService {
         const walletAddresses = wallets.map(w => w.address);
         const results = await this.subscribeToWalletsBatch(walletAddresses, 150); // Увеличенный batch size
 
-        console.log(`[${new Date().toISOString()}] 🎉 Optimized subscription summary:`);
-        console.log(`  - Total wallets: ${wallets.length}`);
-        console.log(`  - Successful subscriptions: ${results.successful}`);
-        console.log(`  - Failed subscriptions: ${results.failed}`);
-        console.log(`  - Active subscriptions: ${this.subscriptions.size}`);
+        // console.log(`[${new Date().toISOString()}] 🎉 Optimized subscription summary:`);
+        // console.log(`  - Total wallets: ${wallets.length}`);
+        // console.log(`  - Successful subscriptions: ${results.successful}`);
+        // console.log(`  - Failed subscriptions: ${results.failed}`);
+        // console.log(`  - Active subscriptions: ${this.subscriptions.size}`);
 
         return results;
     }
@@ -397,7 +397,6 @@ class SolanaWebSocketService {
 
         try {
             // 1. Добавляем кошельки в базу данных (batch операция)
-            console.log(`[${new Date().toISOString()}] 🗄️ Adding wallets to database...`);
             const dbWallets = wallets.map(w => ({
                 address: w.address,
                 name: w.name,
@@ -430,12 +429,7 @@ class SolanaWebSocketService {
             const duration = Date.now() - startTime;
             const walletsPerSecond = Math.round((insertedWallets.length / duration) * 1000);
 
-            console.log(`[${new Date().toISOString()}] 🎉 Optimized batch wallet addition completed in ${duration}ms:`);
-            console.log(`  - Total processed: ${wallets.length}`);
-            console.log(`  - Database insertions: ${insertedWallets.length}`);
-            console.log(`  - WebSocket subscriptions: ${results.subscriptionResults?.successful || 0}`);
-            console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
-            console.log(`  - Total active subscriptions: ${this.subscriptions.size}`);
+          
 
             return results;
 
@@ -524,22 +518,18 @@ class SolanaWebSocketService {
 
     async removeAllWallets(groupId = null, userId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Starting optimized removal of all wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
             
             // Получаем список кошельков для отписки ПЕРЕД удалением из БД
             const walletsToRemove = await this.db.getActiveWallets(groupId, userId);
             const addressesToUnsubscribe = walletsToRemove.map(w => w.address);
     
-            console.log(`[${new Date().toISOString()}] 📋 Found ${addressesToUnsubscribe.length} wallets to unsubscribe`);
     
             // Отписываемся от WebSocket batch операцией
             if (addressesToUnsubscribe.length > 0) {
-                console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${addressesToUnsubscribe.length} wallets...`);
                 await this.unsubscribeFromWalletsBatch(addressesToUnsubscribe);
             }
     
             // Удаляем из базы данных
-            console.log(`[${new Date().toISOString()}] 🗄️ Removing wallets from database...`);
             await this.monitoringService.removeAllWallets(groupId, userId);
     
             // Проверяем, нужно ли переподписываться на оставшиеся кошельки
@@ -550,7 +540,6 @@ class SolanaWebSocketService {
             );
     
             if (shouldResubscribe) {
-                console.log(`[${new Date().toISOString()}] 🔄 Resubscribing to remaining wallets for active scope...`);
                 await this.subscribeToWallets();
             }
     
@@ -564,13 +553,11 @@ class SolanaWebSocketService {
 
     async switchGroup(groupId, userId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🔄 Starting optimized group switch to ${groupId || 'all'} for user ${userId}`);
             const startTime = Date.now();
 
             // Отписываемся от всех текущих подписок batch операцией
             if (this.subscriptions.size > 0) {
                 const currentAddresses = Array.from(this.subscriptions.keys());
-                console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${currentAddresses.length} current wallets...`);
                 await this.unsubscribeFromWalletsBatch(currentAddresses);
             }
 

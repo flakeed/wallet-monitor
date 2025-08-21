@@ -10,15 +10,15 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
 
   const handleRemoveAll = async () => {
     if (isRemovingAll) return;
-  
+
     if (!window.confirm('⚠️ Remove ALL wallets from monitoring? This cannot be undone.')) {
       return;
     }
-  
+
     setIsRemovingAll(true);
     setError(null);
     setSuccess(null);
-  
+
     try {
       const result = await onRemoveAllWallets?.();
       setSuccess(result?.message || 'All wallets removed successfully.');
@@ -30,19 +30,13 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
     }
   };
 
-  const formatWalletCount = (count) => {
-    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
-    if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
-    return count.toString();
-  };
-
   return (
     <div className="w-80 bg-white rounded-lg shadow-sm border">
       {/* Compact Header */}
       <div className="flex items-center justify-between p-3 border-b bg-gray-50">
         <div className="flex items-center space-x-2">
           <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
           </svg>
           <div>
@@ -50,12 +44,12 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
               Monitored Wallets
             </h3>
             <div className="text-xs text-gray-500">
-              {formatWalletCount(walletCount)} wallets
+              {walletCount} wallets
               {groupName && <span className="ml-1">in {groupName}</span>}
             </div>
           </div>
         </div>
-        
+
         <div className="flex items-center space-x-1">
           {walletCount > 0 && (
             <button
@@ -68,13 +62,13 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
                 <div className="animate-spin rounded-full h-3 w-3 border border-red-600 border-t-transparent"></div>
               ) : (
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
               )}
             </button>
           )}
-          
+
           {walletCount > 0 && (
             <button
               onClick={() => setShowDetails(!showDetails)}
@@ -82,7 +76,7 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
               title={showDetails ? "Hide details" : "Show details"}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d={!showDetails ? "M19 9l-7 7-7-7" : "M5 15l7-7 7 7"} />
               </svg>
             </button>
@@ -104,19 +98,13 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
           <h4 className="text-xs font-medium text-gray-700 mb-2">Statistics</h4>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="bg-white p-2 rounded">
-              <div className="font-semibold text-green-600">{formatWalletCount(walletCount)}</div>
+              <div className="font-semibold text-green-600">{walletCount}</div>
               <div className="text-gray-500">Total Wallets</div>
             </div>
             <div className="bg-white p-2 rounded">
               <div className="font-semibold text-blue-600">Active</div>
               <div className="text-gray-500">Monitoring</div>
             </div>
-          </div>
-          
-          <div className="mt-2 text-xs text-gray-500">
-            <p>• All wallets are actively monitored</p>
-            <p>• Real-time transaction tracking</p>
-            <p>• WebSocket subscriptions active</p>
           </div>
         </div>
       )}
@@ -125,25 +113,11 @@ function WalletList({ walletCount = 0, groupName = null, onRemoveAllWallets }) {
       {walletCount === 0 && (
         <div className="text-center py-6 px-3">
           <svg className="w-8 h-8 mx-auto text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} 
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1}
               d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
           </svg>
           <p className="text-gray-500 text-xs">No wallets monitored</p>
           <p className="text-gray-400 text-xs mt-1">Add wallets using the form above</p>
-        </div>
-      )}
-
-      {/* Performance Info */}
-      {walletCount > 1000 && showDetails && (
-        <div className="p-3 border-t bg-blue-50">
-          <div className="text-xs text-blue-800">
-            <div className="font-medium mb-1">⚡ High Performance Mode</div>
-            <div className="text-blue-600">
-              • Optimized for {formatWalletCount(walletCount)} wallets<br/>
-              • Real-time monitoring active<br/>
-              • Fast bulk operations enabled
-            </div>
-          </div>
         </div>
       )}
     </div>
