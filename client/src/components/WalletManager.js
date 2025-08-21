@@ -311,7 +311,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
                   Validation Results
                 </h4>
                 {bulkValidation.canImport && (
-                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">⚡ Ready for high-speed import</span>
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">⚡ Ready for import</span>
                 )}
               </div>
 
@@ -542,7 +542,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
               {bulkLoading ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  ⚡ High-Speed Import in Progress...
+                  Import in Progress...
                 </>
               ) : (
                 <>🚀 {bulkValidation && bulkValidation.validWallets > 0
