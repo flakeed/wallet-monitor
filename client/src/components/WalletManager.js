@@ -63,10 +63,9 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         continue;
       }
 
-      if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-        errors.push(`Line ${lineNum}: Invalid address format - ${address.substring(0, 20)}...`);
-        continue;
-      }
+      if (address.length < 32 || address.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+        return res.status(400).json({ error: 'Invalid Solana wallet address format' });
+    }
 
       if (seenAddresses.has(address)) {
         errors.push(`Line ${lineNum}: Duplicate address - ${address.substring(0, 20)}...`);

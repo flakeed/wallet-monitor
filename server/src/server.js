@@ -384,10 +384,9 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
     const address = req.params.address.trim();
     const userId = req.user.id;
 
-    if (!address || address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+    if (!address || address.length < 32 || address.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
-    }
-
+  }
     // Check if wallet belongs to user
     const wallet = await db.getWalletByAddress(address);
     if (!wallet || wallet.user_id !== userId) {
@@ -610,7 +609,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     };
 
     const validWallets = [];
-    const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/;
+    const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]+$/;
 
     // Быстрая валидация всех кошельков в одном проходе
     console.log(`[${new Date().toISOString()}] ⚡ Fast validation of ${wallets.length} wallets...`);
@@ -627,7 +626,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
         continue;
       }
 
-      if (!solanaAddressRegex.test(wallet.address)) {
+      if (wallet.address.length < 32 || wallet.address.length > 44 || !solanaAddressRegex.test(wallet.address)) {
         results.failed++;
         results.errors.push({
           address: wallet.address,

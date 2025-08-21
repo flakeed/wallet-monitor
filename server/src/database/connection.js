@@ -101,9 +101,8 @@ class Database {
             throw new Error('User ID is required');
         }
     
-        // Проверяем валидность адреса Solana
-        if (address.length !== 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-            throw new Error('Invalid Solana wallet address format');
+        if (address.length < 32 || address.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
+            return res.status(400).json({ error: 'Invalid Solana wallet address format' });
         }
     
         const query = `
