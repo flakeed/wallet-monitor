@@ -7,9 +7,8 @@ function TokenCard({ token, onOpenChart }) {
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
-    const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
-console.log("token",token)
-console.log(groupPnL)
+    const netColor = groupPnL.realizedPnLSOL > 0 ? 'text-green-700' : groupPnL.realizedPnLSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
     // Helper function to get auth headers
     const getAuthHeaders = () => {
         const sessionToken = localStorage.getItem('sessionToken');
@@ -226,7 +225,7 @@ console.log(groupPnL)
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
+                    <div className={`text-base font-bold ${netColor}`}>{groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL</div>
                     <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
                 </div>
             </div>
