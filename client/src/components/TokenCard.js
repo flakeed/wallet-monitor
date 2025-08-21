@@ -225,7 +225,7 @@ function TokenCard({ token, onOpenChart }) {
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>{groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL</div>
+                    <div className={`text-base font-bold ${netColor}`}>{groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL} SOL</div>
                     <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
                 </div>
             </div>
