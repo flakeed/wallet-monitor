@@ -409,23 +409,19 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
   }
 });
 
-app.delete('/api/wallets', auth.authRequired, async (req, res) => {
+pp.delete('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
     
-    // Remove only user's wallets
-    const query = groupId 
-      ? `DELETE FROM wallets WHERE user_id = $1 AND group_id = $2`
-      : `DELETE FROM wallets WHERE user_id = $1`;
-    const params = groupId ? [userId, groupId] : [userId];
+    console.log(`[${new Date().toISOString()}] 🗑️ User ${userId} requesting removal of all wallets${groupId ? ` for group ${groupId}` : ''}`);
     
-    const result = await db.pool.query(query, params);
+    // Используем WebSocket сервис для корректной отписки
+    await solanaWebSocketService.removeAllWallets(groupId, userId);
     
     res.json({
       success: true,
-      message: `Successfully removed wallets and associated data${groupId ? ` for group ${groupId}` : ''}`,
-      deletedCount: result.rowCount,
+      message: `Successfully removed wallets and WebSocket subscriptions${groupId ? ` for group ${groupId}` : ''}`,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);

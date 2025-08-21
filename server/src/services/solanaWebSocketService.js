@@ -252,36 +252,49 @@ class SolanaWebSocketService {
 
     async unsubscribeFromWalletsBatch(walletAddresses, batchSize = 100) {
         if (!walletAddresses || walletAddresses.length === 0) return;
-
+    
         console.log(`[${new Date().toISOString()}] 🗑️ Starting batch unsubscription for ${walletAddresses.length} wallets`);
         const startTime = Date.now();
-
+    
         const results = {
             successful: 0,
             failed: 0,
             errors: []
         };
-
+    
         for (let i = 0; i < walletAddresses.length; i += batchSize) {
             const batch = walletAddresses.slice(i, i + batchSize);
-
+    
             const batchPromises = batch.map(async (walletAddress) => {
                 try {
                     const subData = this.subscriptions.get(walletAddress);
+                    
+                    // Если подписки нет, считаем успешной (цель достигнута)
                     if (!subData?.logs) {
-                        results.successful++; // Считаем как успешную, так как цель достигнута
+                        this.subscriptions.delete(walletAddress); // На всякий случай очищаем
+                        results.successful++;
                         return { success: true, address: walletAddress, action: 'not_subscribed' };
                     }
-
+    
+                    // Пытаемся отписаться через WebSocket
                     if (this.ws && this.ws.readyState === WS_READY_STATE_OPEN) {
-                        await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
+                        try {
+                            await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
+                            console.log(`[${new Date().toISOString()}] ✅ Successfully unsubscribed from ${walletAddress.slice(0, 8)}...`);
+                        } catch (wsError) {
+                            console.warn(`[${new Date().toISOString()}] ⚠️ WebSocket unsubscribe failed for ${walletAddress.slice(0, 8)}...: ${wsError.message}`);
+                            // Продолжаем - главное удалить из локального кэша
+                        }
+                    } else {
+                        console.warn(`[${new Date().toISOString()}] ⚠️ WebSocket not connected, skipping network unsubscribe for ${walletAddress.slice(0, 8)}...`);
                     }
-
+    
+                    // Удаляем из локального кэша в любом случае
                     this.subscriptions.delete(walletAddress);
                     results.successful++;
                     
                     return { success: true, address: walletAddress };
-
+    
                 } catch (error) {
                     results.failed++;
                     results.errors.push({ address: walletAddress, error: error.message });
@@ -293,17 +306,18 @@ class SolanaWebSocketService {
                     return { success: false, address: walletAddress, error: error.message };
                 }
             });
-
+    
             await Promise.all(batchPromises);
-
+    
             if (i + batchSize < walletAddresses.length) {
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
         }
-
+    
         const duration = Date.now() - startTime;
         console.log(`[${new Date().toISOString()}] ✅ Batch unsubscription completed in ${duration}ms: ${results.successful} successful, ${results.failed} failed`);
-
+        console.log(`[${new Date().toISOString()}] 📊 Remaining active subscriptions: ${this.subscriptions.size}`);
+    
         return results;
     }
 
@@ -512,26 +526,36 @@ class SolanaWebSocketService {
         try {
             console.log(`[${new Date().toISOString()}] 🗑️ Starting optimized removal of all wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
             
-            // Сначала получаем список кошельков для отписки
+            // Получаем список кошельков для отписки ПЕРЕД удалением из БД
             const walletsToRemove = await this.db.getActiveWallets(groupId, userId);
             const addressesToUnsubscribe = walletsToRemove.map(w => w.address);
-
+    
+            console.log(`[${new Date().toISOString()}] 📋 Found ${addressesToUnsubscribe.length} wallets to unsubscribe`);
+    
             // Отписываемся от WebSocket batch операцией
             if (addressesToUnsubscribe.length > 0) {
+                console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${addressesToUnsubscribe.length} wallets...`);
                 await this.unsubscribeFromWalletsBatch(addressesToUnsubscribe);
             }
-
+    
             // Удаляем из базы данных
+            console.log(`[${new Date().toISOString()}] 🗄️ Removing wallets from database...`);
             await this.monitoringService.removeAllWallets(groupId, userId);
-
-            // Если это текущая активная группа/пользователь, переподписываемся
-            if ((groupId && groupId === this.activeGroupId) || (userId && userId === this.activeUserId)) {
-                console.log(`[${new Date().toISOString()}] 🔄 Resubscribing after removal...`);
+    
+            // Проверяем, нужно ли переподписываться на оставшиеся кошельки
+            const shouldResubscribe = this.isStarted && (
+                (userId && userId === this.activeUserId) ||
+                (groupId && groupId === this.activeGroupId) ||
+                (!groupId && !userId) // Если удаляем все кошельки без фильтров
+            );
+    
+            if (shouldResubscribe) {
+                console.log(`[${new Date().toISOString()}] 🔄 Resubscribing to remaining wallets for active scope...`);
                 await this.subscribeToWallets();
             }
-
-            console.log(`[${new Date().toISOString()}] ✅ Optimized removal completed: ${addressesToUnsubscribe.length} wallets removed`);
-
+    
+            console.log(`[${new Date().toISOString()}] ✅ Optimized removal completed: ${addressesToUnsubscribe.length} wallets removed, ${this.subscriptions.size} subscriptions remaining`);
+    
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error in optimized removeAllWallets:`, error.message);
             throw error;
