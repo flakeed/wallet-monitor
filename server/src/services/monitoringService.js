@@ -138,7 +138,6 @@ constructor() {
     async fetchTransactionWithRetry(signature, maxRetries = 3) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                console.log(`[${new Date().toISOString()}] 🔄 Fetching transaction ${signature} (attempt ${attempt}/${maxRetries})`);
                 
                 const options = {
                     maxSupportedTransactionVersion: 0, 
@@ -382,9 +381,6 @@ async analyzeTokenChanges(meta, transactionType, walletAddress) {
     const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
     const tokenChanges = [];
 
-    console.log(`[${new Date().toISOString()}] 🔍 Analyzing token changes for ${transactionType} transaction`);
-    console.log(`Pre-token balances: ${meta.preTokenBalances?.length || 0}, Post-token balances: ${meta.postTokenBalances?.length || 0}`);
-
     const allBalanceChanges = new Map();
     for (const pre of meta.preTokenBalances || []) {
         const key = `${pre.mint}-${pre.accountIndex}`;
@@ -433,20 +429,13 @@ async analyzeTokenChanges(meta, transactionType, walletAddress) {
         const rawChange = Number(change.postAmount) - Number(change.preAmount);
         const uiChange = Number(change.postUiAmount) - Number(change.preUiAmount);
 
-        console.log(`[${new Date().toISOString()}] 🪙 Token ${change.mint}:`);
-        console.log(`  - Account Index: ${change.accountIndex}`);
-        console.log(`  - Owner: ${change.owner}`);
-        console.log(`  - Raw change: ${rawChange}`);
-        console.log(`  - UI change: ${uiChange}`);
-        console.log(`  - Decimals: ${change.decimals}`);
+        
 
         let isValidChange = false;
         if (transactionType === 'buy' && rawChange > 0) {
             isValidChange = true;
-            console.log(`[${new Date().toISOString()}] ✅ Valid BUY: token balance increased by ${rawChange} raw units`);
         } else if (transactionType === 'sell' && rawChange < 0) {
             isValidChange = true;
-            console.log(`[${new Date().toISOString()}] ✅ Valid SELL: token balance decreased by ${Math.abs(rawChange)} raw units`);
         } else {
             console.log(`[${new Date().toISOString()}] ⏭️ Skipping token ${change.mint} - balance change doesn't match transaction type`);
             continue;
@@ -469,7 +458,6 @@ async analyzeTokenChanges(meta, transactionType, walletAddress) {
     }
 
     if (mintChanges.size === 0) {
-        console.log(`[${new Date().toISOString()}] ⚠️ No valid token changes found for ${transactionType} transaction (excluding WSOL and USDC)`);
         return [];
     }
 

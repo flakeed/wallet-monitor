@@ -293,7 +293,6 @@ class Database {
         
         try {
             const result = await this.pool.query(query, params);
-            console.log(`[${new Date().toISOString()}] 🗑️ Removed ${result.rowCount} wallets and associated data${userId ? ` for user ${userId}` : ''}${groupId ? ` for group ${groupId}` : ''}`);
             return { deletedCount: result.rowCount };
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error removing wallets:`, error);
@@ -315,13 +314,11 @@ class Database {
         if (userId) {
             query += ` AND w.user_id = $${paramIndex++}`;
             params.push(userId);
-            console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by user_id: ${userId}`);
         }
         
         if (groupId) {
             query += ` AND w.group_id = $${paramIndex}`;
             params.push(groupId);
-            console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by group_id: ${groupId}`);
         }
         
         query += ` ORDER BY w.created_at DESC`;
@@ -332,9 +329,7 @@ class Database {
         
         // Логируем первые несколько кошельков для отладки
         if (result.rows.length > 0) {
-            console.log(`[${new Date().toISOString()}] 🔍 Sample wallets from DB:`);
             result.rows.slice(0, 3).forEach(wallet => {
-                console.log(`  - ${wallet.address.slice(0, 8)}... (user: ${wallet.user_id}, group: ${wallet.group_id || 'none'})`);
             });
         }
         
@@ -618,92 +613,6 @@ class Database {
         }
     }
 
-    async getWalletCountFast(userId, groupId = null) {
-        try {
-            console.log(`[${new Date().toISOString()}] 🚀 Fast wallet count for user ${userId}, group ${groupId}`);
-            const startTime = Date.now();
-    
-            let query;
-            let params;
-    
-            if (groupId) {
-                // Для конкретной группы - простой подсчет
-                query = `
-                    SELECT 
-                        COUNT(*) as total_wallets,
-                        $2 as group_id,
-                        g.name as group_name,
-                        COUNT(*) as wallet_count
-                    FROM wallets w
-                    LEFT JOIN groups g ON w.group_id = g.id
-                    WHERE w.user_id = $1 AND w.is_active = true AND w.group_id = $2
-                    GROUP BY g.name
-                `;
-                params = [userId, groupId];
-            } else {
-                // Для всех групп - агрегированный подсчет
-                query = `
-                    SELECT 
-                        SUM(wallet_count) as total_wallets,
-                        group_id,
-                        group_name,
-                        wallet_count
-                    FROM (
-                        SELECT 
-                            w.group_id,
-                            COALESCE(g.name, 'No Group') as group_name,
-                            COUNT(*) as wallet_count
-                        FROM wallets w
-                        LEFT JOIN groups g ON w.group_id = g.id
-                        WHERE w.user_id = $1 AND w.is_active = true
-                        GROUP BY w.group_id, g.name
-                    ) as group_counts
-                    GROUP BY ROLLUP(group_id, group_name, wallet_count)
-                    ORDER BY group_id NULLS FIRST
-                `;
-                params = [userId];
-            }
-    
-            const result = await this.pool.query(query, params);
-            const duration = Date.now() - startTime;
-    
-            const totalWallets = result.rows.length > 0 ? parseInt(result.rows[0].total_wallets || 0) : 0;
-            
-            console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count completed in ${duration}ms: ${totalWallets} wallets`);
-    
-            if (groupId) {
-                // Для конкретной группы
-                const groupData = result.rows[0];
-                return {
-                    totalWallets: totalWallets,
-                    selectedGroup: groupData ? {
-                        groupId: groupData.group_id,
-                        walletCount: parseInt(groupData.wallet_count || 0),
-                        groupName: groupData.group_name
-                    } : null,
-                    groups: []
-                };
-            } else {
-                // Для всех групп
-                const groups = result.rows.slice(1).map(row => ({
-                    groupId: row.group_id,
-                    groupName: row.group_name,
-                    walletCount: parseInt(row.wallet_count || 0)
-                }));
-    
-                return {
-                    totalWallets: totalWallets,
-                    selectedGroup: null,
-                    groups: groups
-                };
-            }
-    
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error in fast wallet count:`, error);
-            throw new Error(`Failed to get wallet count: ${error.message}`);
-        }
-    }
-
     async getRecentTransactionsOptimized(hours = 24, limit = 400, transactionType = null, groupId = null, userId = null) {
         try {
             console.log(`[${new Date().toISOString()}] 🚀 Optimized transactions fetch: ${hours}h, limit ${limit}, user ${userId}`);
@@ -858,6 +767,7 @@ class Database {
     // server/src/database/connection.js - Добавить оптимизированные методы
 
 // НОВЫЙ МЕТОД: Быстрый подсчет кошельков без загрузки данных
+// Fixed getWalletCountFast method in server/src/database/connection.js
 async getWalletCountFast(userId, groupId = null) {
     try {
         console.log(`[${new Date().toISOString()}] 🚀 Fast wallet count for user ${userId}, group ${groupId}`);
@@ -867,7 +777,7 @@ async getWalletCountFast(userId, groupId = null) {
         let params;
 
         if (groupId) {
-            // Для конкретной группы - простой подсчет
+            // For specific group - simple count with proper parameter placeholders
             query = `
                 SELECT 
                     COUNT(*) as total_wallets,
@@ -881,7 +791,7 @@ async getWalletCountFast(userId, groupId = null) {
             `;
             params = [userId, groupId];
         } else {
-            // Для всех групп - агрегированный подсчет
+            // For all groups - aggregated count with proper parameter placeholders
             query = `
                 SELECT 
                     SUM(wallet_count) as total_wallets,
@@ -912,7 +822,7 @@ async getWalletCountFast(userId, groupId = null) {
         console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count completed in ${duration}ms: ${totalWallets} wallets`);
 
         if (groupId) {
-            // Для конкретной группы
+            // For specific group
             const groupData = result.rows[0];
             return {
                 totalWallets: totalWallets,
@@ -924,7 +834,7 @@ async getWalletCountFast(userId, groupId = null) {
                 groups: []
             };
         } else {
-            // Для всех групп
+            // For all groups
             const groups = result.rows.slice(1).map(row => ({
                 groupId: row.group_id,
                 groupName: row.group_name,
