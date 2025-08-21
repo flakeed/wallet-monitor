@@ -323,8 +323,13 @@ class SolanaWebSocketService {
 
     async subscribeToWallets() {
         this.subscriptions.clear();
-        const wallets = await this.db.getActiveWallets(this.activeGroupId, this.activeUserId);
+        // const wallets = await this.db.getActiveWallets(this.activeGroupId, this.activeUserId);
         
+        const walletData = await db.getActiveWallets(this.activeGroupId, this.activeUserId); // Возвращает объект { wallets, totalCount, hasMore }
+        const wallets = walletData.wallets; // Извлекаем массив
+        if (!Array.isArray(wallets)) {
+            throw new Error('Wallets is not an array');
+        }
         if (wallets.length === 0) {
             console.log(`[${new Date().toISOString()}] ℹ️ No wallets to subscribe for user ${this.activeUserId}${this.activeGroupId ? `, group ${this.activeGroupId}` : ''}`);
             return;
