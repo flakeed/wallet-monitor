@@ -534,23 +534,6 @@ function App() {
         <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
         {error && <ErrorMessage error={error} />}
         
-        {/* Performance Banner */}
-        {initializationTime && (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
-            <div className="flex items-center justify-between text-sm">
-              <div className="flex items-center text-green-800">
-                <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                <span className="font-medium">⚡ Ultra-Fast Mode Active</span>
-              </div>
-              <div className="text-green-600">
-                Loaded in {initializationTime}ms • {walletCount.toLocaleString()} wallets optimized
-              </div>
-            </div>
-          </div>
-        )}
-        
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
         
         <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
@@ -575,9 +558,6 @@ function App() {
               )}
             </div>
             <div className="flex items-center space-x-3">
-              <div className="text-sm text-gray-600">
-                ⚡ Ultra-Fast: {walletCount.toLocaleString()} wallets
-              </div>
               <button
                 className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
                 onClick={() => setView('tokens')}

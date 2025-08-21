@@ -273,7 +273,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
               : 'text-gray-600 hover:text-gray-900'
             }`}
         >
-          🚀 Optimized Bulk Import (up to 10,000)
+          Bulk Import (up to 10,000)
         </button>
       </div>
 
@@ -281,17 +281,9 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         <>
           <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex justify-between items-start mb-3">
-              <h4 className="text-sm font-medium text-blue-900">⚡ High-Speed Bulk Import (up to 10,000 wallets):</h4>
+              <h4 className="text-sm font-medium text-blue-900">Bulk Import (up to 10,000 wallets):</h4>
             </div>
             <div className="text-sm text-blue-800 space-y-1">
-              <p>• <strong>Optimized for speed:</strong> Up to 1000 wallets per batch (5x faster)</p>
-              <p>• <strong>Parallel processing:</strong> Database and WebSocket subscriptions in parallel</p>
-              <p>• <strong>Multi-user safe:</strong> Isolated processing per user and group</p>
-              <p>• One wallet address per line</p>
-              <p>• Optional: Add name after comma or tab: <code className="bg-blue-100 px-1 rounded">address,name</code></p>
-              <p>• Lines starting with # are treated as comments and ignored</p>
-              <p>• Duplicate addresses will be automatically detected and removed</p>
-              <p>• Maximum 10,000 unique wallets per import</p>
               <p className="font-medium">• Example:</p>
               <div className="mt-2 bg-blue-100 p-2 rounded font-mono text-xs">
                 # Trading wallets for strategy A<br />
@@ -375,7 +367,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
               <div className="flex items-center space-x-3 mb-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
                 <div className="flex-1">
-                  <div className="font-medium text-blue-900">⚡ High-speed bulk import in progress...</div>
+                  <div className="font-medium text-blue-900">Bulk import in progress...</div>
                   <div className="text-sm text-blue-700">
                     {importProgress.total > 0 ? (
                       <span>
@@ -480,7 +472,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
             <div>
               <div className="flex justify-between items-center mb-2">
                 <label className="block text-sm font-medium text-gray-700">
-                  🚀 Wallet Addresses * (up to 10,000 - optimized for speed)
+                  Wallet Addresses * (up to 10,000)
                 </label>
                 <button
                   type="button"
@@ -518,7 +510,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
                   )}
                 </div>
                 <div className="text-xs text-gray-400">
-                  Max: 10,000 wallets • Optimized: 1000/batch
+                  Max: 10,000 wallets
                 </div>
               </div>
             </div>
