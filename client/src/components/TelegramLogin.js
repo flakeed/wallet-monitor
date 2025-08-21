@@ -111,19 +111,19 @@ const TelegramLogin = ({ onLogin, botUsername }) => {
             </div>
           )}
 
-          <div className="text-center text-xs text-gray-500">
+          {/* <div className="text-center text-xs text-gray-500">
             <p>By logging in, you agree to our terms of service.</p>
             <p className="mt-1">Only whitelisted users can access the system.</p>
-          </div>
+          </div> */}
         </div>
 
-        <div className="mt-8 pt-6 border-t border-gray-200">
+        {/* <div className="mt-8 pt-6 border-t border-gray-200">
           <div className="flex items-center justify-center space-x-4 text-xs text-gray-400">
             <span>🔒 Secure</span>
             <span>⚡ Fast</span>
             <span>🛡️ Private</span>
           </div>
-        </div>
+        </div> */}
       </div>
     </div>
   );
