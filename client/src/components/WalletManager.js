@@ -188,7 +188,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
 
       setBulkResults({
         type: result.results.failed > 0 ? 'warning' : 'success',
-        message: `${result.message} (${finalTime.toFixed(1)}s, ${finalSpeed.toFixed(1)} wallets/sec)`,
+        message: `${result.message} (${finalTime.toFixed(1)}s, ${finalSpeed.toFixed(1)})`,
         details: result.results
       });
 

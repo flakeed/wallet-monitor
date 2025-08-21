@@ -1090,10 +1090,7 @@ async addWalletsBatchOptimizedWithCount(wallets) {
             const insertTime = Date.now() - startTime;
             const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
             
-            console.log(`[${new Date().toISOString()}] 🎉 Optimized batch with count completed in ${insertTime}ms:`);
-            console.log(`  - Attempted: ${wallets.length} wallets`);
-            console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
-            console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
+
 
             // Возвращаем данные вместе с обновленными счетчиками
             return {
