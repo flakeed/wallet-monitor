@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
 
 function TokenTracker({ groupId, transactions, timeframe }) {
@@ -7,8 +7,6 @@ function TokenTracker({ groupId, transactions, timeframe }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest');
-  const [newTokens, setNewTokens] = useState(new Set()); // Отслеживание новых токенов
-  const prevTokensRef = useRef(new Map()); // Предыдущее состояние токенов
 
 const aggregateTokens = (transactions, hours, groupId) => {
   const EXCLUDED_TOKENS = [
@@ -172,40 +170,12 @@ const aggregateTokens = (transactions, hours, groupId) => {
     }
   };
 
-  const detectNewTokens = (newTokens, previousTokens) => {
-    const newTokenSet = new Set();
-    
-    newTokens.forEach(token => {
-      if (!previousTokens.has(token.mint)) {
-        newTokenSet.add(token.mint);
-        console.log(`🆕 New token detected: ${token.symbol || token.mint}`);
-      }
-    });
-    
-    return newTokenSet;
-  };
-
   useEffect(() => {
     setLoading(true);
     try {
       const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
       const sortedTokens = sortTokens(aggregatedTokens, sortBy);
-      
-      // Создаем карту текущих токенов
-      const currentTokensMap = new Map(sortedTokens.map(token => [token.mint, token]));
-      
-      // Определяем новые токены
-      const newlyDetectedTokens = detectNewTokens(sortedTokens, prevTokensRef.current);
-      
-      // Обновляем состояние новых токенов
-      setNewTokens(newlyDetectedTokens);
-      
-      // Сохраняем текущие токены для следующего сравнения
-      prevTokensRef.current = currentTokensMap;
-      
       console.log('Aggregated and sorted tokens:', sortedTokens);
-      console.log('New tokens detected:', Array.from(newlyDetectedTokens));
-      
       setItems(sortedTokens);
       setError(null);
     } catch (e) {
@@ -218,17 +188,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
   useEffect(() => {
     setHours(timeframe);
   }, [timeframe]);
-
-  // Очищаем список новых токенов через 5 секунд
-  useEffect(() => {
-    if (newTokens.size > 0) {
-      const timer = setTimeout(() => {
-        setNewTokens(new Set());
-      }, 5000);
-
-      return () => clearTimeout(timer);
-    }
-  }, [newTokens]);
 
   const openGmgnChart = (mintAddress) => {
     if (!mintAddress) {
@@ -287,21 +246,6 @@ const aggregateTokens = (transactions, hours, groupId) => {
         </div>
       </div>
       
-      {/* Показать количество новых токенов если есть */}
-      {newTokens.size > 0 && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center space-x-2">
-            <svg className="w-5 h-5 text-blue-600 animate-pulse" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-            </svg>
-            <span className="text-blue-800 font-medium">
-              {newTokens.size} new token purchase{newTokens.size > 1 ? 's' : ''} detected!
-            </span>
-            <span className="text-blue-600 text-sm">(highlighting for 5 seconds)</span>
-          </div>
-        </div>
-      )}
-      
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
@@ -329,11 +273,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
         <div className="space-y-4">
           {items.map((token) => (
             <div key={token.mint}>
-              <TokenCard 
-                token={token} 
-                onOpenChart={() => openGmgnChart(token.mint)}
-                isNewToken={newTokens.has(token.mint)}
-              />
+              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} transactions={transactions} />
             </div>
           ))}
         </div>

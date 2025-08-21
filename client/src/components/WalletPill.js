@@ -1,8 +1,25 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
     const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
+    const [isHighlighted, setIsHighlighted] = useState(false);
+
+    // Check if the wallet has a recent buy (within 5 seconds)
+    useEffect(() => {
+        if (wallet.txBuys > 0 && wallet.firstBuyTime) {
+            const buyTime = new Date(wallet.firstBuyTime);
+            const now = new Date();
+            const diffInSeconds = (now - buyTime) / 1000;
+            if (diffInSeconds <= 5) {
+                setIsHighlighted(true);
+                const timer = setTimeout(() => {
+                    setIsHighlighted(false);
+                }, 5000); // Remove highlight after 5 seconds
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [wallet.firstBuyTime, wallet.txBuys]);
 
     const openGmgnTokenWithMaker = () => {
         if (!tokenMint || !wallet.address) {
@@ -30,10 +47,19 @@ function WalletPill({ wallet, tokenMint }) {
     };
 
     return (
-        <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
+        <div
+            className={`flex items-center justify-between border rounded-md px-2 py-1 bg-white transition-all duration-500 ${
+                isHighlighted ? 'bg-green-100 border-green-400' : ''
+            }`}
+        >
             <div className="truncate max-w-xs">
                 <div className="flex items-center space-x-2">
                     <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
+                    {isHighlighted && (
+                        <span className="text-xs px-1 py-0.5 rounded-full bg-green-500 text-white">
+                            New Buy
+                        </span>
+                    )}
                     <button
                         onClick={copyToClipboard}
                         className="text-gray-400 hover:text-blue-600 p-0.5 rounded"

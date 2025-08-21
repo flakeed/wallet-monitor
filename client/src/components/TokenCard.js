@@ -1,31 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
 
-function TokenCard({ token, onOpenChart, isNewToken = false }) {
+function TokenCard({ token, onOpenChart, transactions }) {
     const [priceData, setPriceData] = useState(null);
     const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
-    const [showAllWallets, setShowAllWallets] = useState(false);
-    const [isHighlighted, setIsHighlighted] = useState(isNewToken);
-    
+    const [isNewToken, setIsNewToken] = useState(false);
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
-    // Константа для количества кошельков, отображаемых по умолчанию
-    const DEFAULT_WALLETS_DISPLAY = 6;
-
-    // Эффект для подсветки новых токенов
+    // Highlight new buy transactions for this token for 5 seconds
     useEffect(() => {
-        if (isNewToken) {
-            setIsHighlighted(true);
-            const timer = setTimeout(() => {
-                setIsHighlighted(false);
-            }, 5000); // 5 секунд подсветки
-
-            return () => clearTimeout(timer);
+        if (transactions && token.mint) {
+            const recentBuy = transactions.find(
+                (tx) =>
+                    tx.transactionType === 'buy' &&
+                    tx.tokensBought?.some((t) => t.mint === token.mint) &&
+                    (new Date() - new Date(tx.time)) / 1000 <= 5
+            );
+            if (recentBuy) {
+                setIsNewToken(true);
+                const timer = setTimeout(() => {
+                    setIsNewToken(false);
+                }, 5000); // Remove highlight after 5 seconds
+                return () => clearTimeout(timer);
+            }
         }
-    }, [isNewToken]);
+    }, [transactions, token.mint]);
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -74,7 +76,7 @@ function TokenCard({ token, onOpenChart, isNewToken = false }) {
                 setSolPrice(data.price);
             } else {
                 console.error('Failed to fetch SOL price:', data.error);
-                setSolPrice(150); 
+                setSolPrice(150);
             }
         } catch (error) {
             console.error('Error fetching SOL price:', error);
@@ -216,22 +218,16 @@ function TokenCard({ token, onOpenChart, isNewToken = false }) {
         return `${Math.floor(diffInMinutes / 1440)}d ago`;
     };
 
-    // Определяем какие кошельки показывать
-    const walletsToShow = showAllWallets ? token.wallets : token.wallets.slice(0, DEFAULT_WALLETS_DISPLAY);
-    const hasMoreWallets = token.wallets.length > DEFAULT_WALLETS_DISPLAY;
-
     return (
-        <div className={`border rounded-lg p-4 transition-all duration-300 ${
-            isHighlighted ? 'bg-gray-100 border-gray-400' : 'bg-gray-50'
-        }`}>
+        <div className={`border rounded-lg p-4 bg-gray-50 transition-all duration-500 ${isNewToken ? 'bg-green-100 border-green-400' : ''}`}>
             <div className="flex items-center justify-between mb-3">
                 <div className="min-w-0">
                     <div className="flex items-center space-x-2">
                         <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
                         <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
-                        {isHighlighted && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-medium animate-pulse">
-                                NEW
+                        {isNewToken && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-green-500 text-white">
+                                New Buy
                             </span>
                         )}
                     </div>
@@ -315,37 +311,10 @@ function TokenCard({ token, onOpenChart, isNewToken = false }) {
                 </div>
             )}
 
-            {/* Кошельки с возможностью показать/скрыть */}
-            <div className="space-y-2 mb-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {walletsToShow.map((w) => (
-                        <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
-                    ))}
-                </div>
-                
-                {hasMoreWallets && (
-                    <div className="text-center">
-                        <button
-                            onClick={() => setShowAllWallets(!showAllWallets)}
-                            className="text-sm text-blue-600 hover:text-blue-800 font-medium transition-colors duration-200 flex items-center mx-auto space-x-1"
-                        >
-                            <span>
-                                {showAllWallets 
-                                    ? `Hide ${token.wallets.length - DEFAULT_WALLETS_DISPLAY} wallets` 
-                                    : `Show ${token.wallets.length - DEFAULT_WALLETS_DISPLAY} more wallets`
-                                }
-                            </span>
-                            <svg 
-                                className={`w-4 h-4 transform transition-transform duration-200 ${showAllWallets ? 'rotate-180' : ''}`} 
-                                fill="none" 
-                                stroke="currentColor" 
-                                viewBox="0 0 24 24"
-                            >
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                            </svg>
-                        </button>
-                    </div>
-                )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {token.wallets.map((w) => (
+                    <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
+                ))}
             </div>
 
             <div className="mt-2 flex space-x-2">
