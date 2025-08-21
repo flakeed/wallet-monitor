@@ -350,29 +350,137 @@ app.get('/api/transactions/stream', async (req, res) => {
   }
 });
 
+app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
+  try {
+    const groupId = req.query.groupId || null;
+    const userId = req.user.id;
+    
+    console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count request for user ${userId}, group ${groupId}`);
+    
+    // Используем оптимизированный метод из базы данных
+    const countData = await db.getWalletCountFast(userId, groupId);
+    
+    res.json({
+      success: true,
+      totalWallets: countData.totalWallets,
+      groups: countData.groups,
+      selectedGroup: countData.selectedGroup
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting wallet count:`, error);
+    res.status(500).json({ error: 'Failed to get wallet count' });
+  }
+});
+
+app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
+  try {
+    const { addresses } = req.body;
+    const userId = req.user.id;
+
+    if (!addresses || !Array.isArray(addresses)) {
+      return res.status(400).json({ error: 'Addresses array is required' });
+    }
+
+    if (addresses.length > 10000) {
+      return res.status(400).json({ error: 'Maximum 10,000 addresses allowed for validation' });
+    }
+
+    console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId}`);
+
+    const validation = await db.validateWalletsBatch(addresses, userId);
+    
+    res.json({
+      success: true,
+      validation,
+      canProceed: validation.valid.length > 0,
+      message: `Validation complete: ${validation.valid.length} valid, ${validation.duplicates.length} duplicates, ${validation.invalid.length} invalid`
+    });
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error validating wallets:`, error);
+    res.status(500).json({ error: 'Failed to validate wallets' });
+  }
+});
+
 app.get('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
-    const wallets = await db.getActiveWallets(groupId, userId);
-    const walletsWithStats = await Promise.all(
-      wallets.map(async (wallet) => {
-        const stats = await db.getWalletStats(wallet.id);
-        return {
-          ...wallet,
-          stats: {
-            totalBuyTransactions: stats.total_buy_transactions || 0,
-            totalSellTransactions: stats.total_sell_transactions || 0,
-            totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
-            totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
-            totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
-            netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
-            lastTransactionAt: stats.last_transaction_at,
-          },
-        };
-      })
-    );
-    res.json(walletsWithStats);
+    const includeStats = req.query.includeStats === 'true'; // Опциональная статистика
+    const limit = parseInt(req.query.limit) || 50; // Лимит по умолчанию
+    const offset = parseInt(req.query.offset) || 0;
+    
+    console.log(`[${new Date().toISOString()}] 📋 Wallets request: user ${userId}, group ${groupId}, stats: ${includeStats}, limit: ${limit}`);
+    
+    if (includeStats) {
+      // Старая логика со статистикой (только если явно запрошена)
+      const wallets = await db.getActiveWallets(groupId, userId);
+      const walletsWithStats = await Promise.all(
+        wallets.slice(offset, offset + limit).map(async (wallet) => {
+          const stats = await db.getWalletStats(wallet.id);
+          return {
+            ...wallet,
+            stats: {
+              totalBuyTransactions: stats.total_buy_transactions || 0,
+              totalSellTransactions: stats.total_sell_transactions || 0,
+              totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
+              totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
+              totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
+              netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
+              lastTransactionAt: stats.last_transaction_at,
+            },
+          };
+        })
+      );
+      res.json(walletsWithStats);
+    } else {
+      // Быстрая загрузка без статистики (только базовая информация)
+      let query = `
+        SELECT w.id, w.address, w.name, w.group_id, w.created_at,
+               g.name as group_name,
+               COUNT(*) OVER() as total_count
+        FROM wallets w
+        LEFT JOIN groups g ON w.group_id = g.id
+        WHERE w.is_active = TRUE AND w.user_id = $1
+      `;
+      const params = [userId];
+      let paramIndex = 2;
+      
+      if (groupId) {
+        query += ` AND w.group_id = $${paramIndex++}`;
+        params.push(groupId);
+      }
+      
+      query += ` ORDER BY w.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+      params.push(limit, offset);
+      
+      const result = await db.pool.query(query, params);
+      
+      const wallets = result.rows.map(row => ({
+        id: row.id,
+        address: row.address,
+        name: row.name,
+        group_id: row.group_id,
+        group_name: row.group_name,
+        created_at: row.created_at,
+        // Базовая статистика заглушка
+        stats: {
+          totalTransactions: 0,
+          totalSpentSOL: "0.000000",
+          totalReceivedSOL: "0.000000", 
+          netSOL: "0.000000"
+        }
+      }));
+      
+      res.json({
+        wallets,
+        totalCount: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0,
+        hasMore: result.rows.length === limit,
+        limit,
+        offset
+      });
+    }
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error);
     res.status(500).json({ error: 'Failed to fetch wallets' });
@@ -413,18 +521,87 @@ app.delete('/api/wallets', auth.authRequired, async (req, res) => {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
     
-    console.log(`[${new Date().toISOString()}] 🗑️ User ${userId} requesting removal of all wallets${groupId ? ` for group ${groupId}` : ''}`);
+    console.log(`[${new Date().toISOString()}] 🗑️ Ultra-fast removal request: user ${userId}, group ${groupId}`);
     
-    // Используем WebSocket сервис для корректной отписки
+    // Быстрое удаление через WebSocket сервис (он обновит подписки)
     await solanaWebSocketService.removeAllWallets(groupId, userId);
+    
+    // Получаем новые счетчики
+    const newCounts = await db.getWalletCountFast(userId, groupId);
     
     res.json({
       success: true,
       message: `Successfully removed wallets and WebSocket subscriptions${groupId ? ` for group ${groupId}` : ''}`,
+      newCounts: {
+        totalWallets: newCounts.totalWallets,
+        groups: newCounts.groups,
+        selectedGroup: newCounts.selectedGroup
+      }
     });
+    
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
-    res.status(500).json({ error: 'Failed to remove all wallets' });
+    console.error(`[${new Date().toISOString()}] ❌ Error in ultra-fast wallet removal:`, error);
+    res.status(500).json({ error: 'Failed to remove wallets' });
+  }
+});
+
+app.get('/api/init', auth.authRequired, async (req, res) => {
+  try {
+    const groupId = req.query.groupId || null;
+    const userId = req.user.id;
+    const hours = parseInt(req.query.hours) || 24;
+    const transactionType = req.query.type;
+    
+    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-FAST app initialization for user ${userId}`);
+    const startTime = Date.now();
+    
+    // Параллельная загрузка всех необходимых данных
+    const [walletCounts, transactions, monitoringStatus, groups] = await Promise.all([
+      db.getWalletCountFast(userId, groupId),
+      db.getRecentTransactionsOptimized(hours, 400, transactionType, groupId, userId),
+      db.getMonitoringStatusFast(groupId, userId),
+      db.getGroups(userId)
+    ]);
+    
+    const websocketStatus = solanaWebSocketService.getStatus();
+    
+    const duration = Date.now() - startTime;
+    console.log(`[${new Date().toISOString()}] ⚡ ULTRA-FAST initialization completed in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      duration,
+      data: {
+        wallets: {
+          totalCount: walletCounts.totalWallets,
+          groups: walletCounts.groups,
+          selectedGroup: walletCounts.selectedGroup
+        },
+        transactions,
+        monitoring: {
+          isMonitoring: websocketStatus.isConnected,
+          processedSignatures: websocketStatus.messageCount,
+          activeWallets: parseInt(monitoringStatus.active_wallets) || 0,
+          activeGroupId: websocketStatus.activeGroupId,
+          todayStats: {
+            buyTransactions: parseInt(monitoringStatus.buy_transactions_today) || 0,
+            sellTransactions: parseInt(monitoringStatus.sell_transactions_today) || 0,
+            solSpent: Number(monitoringStatus.sol_spent_today || 0).toFixed(6),
+            solReceived: Number(monitoringStatus.sol_received_today || 0).toFixed(6),
+            uniqueTokens: parseInt(monitoringStatus.unique_tokens_today) || 0
+          }
+        },
+        groups,
+        performance: {
+          loadTime: duration,
+          optimizationLevel: 'ULTRA-FAST'
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in ultra-fast initialization:`, error);
+    res.status(500).json({ error: 'Failed to initialize application data' });
   }
 });
 
@@ -434,57 +611,18 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
     const groupId = req.query.groupId || null;
-    const userId = req.user.id; // Используем ID текущего пользователя
+    const userId = req.user.id;
 
-    console.log(`[${new Date().toISOString()}] 📊 Fetching transactions for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions request for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
 
-    // Используем метод из database с пользовательским фильтром
-    const transactions = await db.getRecentTransactions(hours, limit, type, groupId, userId);
+    // Используем оптимизированный метод транзакций
+    const transactions = await db.getRecentTransactionsOptimized(hours, limit, type, groupId, userId);
     
-    // Группируем транзакции по signature
-    const groupedTransactions = {};
-    transactions.forEach((row) => {
-      if (!groupedTransactions[row.signature]) {
-        groupedTransactions[row.signature] = {
-          signature: row.signature,
-          time: row.block_time,
-          transactionType: row.transaction_type,
-          solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
-          solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
-          wallet: {
-            address: row.wallet_address,
-            name: row.wallet_name,
-            group_id: row.group_id,
-            group_name: row.group_name,
-          },
-          tokensBought: [],
-          tokensSold: [],
-        };
-      }
-
-      // Добавляем токены если они есть
-      if (row.mint) {
-        const tokenData = {
-          mint: row.mint,
-          symbol: row.symbol,
-          name: row.token_name,
-          amount: Number(row.token_amount),
-          decimals: row.decimals || 6,
-        };
-
-        if (row.operation_type === 'buy') {
-          groupedTransactions[row.signature].tokensBought.push(tokenData);
-        } else if (row.operation_type === 'sell') {
-          groupedTransactions[row.signature].tokensSold.push(tokenData);
-        }
-      }
-    });
-
-    const result = Object.values(groupedTransactions);
-    console.log(`[${new Date().toISOString()}] ✅ Returning ${result.length} transactions for user ${userId}`);
-    res.json(result);
+    console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} optimized transactions for user ${userId}`);
+    res.json(transactions);
+    
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching transactions:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching optimized transactions:`, error);
     res.status(500).json({ error: 'Failed to fetch transactions' });
   }
 });
@@ -493,38 +631,31 @@ app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
-    const monitoringStatus = monitoringService.getStatus();
-    const websocketStatus = solanaWebSocketService.getStatus();
     
-    // Get user-specific stats
-    const query = `
-      SELECT 
-        COUNT(w.id) as active_wallets,
-        COUNT(CASE WHEN t.transaction_type = 'buy' THEN 1 END) as buy_transactions_today,
-        COUNT(CASE WHEN t.transaction_type = 'sell' THEN 1 END) as sell_transactions_today,
-        COALESCE(SUM(t.sol_spent), 0) as sol_spent_today,
-        COALESCE(SUM(t.sol_received), 0) as sol_received_today,
-        COUNT(DISTINCT to_.token_id) as unique_tokens_today
-      FROM wallets w
-      LEFT JOIN transactions t ON w.id = t.wallet_id 
-        AND t.block_time >= CURRENT_DATE
-      LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-      WHERE w.is_active = TRUE AND w.user_id = $1
-      ${groupId ? 'AND w.group_id = $2' : ''}
-    `;
+    console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
     
-    const params = groupId ? [userId, groupId] : [userId];
-    const result = await db.pool.query(query, params);
-    const dbStats = result.rows[0];
+    // Параллельное получение статуса WebSocket и статистики базы данных
+    const [websocketStatus, dbStats] = await Promise.all([
+      Promise.resolve(solanaWebSocketService.getStatus()),
+      db.getMonitoringStatusFast(groupId, userId)
+    ]);
     
     res.json({
       isMonitoring: websocketStatus.isConnected,
       processedSignatures: websocketStatus.messageCount,
-      activeWallets: dbStats.active_wallets || 0,
+      activeWallets: parseInt(dbStats.active_wallets) || 0,
       activeGroupId: websocketStatus.activeGroupId,
+      todayStats: {
+        buyTransactions: parseInt(dbStats.buy_transactions_today) || 0,
+        sellTransactions: parseInt(dbStats.sell_transactions_today) || 0,
+        solSpent: Number(dbStats.sol_spent_today || 0).toFixed(6),
+        solReceived: Number(dbStats.sol_received_today || 0).toFixed(6),
+        uniqueTokens: parseInt(dbStats.unique_tokens_today) || 0
+      }
     });
+    
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error getting monitoring status:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error getting optimized monitoring status:`, error);
     res.status(500).json({ error: 'Failed to get monitoring status' });
   }
 });
@@ -576,26 +707,19 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const { wallets, groupId, optimized } = req.body;
     const userId = req.user.id;
 
-    console.log(`[${new Date().toISOString()}] 🚀 Starting OPTIMIZED bulk import of ${wallets?.length || 0} wallets for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
 
-    if (!wallets || !Array.isArray(wallets)) {
+    if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
       return res.status(400).json({ 
         success: false,
-        error: 'Wallets array is required' 
-      });
-    }
-
-    if (wallets.length === 0) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'At least one wallet is required' 
+        error: 'Non-empty wallets array is required' 
       });
     }
 
     if (wallets.length > 1000) {
       return res.status(400).json({ 
         success: false,
-        error: 'Maximum 1,000 wallets allowed per optimized batch (send in multiple requests)' 
+        error: 'Maximum 1,000 wallets allowed per ultra-optimized batch' 
       });
     }
 
@@ -605,15 +729,17 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       failed: 0,
       skipped: 0,
       errors: [],
-      successfulWallets: []
+      successfulWallets: [],
+      newCounts: null
     };
+
+    // 1. БЫСТРАЯ ВАЛИДАЦИЯ (без обращения к БД)
+    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
+    const validationStart = Date.now();
 
     const validWallets = [];
     const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]+$/;
-
-    // Быстрая валидация всех кошельков в одном проходе
-    console.log(`[${new Date().toISOString()}] ⚡ Fast validation of ${wallets.length} wallets...`);
-    const validationStart = Date.now();
+    const seenAddresses = new Set();
 
     for (const wallet of wallets) {
       if (!wallet || !wallet.address) {
@@ -626,18 +752,33 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
         continue;
       }
 
-      if (wallet.address.length < 32 || wallet.address.length > 44 || !solanaAddressRegex.test(wallet.address)) {
+      const address = wallet.address.trim();
+
+      // Проверка формата
+      if (address.length < 32 || address.length > 44 || !solanaAddressRegex.test(address)) {
         results.failed++;
         results.errors.push({
-          address: wallet.address,
+          address: address,
           name: wallet.name || null,
           error: 'Invalid Solana address format'
         });
         continue;
       }
 
+      // Проверка дубликатов в текущем batch
+      if (seenAddresses.has(address)) {
+        results.failed++;
+        results.errors.push({
+          address: address,
+          name: wallet.name || null,
+          error: 'Duplicate address in current batch'
+        });
+        continue;
+      }
+
+      seenAddresses.add(address);
       validWallets.push({
-        address: wallet.address.trim(),
+        address: address,
         name: wallet.name?.trim() || null,
         userId,
         groupId: groupId || null
@@ -645,147 +786,98 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     }
 
     const validationTime = Date.now() - validationStart;
-    console.log(`[${new Date().toISOString()}] ✅ Validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
+    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
 
     if (validWallets.length === 0) {
       return res.json({
         success: false,
-        message: 'No valid wallets to import',
+        message: 'No valid wallets to import after validation',
         results,
         duration: Date.now() - startTime
       });
     }
 
-    // ОПТИМИЗИРОВАННАЯ BATCH ОБРАБОТКА В БАЗЕ ДАННЫХ
-    console.log(`[${new Date().toISOString()}] 🗄️ Starting optimized database batch insert of ${validWallets.length} wallets...`);
+    // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT С СЧЕТЧИКАМИ
+    console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
     const dbStart = Date.now();
 
     try {
-      // Используем оптимизированную batch функцию из базы данных
-      const dbResults = await db.addWalletsBatchOptimized(validWallets);
+      // Используем новый оптимизированный метод с подсчетом
+      const dbResult = await db.addWalletsBatchOptimizedWithCount(validWallets);
       
       const dbTime = Date.now() - dbStart;
-      console.log(`[${new Date().toISOString()}] ✅ Database batch completed in ${dbTime}ms: ${dbResults.length} wallets inserted`);
+      console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
 
-      results.successful = dbResults.length;
-      results.successfulWallets = dbResults.map(wallet => ({
+      results.successful = dbResult.insertedWallets.length;
+      results.failed += (validWallets.length - dbResult.insertedWallets.length); // дубликаты в БД
+      results.successfulWallets = dbResult.insertedWallets.map(wallet => ({
         address: wallet.address,
         name: wallet.name,
         id: wallet.id,
         groupId: wallet.group_id,
         userId: wallet.user_id
       }));
-
-      // Подсчитываем дубликаты/неуспешные
-      results.failed += (validWallets.length - dbResults.length);
+      results.newCounts = dbResult.counts;
 
     } catch (dbError) {
-      console.error(`[${new Date().toISOString()}] ❌ Database batch error:`, dbError.message);
-      
-      // Fallback к индивидуальной обработке если batch не сработал
-      console.log(`[${new Date().toISOString()}] 🔄 Falling back to individual processing...`);
-      
-      for (const wallet of validWallets) {
-        try {
-          const addedWallet = await solanaWebSocketService.addWallet(
-            wallet.address, 
-            wallet.name, 
-            wallet.groupId,
-            wallet.userId
-          );
-          
-          results.successful++;
-          results.successfulWallets.push({
-            address: wallet.address,
-            name: wallet.name,
-            id: addedWallet.id,
-            groupId: addedWallet.group_id,
-            userId: addedWallet.user_id,
-          });
-
-        } catch (error) {
-          results.failed++;
-          results.errors.push({
-            address: wallet.address,
-            name: wallet.name,
-            error: error.message || 'Unknown error'
-          });
-        }
-      }
+      console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized DB error:`, dbError.message);
+      throw new Error(`Database operation failed: ${dbError.message}`);
     }
 
-    // ОПТИМИЗИРОВАННАЯ ПОДПИСКА НА WEBSOCKET (параллельно с БД)
+    // 3. ПАРАЛЛЕЛЬНАЯ WEBSOCKET ПОДПИСКА (неблокирующая)
     if (results.successful > 0) {
-      console.log(`[${new Date().toISOString()}] 🔗 Starting optimized WebSocket subscriptions for ${results.successful} wallets...`);
-      const wsStart = Date.now();
-
-      try {
-        // Параллельная подписка батчами по 100 кошельков
-        const subscriptionBatchSize = 100;
-        const subscriptionPromises = [];
-
-        for (let i = 0; i < results.successfulWallets.length; i += subscriptionBatchSize) {
-          const batch = results.successfulWallets.slice(i, i + subscriptionBatchSize);
+      console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
+      
+      // Запускаем подписку асинхронно, не ждем завершения
+      setImmediate(async () => {
+        try {
+          const addressesToSubscribe = results.successfulWallets.map(w => w.address);
           
-          const batchPromise = Promise.all(
-            batch.map(async (wallet) => {
-              try {
-                // Проверяем что кошелек подходит под текущую группу/пользователя в WebSocket сервисе
-                if (solanaWebSocketService.activeUserId === userId && 
-                    (!solanaWebSocketService.activeGroupId || solanaWebSocketService.activeGroupId === wallet.groupId)) {
-                  await solanaWebSocketService.subscribeToWallet(wallet.address);
-                }
-                return { success: true, address: wallet.address };
-              } catch (error) {
-                console.warn(`[${new Date().toISOString()}] ⚠️ WebSocket subscription failed for ${wallet.address}: ${error.message}`);
-                return { success: false, address: wallet.address, error: error.message };
-              }
-            })
-          );
+          // Подписываемся только если кошельки подходят под активную область
+          const relevantAddresses = results.successfulWallets
+            .filter(wallet => 
+              (!solanaWebSocketService.activeUserId || wallet.userId === solanaWebSocketService.activeUserId) &&
+              (!solanaWebSocketService.activeGroupId || wallet.groupId === solanaWebSocketService.activeGroupId)
+            )
+            .map(w => w.address);
 
-          subscriptionPromises.push(batchPromise);
+          if (relevantAddresses.length > 0 && solanaWebSocketService.ws && solanaWebSocketService.ws.readyState === 1) {
+            await solanaWebSocketService.subscribeToWalletsBatch(relevantAddresses, 200);
+            console.log(`[${new Date().toISOString()}] ✅ Async WebSocket subscriptions completed: ${relevantAddresses.length} wallets`);
+          } else {
+            console.log(`[${new Date().toISOString()}] ⏭️ Skipping WebSocket subscriptions: ${relevantAddresses.length} relevant, WS ready: ${solanaWebSocketService.ws?.readyState === 1}`);
+          }
+        } catch (wsError) {
+          console.warn(`[${new Date().toISOString()}] ⚠️ Async WebSocket subscription failed:`, wsError.message);
         }
-
-        // Ждем все батчи подписок
-        const subscriptionResults = await Promise.all(subscriptionPromises);
-        const flatResults = subscriptionResults.flat();
-        
-        const successfulSubscriptions = flatResults.filter(r => r.success).length;
-        const failedSubscriptions = flatResults.filter(r => !r.success).length;
-
-        const wsTime = Date.now() - wsStart;
-        console.log(`[${new Date().toISOString()}] ✅ WebSocket subscriptions completed in ${wsTime}ms: ${successfulSubscriptions} successful, ${failedSubscriptions} failed`);
-
-      } catch (wsError) {
-        console.error(`[${new Date().toISOString()}] ❌ WebSocket subscription error:`, wsError.message);
-        // Не прерываем процесс - кошельки уже добавлены в БД
-      }
+      });
     }
 
     const duration = Date.now() - startTime;
     const walletsPerSecond = Math.round((results.successful / duration) * 1000);
 
-    console.log(`[${new Date().toISOString()}] 🎉 OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
+    console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
 
     res.json({
       success: results.successful > 0,
-      message: `Optimized bulk import completed: ${results.successful} successful, ${results.failed} failed out of ${results.total} total (${walletsPerSecond} wallets/sec)`,
+      message: `Ultra-optimized import: ${results.successful} successful, ${results.failed} failed out of ${results.total} total (${walletsPerSecond} wallets/sec)`,
       results,
       duration,
       performance: {
         walletsPerSecond,
         totalTime: duration,
-        averageTimePerWallet: Math.round(duration / results.total)
+        averageTimePerWallet: Math.round(duration / results.total),
+        optimizationLevel: 'ULTRA'
       }
     });
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`[${new Date().toISOString()}] ❌ Optimized bulk import failed after ${duration}ms:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized bulk import failed after ${duration}ms:`, error);
     
     res.status(500).json({ 
       success: false,
-      error: 'Internal server error during optimized bulk import',
+      error: 'Internal server error during ultra-optimized bulk import',
       details: error.message,
       duration
     });

@@ -630,6 +630,804 @@ class Database {
         }
     }
 
+    async getWalletCountFast(userId, groupId = null) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🚀 Fast wallet count for user ${userId}, group ${groupId}`);
+            const startTime = Date.now();
+    
+            let query;
+            let params;
+    
+            if (groupId) {
+                // Для конкретной группы - простой подсчет
+                query = `
+                    SELECT 
+                        COUNT(*) as total_wallets,
+                        $2 as group_id,
+                        g.name as group_name,
+                        COUNT(*) as wallet_count
+                    FROM wallets w
+                    LEFT JOIN groups g ON w.group_id = g.id
+                    WHERE w.user_id = $1 AND w.is_active = true AND w.group_id = $2
+                    GROUP BY g.name
+                `;
+                params = [userId, groupId];
+            } else {
+                // Для всех групп - агрегированный подсчет
+                query = `
+                    SELECT 
+                        SUM(wallet_count) as total_wallets,
+                        group_id,
+                        group_name,
+                        wallet_count
+                    FROM (
+                        SELECT 
+                            w.group_id,
+                            COALESCE(g.name, 'No Group') as group_name,
+                            COUNT(*) as wallet_count
+                        FROM wallets w
+                        LEFT JOIN groups g ON w.group_id = g.id
+                        WHERE w.user_id = $1 AND w.is_active = true
+                        GROUP BY w.group_id, g.name
+                    ) as group_counts
+                    GROUP BY ROLLUP(group_id, group_name, wallet_count)
+                    ORDER BY group_id NULLS FIRST
+                `;
+                params = [userId];
+            }
+    
+            const result = await this.pool.query(query, params);
+            const duration = Date.now() - startTime;
+    
+            const totalWallets = result.rows.length > 0 ? parseInt(result.rows[0].total_wallets || 0) : 0;
+            
+            console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count completed in ${duration}ms: ${totalWallets} wallets`);
+    
+            if (groupId) {
+                // Для конкретной группы
+                const groupData = result.rows[0];
+                return {
+                    totalWallets: totalWallets,
+                    selectedGroup: groupData ? {
+                        groupId: groupData.group_id,
+                        walletCount: parseInt(groupData.wallet_count || 0),
+                        groupName: groupData.group_name
+                    } : null,
+                    groups: []
+                };
+            } else {
+                // Для всех групп
+                const groups = result.rows.slice(1).map(row => ({
+                    groupId: row.group_id,
+                    groupName: row.group_name,
+                    walletCount: parseInt(row.wallet_count || 0)
+                }));
+    
+                return {
+                    totalWallets: totalWallets,
+                    selectedGroup: null,
+                    groups: groups
+                };
+            }
+    
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error in fast wallet count:`, error);
+            throw new Error(`Failed to get wallet count: ${error.message}`);
+        }
+    }
+
+    async getRecentTransactionsOptimized(hours = 24, limit = 400, transactionType = null, groupId = null, userId = null) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🚀 Optimized transactions fetch: ${hours}h, limit ${limit}, user ${userId}`);
+            const startTime = Date.now();
+    
+            let typeFilter = '';
+            let queryParams = [limit];
+            let paramIndex = 2;
+            
+            if (transactionType) {
+                typeFilter = `AND t.transaction_type = $${paramIndex++}`;
+                queryParams.push(transactionType);
+            }
+            if (groupId) {
+                typeFilter += ` AND w.group_id = $${paramIndex++}`;
+                queryParams.push(groupId);
+            }
+            if (userId) {
+                typeFilter += ` AND w.user_id = $${paramIndex++}`;
+                queryParams.push(userId);
+            }
+    
+            // Оптимизированный запрос с минимальной выборкой данных
+            const optimizedQuery = `
+                SELECT 
+                    t.signature,
+                    t.block_time,
+                    t.transaction_type,
+                    t.sol_spent,
+                    t.sol_received,
+                    w.address as wallet_address,
+                    w.name as wallet_name,
+                    w.group_id,
+                    w.user_id,
+                    g.name as group_name,
+                    -- Агрегированные данные токенов в одном запросе
+                    COALESCE(
+                        json_agg(
+                            CASE 
+                                WHEN tk.mint IS NOT NULL 
+                                THEN json_build_object(
+                                    'mint', tk.mint,
+                                    'symbol', tk.symbol,
+                                    'name', tk.name,
+                                    'amount', to_.amount,
+                                    'decimals', tk.decimals,
+                                    'operation_type', to_.operation_type
+                                )
+                                ELSE NULL
+                            END
+                        ) FILTER (WHERE tk.mint IS NOT NULL),
+                        '[]'::json
+                    ) as tokens
+                FROM transactions t
+                JOIN wallets w ON t.wallet_id = w.id
+                LEFT JOIN groups g ON w.group_id = g.id
+                LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+                LEFT JOIN tokens tk ON to_.token_id = tk.id
+                WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+                ${typeFilter}
+                GROUP BY t.id, t.signature, t.block_time, t.transaction_type, 
+                         t.sol_spent, t.sol_received, w.address, w.name, 
+                         w.group_id, w.user_id, g.name
+                ORDER BY t.block_time DESC
+                LIMIT $1
+            `;
+    
+            const result = await this.pool.query(optimizedQuery, queryParams);
+            const duration = Date.now() - startTime;
+    
+            console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions fetch completed in ${duration}ms: ${result.rows.length} transactions`);
+    
+            // Преобразуем результат в нужный формат
+            return result.rows.map(row => {
+                const tokens = Array.isArray(row.tokens) ? row.tokens.filter(t => t !== null) : [];
+                
+                return {
+                    signature: row.signature,
+                    time: row.block_time,
+                    transactionType: row.transaction_type,
+                    solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
+                    solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
+                    wallet: {
+                        address: row.wallet_address,
+                        name: row.wallet_name,
+                        group_id: row.group_id,
+                        group_name: row.group_name,
+                    },
+                    tokensBought: tokens.filter(t => t.operation_type === 'buy').map(t => ({
+                        mint: t.mint,
+                        symbol: t.symbol,
+                        name: t.name,
+                        amount: Number(t.amount),
+                        decimals: t.decimals
+                    })),
+                    tokensSold: tokens.filter(t => t.operation_type === 'sell').map(t => ({
+                        mint: t.mint,
+                        symbol: t.symbol,
+                        name: t.name,
+                        amount: Number(t.amount),
+                        decimals: t.decimals
+                    }))
+                };
+            });
+    
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error in optimized transactions fetch:`, error);
+            throw error;
+        }
+    }
+
+    async getMonitoringStatusFast(groupId = null, userId = null) {
+        try {
+            console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
+            
+            let query = `
+                SELECT 
+                    COUNT(DISTINCT w.id) as active_wallets,
+                    COUNT(CASE WHEN t.transaction_type = 'buy' AND t.block_time >= CURRENT_DATE THEN 1 END) as buy_transactions_today,
+                    COUNT(CASE WHEN t.transaction_type = 'sell' AND t.block_time >= CURRENT_DATE THEN 1 END) as sell_transactions_today,
+                    COALESCE(SUM(CASE WHEN t.block_time >= CURRENT_DATE THEN t.sol_spent ELSE 0 END), 0) as sol_spent_today,
+                    COALESCE(SUM(CASE WHEN t.block_time >= CURRENT_DATE THEN t.sol_received ELSE 0 END), 0) as sol_received_today,
+                    COUNT(DISTINCT CASE WHEN t.block_time >= CURRENT_DATE THEN to_.token_id END) as unique_tokens_today
+                FROM wallets w
+                LEFT JOIN transactions t ON w.id = t.wallet_id 
+                LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+                WHERE w.is_active = TRUE
+            `;
+            
+            const params = [];
+            let paramIndex = 1;
+            
+            if (userId) {
+                query += ` AND w.user_id = $${paramIndex++}`;
+                params.push(userId);
+            }
+            
+            if (groupId) {
+                query += ` AND w.group_id = $${paramIndex}`;
+                params.push(groupId);
+            }
+            
+            const result = await this.pool.query(query, params);
+            return result.rows[0];
+            
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error in fast monitoring status:`, error);
+            throw error;
+        }
+    }
+
+    // server/src/database/connection.js - Добавить оптимизированные методы
+
+// НОВЫЙ МЕТОД: Быстрый подсчет кошельков без загрузки данных
+async getWalletCountFast(userId, groupId = null) {
+    try {
+        console.log(`[${new Date().toISOString()}] 🚀 Fast wallet count for user ${userId}, group ${groupId}`);
+        const startTime = Date.now();
+
+        let query;
+        let params;
+
+        if (groupId) {
+            // Для конкретной группы - простой подсчет
+            query = `
+                SELECT 
+                    COUNT(*) as total_wallets,
+                    $2 as group_id,
+                    g.name as group_name,
+                    COUNT(*) as wallet_count
+                FROM wallets w
+                LEFT JOIN groups g ON w.group_id = g.id
+                WHERE w.user_id = $1 AND w.is_active = true AND w.group_id = $2
+                GROUP BY g.name
+            `;
+            params = [userId, groupId];
+        } else {
+            // Для всех групп - агрегированный подсчет
+            query = `
+                SELECT 
+                    SUM(wallet_count) as total_wallets,
+                    group_id,
+                    group_name,
+                    wallet_count
+                FROM (
+                    SELECT 
+                        w.group_id,
+                        COALESCE(g.name, 'No Group') as group_name,
+                        COUNT(*) as wallet_count
+                    FROM wallets w
+                    LEFT JOIN groups g ON w.group_id = g.id
+                    WHERE w.user_id = $1 AND w.is_active = true
+                    GROUP BY w.group_id, g.name
+                ) as group_counts
+                GROUP BY ROLLUP(group_id, group_name, wallet_count)
+                ORDER BY group_id NULLS FIRST
+            `;
+            params = [userId];
+        }
+
+        const result = await this.pool.query(query, params);
+        const duration = Date.now() - startTime;
+
+        const totalWallets = result.rows.length > 0 ? parseInt(result.rows[0].total_wallets || 0) : 0;
+        
+        console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count completed in ${duration}ms: ${totalWallets} wallets`);
+
+        if (groupId) {
+            // Для конкретной группы
+            const groupData = result.rows[0];
+            return {
+                totalWallets: totalWallets,
+                selectedGroup: groupData ? {
+                    groupId: groupData.group_id,
+                    walletCount: parseInt(groupData.wallet_count || 0),
+                    groupName: groupData.group_name
+                } : null,
+                groups: []
+            };
+        } else {
+            // Для всех групп
+            const groups = result.rows.slice(1).map(row => ({
+                groupId: row.group_id,
+                groupName: row.group_name,
+                walletCount: parseInt(row.wallet_count || 0)
+            }));
+
+            return {
+                totalWallets: totalWallets,
+                selectedGroup: null,
+                groups: groups
+            };
+        }
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in fast wallet count:`, error);
+        throw new Error(`Failed to get wallet count: ${error.message}`);
+    }
+}
+
+// НОВЫЙ МЕТОД: Получение только активных транзакций без детальных данных кошельков
+async getRecentTransactionsOptimized(hours = 24, limit = 400, transactionType = null, groupId = null, userId = null) {
+    try {
+        console.log(`[${new Date().toISOString()}] 🚀 Optimized transactions fetch: ${hours}h, limit ${limit}, user ${userId}`);
+        const startTime = Date.now();
+
+        let typeFilter = '';
+        let queryParams = [limit];
+        let paramIndex = 2;
+        
+        if (transactionType) {
+            typeFilter = `AND t.transaction_type = $${paramIndex++}`;
+            queryParams.push(transactionType);
+        }
+        if (groupId) {
+            typeFilter += ` AND w.group_id = $${paramIndex++}`;
+            queryParams.push(groupId);
+        }
+        if (userId) {
+            typeFilter += ` AND w.user_id = $${paramIndex++}`;
+            queryParams.push(userId);
+        }
+
+        // Оптимизированный запрос с минимальной выборкой данных
+        const optimizedQuery = `
+            SELECT 
+                t.signature,
+                t.block_time,
+                t.transaction_type,
+                t.sol_spent,
+                t.sol_received,
+                w.address as wallet_address,
+                w.name as wallet_name,
+                w.group_id,
+                w.user_id,
+                g.name as group_name,
+                -- Агрегированные данные токенов в одном запросе
+                COALESCE(
+                    json_agg(
+                        CASE 
+                            WHEN tk.mint IS NOT NULL 
+                            THEN json_build_object(
+                                'mint', tk.mint,
+                                'symbol', tk.symbol,
+                                'name', tk.name,
+                                'amount', to_.amount,
+                                'decimals', tk.decimals,
+                                'operation_type', to_.operation_type
+                            )
+                            ELSE NULL
+                        END
+                    ) FILTER (WHERE tk.mint IS NOT NULL),
+                    '[]'::json
+                ) as tokens
+            FROM transactions t
+            JOIN wallets w ON t.wallet_id = w.id
+            LEFT JOIN groups g ON w.group_id = g.id
+            LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+            LEFT JOIN tokens tk ON to_.token_id = tk.id
+            WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+            ${typeFilter}
+            GROUP BY t.id, t.signature, t.block_time, t.transaction_type, 
+                     t.sol_spent, t.sol_received, w.address, w.name, 
+                     w.group_id, w.user_id, g.name
+            ORDER BY t.block_time DESC
+            LIMIT $1
+        `;
+
+        const result = await this.pool.query(optimizedQuery, queryParams);
+        const duration = Date.now() - startTime;
+
+        console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions fetch completed in ${duration}ms: ${result.rows.length} transactions`);
+
+        // Преобразуем результат в нужный формат
+        return result.rows.map(row => {
+            const tokens = Array.isArray(row.tokens) ? row.tokens.filter(t => t !== null) : [];
+            
+            return {
+                signature: row.signature,
+                time: row.block_time,
+                transactionType: row.transaction_type,
+                solSpent: row.sol_spent ? Number(row.sol_spent).toFixed(6) : null,
+                solReceived: row.sol_received ? Number(row.sol_received).toFixed(6) : null,
+                wallet: {
+                    address: row.wallet_address,
+                    name: row.wallet_name,
+                    group_id: row.group_id,
+                    group_name: row.group_name,
+                },
+                tokensBought: tokens.filter(t => t.operation_type === 'buy').map(t => ({
+                    mint: t.mint,
+                    symbol: t.symbol,
+                    name: t.name,
+                    amount: Number(t.amount),
+                    decimals: t.decimals
+                })),
+                tokensSold: tokens.filter(t => t.operation_type === 'sell').map(t => ({
+                    mint: t.mint,
+                    symbol: t.symbol,
+                    name: t.name,
+                    amount: Number(t.amount),
+                    decimals: t.decimals
+                }))
+            };
+        });
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in optimized transactions fetch:`, error);
+        throw error;
+    }
+}
+
+// НОВЫЙ МЕТОД: Быстрое получение статуса мониторинга без загрузки кошельков
+async getMonitoringStatusFast(groupId = null, userId = null) {
+    try {
+        console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
+        
+        let query = `
+            SELECT 
+                COUNT(DISTINCT w.id) as active_wallets,
+                COUNT(CASE WHEN t.transaction_type = 'buy' AND t.block_time >= CURRENT_DATE THEN 1 END) as buy_transactions_today,
+                COUNT(CASE WHEN t.transaction_type = 'sell' AND t.block_time >= CURRENT_DATE THEN 1 END) as sell_transactions_today,
+                COALESCE(SUM(CASE WHEN t.block_time >= CURRENT_DATE THEN t.sol_spent ELSE 0 END), 0) as sol_spent_today,
+                COALESCE(SUM(CASE WHEN t.block_time >= CURRENT_DATE THEN t.sol_received ELSE 0 END), 0) as sol_received_today,
+                COUNT(DISTINCT CASE WHEN t.block_time >= CURRENT_DATE THEN to_.token_id END) as unique_tokens_today
+            FROM wallets w
+            LEFT JOIN transactions t ON w.id = t.wallet_id 
+            LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+            WHERE w.is_active = TRUE
+        `;
+        
+        const params = [];
+        let paramIndex = 1;
+        
+        if (userId) {
+            query += ` AND w.user_id = $${paramIndex++}`;
+            params.push(userId);
+        }
+        
+        if (groupId) {
+            query += ` AND w.group_id = $${paramIndex}`;
+            params.push(groupId);
+        }
+        
+        const result = await this.pool.query(query, params);
+        return result.rows[0];
+        
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in fast monitoring status:`, error);
+        throw error;
+    }
+}
+
+// ОБНОВЛЕННЫЙ МЕТОД: Оптимизированный batch insert с подсчетом
+async addWalletsBatchOptimizedWithCount(wallets) {
+    if (!wallets || wallets.length === 0) {
+        throw new Error('Wallets array is required');
+    }
+
+    const maxBatchSize = 1000;
+    if (wallets.length > maxBatchSize) {
+        throw new Error(`Batch size too large. Maximum ${maxBatchSize} wallets per batch.`);
+    }
+
+    console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert with count tracking: ${wallets.length} wallets`);
+    const startTime = Date.now();
+
+    const walletsWithUser = wallets.filter(w => w.userId);
+    if (walletsWithUser.length !== wallets.length) {
+        throw new Error('All wallets must have userId specified');
+    }
+
+    try {
+        const client = await this.pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            // Batch insert с подсчетом новых записей
+            const values = [];
+            const placeholders = [];
+            
+            wallets.forEach((wallet, index) => {
+                const offset = index * 4;
+                placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}::uuid, $${offset + 4}::uuid)`);
+                values.push(
+                    wallet.address,
+                    wallet.name || null,
+                    wallet.groupId || null,
+                    wallet.userId
+                );
+            });
+
+            const insertQuery = `
+                INSERT INTO wallets (address, name, group_id, user_id)
+                VALUES ${placeholders.join(', ')}
+                ON CONFLICT (address, user_id) DO NOTHING
+                RETURNING id, address, name, group_id, user_id, created_at
+            `;
+
+            const insertResult = await client.query(insertQuery, values);
+
+            // Быстрое получение обновленных счетчиков
+            const countQuery = `
+                SELECT 
+                    COUNT(*) as total_count,
+                    group_id,
+                    COUNT(*) as group_count
+                FROM wallets 
+                WHERE user_id = $1 AND is_active = true
+                GROUP BY ROLLUP(group_id)
+                ORDER BY group_id NULLS FIRST
+            `;
+            
+            const countResult = await client.query(countQuery, [wallets[0].userId]);
+
+            await client.query('COMMIT');
+
+            const insertTime = Date.now() - startTime;
+            const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
+            
+            console.log(`[${new Date().toISOString()}] 🎉 Optimized batch with count completed in ${insertTime}ms:`);
+            console.log(`  - Attempted: ${wallets.length} wallets`);
+            console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
+            console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
+
+            // Возвращаем данные вместе с обновленными счетчиками
+            return {
+                insertedWallets: insertResult.rows,
+                counts: {
+                    totalWallets: countResult.rows[0]?.total_count || 0,
+                    groupCounts: countResult.rows.slice(1).map(row => ({
+                        groupId: row.group_id,
+                        count: parseInt(row.group_count || 0)
+                    }))
+                }
+            };
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Optimized batch with count failed:`, error.message);
+        throw new Error(`Optimized batch insert failed: ${error.message}`);
+    }
+}
+
+async getWalletsPaginated(userId, groupId = null, limit = 50, offset = 0, includeStats = false) {
+    try {
+        console.log(`[${new Date().toISOString()}] 📄 Paginated wallets: user ${userId}, group ${groupId}, limit ${limit}, offset ${offset}`);
+        const startTime = Date.now();
+
+        let query = `
+            SELECT w.id, w.address, w.name, w.group_id, w.created_at,
+                   g.name as group_name,
+                   COUNT(*) OVER() as total_count
+        `;
+
+        if (includeStats) {
+            query += `,
+                   COALESCE(ws.total_buy_transactions, 0) as total_buy_transactions,
+                   COALESCE(ws.total_sell_transactions, 0) as total_sell_transactions,
+                   COALESCE(ws.total_spent_sol, 0) as total_spent_sol,
+                   COALESCE(ws.total_received_sol, 0) as total_received_sol,
+                   ws.last_transaction_at
+            `;
+        }
+
+        query += `
+            FROM wallets w
+            LEFT JOIN groups g ON w.group_id = g.id
+        `;
+
+        if (includeStats) {
+            query += ` LEFT JOIN wallet_stats ws ON w.id = ws.wallet_id`;
+        }
+
+        query += ` WHERE w.is_active = TRUE AND w.user_id = $1`;
+        
+        const params = [userId];
+        let paramIndex = 2;
+        
+        if (groupId) {
+            query += ` AND w.group_id = ${paramIndex++}`;
+            params.push(groupId);
+        }
+        
+        query += ` ORDER BY w.created_at DESC LIMIT ${paramIndex++} OFFSET ${paramIndex}`;
+        params.push(limit, offset);
+        
+        const result = await this.pool.query(query, params);
+        const duration = Date.now() - startTime;
+
+        console.log(`[${new Date().toISOString()}] ⚡ Paginated wallets completed in ${duration}ms: ${result.rows.length} wallets`);
+
+        const wallets = result.rows.map(row => {
+            const wallet = {
+                id: row.id,
+                address: row.address,
+                name: row.name,
+                group_id: row.group_id,
+                group_name: row.group_name,
+                created_at: row.created_at
+            };
+
+            if (includeStats) {
+                wallet.stats = {
+                    totalBuyTransactions: parseInt(row.total_buy_transactions || 0),
+                    totalSellTransactions: parseInt(row.total_sell_transactions || 0),
+                    totalTransactions: parseInt(row.total_buy_transactions || 0) + parseInt(row.total_sell_transactions || 0),
+                    totalSpentSOL: Number(row.total_spent_sol || 0).toFixed(6),
+                    totalReceivedSOL: Number(row.total_received_sol || 0).toFixed(6),
+                    netSOL: (Number(row.total_received_sol || 0) - Number(row.total_spent_sol || 0)).toFixed(6),
+                    lastTransactionAt: row.last_transaction_at
+                };
+            }
+
+            return wallet;
+        });
+
+        return {
+            wallets,
+            totalCount: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0,
+            hasMore: result.rows.length === limit,
+            limit,
+            offset
+        };
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in paginated wallets:`, error);
+        throw error;
+    }
+}
+
+// НОВЫЙ МЕТОД: Быстрое удаление кошельков с обновлением счетчиков
+async removeAllWalletsWithCount(groupId = null, userId = null) {
+    try {
+        console.log(`[${new Date().toISOString()}] 🗑️ Fast remove all wallets: user ${userId}, group ${groupId}`);
+        const startTime = Date.now();
+
+        const client = await this.pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+
+            // Удаляем кошельки
+            let deleteQuery = `DELETE FROM wallets WHERE 1=1`;
+            const deleteParams = [];
+            let paramIndex = 1;
+            
+            if (userId) {
+                deleteQuery += ` AND user_id = ${paramIndex++}`;
+                deleteParams.push(userId);
+            }
+            
+            if (groupId) {
+                deleteQuery += ` AND group_id = ${paramIndex}`;
+                deleteParams.push(groupId);
+            }
+            
+            const deleteResult = await client.query(deleteQuery, deleteParams);
+
+            // Быстро получаем новые счетчики
+            let countQuery = `
+                SELECT 
+                    COUNT(*) as total_wallets,
+                    group_id,
+                    COUNT(*) as group_wallets
+                FROM wallets 
+                WHERE is_active = true
+            `;
+            const countParams = [];
+            let countParamIndex = 1;
+
+            if (userId) {
+                countQuery += ` AND user_id = ${countParamIndex++}`;
+                countParams.push(userId);
+            }
+
+            countQuery += ` GROUP BY ROLLUP(group_id) ORDER BY group_id NULLS FIRST`;
+            
+            const countResult = await client.query(countQuery, countParams);
+
+            await client.query('COMMIT');
+
+            const duration = Date.now() - startTime;
+            console.log(`[${new Date().toISOString()}] ✅ Fast remove completed in ${duration}ms: ${deleteResult.rowCount} wallets removed`);
+
+            return {
+                deletedCount: deleteResult.rowCount,
+                newCounts: {
+                    totalWallets: countResult.rows[0]?.total_wallets || 0,
+                    groupCounts: countResult.rows.slice(1).map(row => ({
+                        groupId: row.group_id,
+                        count: parseInt(row.group_wallets || 0)
+                    }))
+                }
+            };
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in fast remove all wallets:`, error);
+        throw new Error(`Failed to remove wallets: ${error.message}`);
+    }
+}
+
+// НОВЫЙ МЕТОД: Быстрая валидация кошельков без вставки
+async validateWalletsBatch(addresses, userId) {
+    try {
+        console.log(`[${new Date().toISOString()}] ⚡ Fast wallet validation: ${addresses.length} addresses for user ${userId}`);
+        const startTime = Date.now();
+
+        if (addresses.length === 0) return { valid: [], duplicates: [], invalid: [] };
+
+        // Быстрая проверка существующих кошельков
+        const query = `
+            SELECT address 
+            FROM wallets 
+            WHERE address = ANY($1) AND user_id = $2 AND is_active = true
+        `;
+        
+        const result = await this.pool.query(query, [addresses, userId]);
+        const existingAddresses = new Set(result.rows.map(row => row.address));
+
+        const duration = Date.now() - startTime;
+        console.log(`[${new Date().toISOString()}] ⚡ Wallet validation completed in ${duration}ms: ${existingAddresses.size} duplicates found`);
+
+        // Разделяем на категории
+        const valid = [];
+        const duplicates = [];
+        const invalid = [];
+
+        const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]+$/;
+
+        addresses.forEach(address => {
+            if (!address || address.length < 32 || address.length > 44 || !solanaAddressRegex.test(address)) {
+                invalid.push(address);
+            } else if (existingAddresses.has(address)) {
+                duplicates.push(address);
+            } else {
+                valid.push(address);
+            }
+        });
+
+        return {
+            valid,
+            duplicates,
+            invalid,
+            summary: {
+                total: addresses.length,
+                validCount: valid.length,
+                duplicateCount: duplicates.length,
+                invalidCount: invalid.length
+            }
+        };
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in wallet validation:`, error);
+        throw error;
+    }
+}
+
     async getWalletsByAddress(address) {
         const query = `
             SELECT w.*, u.username, u.first_name, g.name as group_name
