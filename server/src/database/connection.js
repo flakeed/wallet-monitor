@@ -629,6 +629,24 @@ class Database {
         }
       }
 
+      async getActiveWalletCount(groupId = null, userId = null) {
+        let query = `SELECT COUNT(*) as total_count FROM wallets WHERE is_active = TRUE`;
+        const params = [];
+        let paramIndex = 1;
+      
+        if (userId) {
+          query += ` AND user_id = $${paramIndex++}`;
+          params.push(userId);
+        }
+      
+        if (groupId) {
+          query += ` AND group_id = $${paramIndex}`;
+          params.push(groupId);
+        }
+      
+        const result = await this.pool.query(query, params);
+        return parseInt(result.rows[0].total_count);
+      }
     // NEW: User-specific wallet methods
     async checkWalletExistsForUser(address, userId) {
         const query = `

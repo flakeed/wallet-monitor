@@ -154,6 +154,18 @@ app.post('/api/admin/whitelist', auth.authRequired, auth.adminRequired, async (r
   }
 });
 
+app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
+  try {
+    const groupId = req.query.groupId || null;
+    const userId = req.user.id;
+    const count = await db.getActiveWalletCount(groupId, userId);
+    res.json({ totalCount: count });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching wallet count:`, error);
+    res.status(500).json({ error: 'Failed to fetch wallet count' });
+  }
+});
+
 app.delete('/api/admin/whitelist/:telegramId', auth.authRequired, auth.adminRequired, async (req, res) => {
   try {
     const { telegramId } = req.params;
