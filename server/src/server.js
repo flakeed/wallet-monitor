@@ -379,6 +379,80 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
   }
 });
 
+app.delete('/api/wallets', auth.authRequired, async (req, res) => {
+  try {
+    const groupId = req.query.groupId || null;
+    const userId = req.user.id; // Всегда используем ID текущего пользователя
+    
+    console.log(`[${new Date().toISOString()}] 🗑️ Delete request from user ${userId}${groupId ? ` for group ${groupId}` : ' for ALL groups'}`);
+    
+    // Проверяем права доступа к группе (если указана)
+    if (groupId) {
+      const groupCheck = await db.pool.query(
+        `SELECT id FROM groups WHERE id = $1 AND user_id = $2`,
+        [groupId, userId]
+      );
+      
+      if (groupCheck.rows.length === 0) {
+        return res.status(404).json({ 
+          error: 'Group not found or access denied' 
+        });
+      }
+    }
+    
+    // Получаем статистику ДО удаления для отчета
+    const beforeStats = await db.pool.query(`
+      SELECT 
+        COUNT(w.id) as wallet_count,
+        COUNT(t.id) as transaction_count,
+        COUNT(to_.id) as token_operation_count
+      FROM wallets w
+      LEFT JOIN transactions t ON w.id = t.wallet_id
+      LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+      WHERE w.user_id = $1 ${groupId ? 'AND w.group_id = $2' : ''}
+    `, groupId ? [userId, groupId] : [userId]);
+    
+    const beforeCount = beforeStats.rows[0];
+    
+    if (beforeCount.wallet_count === 0) {
+      return res.json({
+        success: true,
+        message: 'No wallets found to delete',
+        deletedCount: 0,
+      });
+    }
+    
+    // Выполняем удаление через WebSocket сервис (который вызовет database)
+    const result = await solanaWebSocketService.removeAllWallets(groupId, userId);
+    
+    // Формируем сообщение для ответа
+    const groupMessage = groupId ? ` from group ${groupId}` : ' from all groups';
+    const detailMessage = [
+      `${result.deletedCount} wallets`,
+      `${result.deletedTransactions || 0} transactions`,
+      `${result.deletedTokenOperations || 0} token operations`
+    ].join(', ');
+    
+    res.json({
+      success: true,
+      message: `Successfully removed ${detailMessage}${groupMessage}`,
+      deletedCount: result.deletedCount,
+      deletedTransactions: result.deletedTransactions || 0,
+      deletedTokenOperations: result.deletedTokenOperations || 0,
+      deletedStats: result.deletedStats || 0,
+      groupId: groupId,
+      userId: userId
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error removing wallets:`, error);
+    res.status(500).json({ 
+      error: 'Failed to remove wallets',
+      details: error.message 
+    });
+  }
+});
+
 app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
   try {
     const address = req.params.address.trim();
@@ -388,48 +462,31 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
     }
 
-    // Check if wallet belongs to user
-    const wallet = await db.getWalletByAddress(address);
-    if (!wallet || wallet.user_id !== userId) {
-      return res.status(404).json({ error: 'Wallet not found or access denied' });
-    }
+    console.log(`[${new Date().toISOString()}] 🗑️ Removing wallet ${address.slice(0, 8)}... for user ${userId}`);
 
-    await solanaWebSocketService.removeWallet(address);
+    // Используем новый метод для удаления с транзакциями
+    const result = await db.removeWalletWithTransactions(address, userId);
+    
+    // Отписываемся от WebSocket
+    await solanaWebSocketService.unsubscribeFromWallet(address);
+    
     res.json({
       success: true,
-      message: 'Wallet and all associated data removed successfully',
+      message: `Wallet and all associated data removed successfully`,
+      wallet: result.deletedWallet,
+      deletedTransactions: result.deletedTransactions,
+      deletedTokenOperations: result.deletedTokenOperations,
+      deletedStats: result.deletedStats
     });
+    
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error removing wallet:`, error);
-    if (error.message.includes('Wallet not found')) {
-      res.status(404).json({ error: 'Wallet not found in monitoring list' });
+    
+    if (error.message.includes('not found') || error.message.includes('access denied')) {
+      res.status(404).json({ error: 'Wallet not found or access denied' });
     } else {
-      res.status(500).json({ error: 'Failed to remove wallet' });
+      res.status(500).json({ error: 'Failed to remove wallet', details: error.message });
     }
-  }
-});
-
-app.delete('/api/wallets', auth.authRequired, async (req, res) => {
-  try {
-    const groupId = req.query.groupId || null;
-    const userId = req.user.id;
-    
-    // Remove only user's wallets
-    const query = groupId 
-      ? `DELETE FROM wallets WHERE user_id = $1 AND group_id = $2`
-      : `DELETE FROM wallets WHERE user_id = $1`;
-    const params = groupId ? [userId, groupId] : [userId];
-    
-    const result = await db.pool.query(query, params);
-    
-    res.json({
-      success: true,
-      message: `Successfully removed wallets and associated data${groupId ? ` for group ${groupId}` : ''}`,
-      deletedCount: result.rowCount,
-    });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
-    res.status(500).json({ error: 'Failed to remove all wallets' });
   }
 });
 

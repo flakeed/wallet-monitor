@@ -510,30 +510,41 @@ class SolanaWebSocketService {
 
     async removeAllWallets(groupId = null, userId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Starting optimized removal of all wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
+            console.log(`[${new Date().toISOString()}] 🗑️ Starting removal of wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
             
-            // Сначала получаем список кошельков для отписки
+            // 1. Сначала получаем список кошельков для отписки (ДО удаления из БД)
             const walletsToRemove = await this.db.getActiveWallets(groupId, userId);
             const addressesToUnsubscribe = walletsToRemove.map(w => w.address);
-
-            // Отписываемся от WebSocket batch операцией
+            
+            console.log(`[${new Date().toISOString()}] 📋 Found ${walletsToRemove.length} wallets to remove and unsubscribe`);
+            
+            // 2. Отписываемся от WebSocket для найденных кошельков
             if (addressesToUnsubscribe.length > 0) {
+                console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${addressesToUnsubscribe.length} wallets...`);
                 await this.unsubscribeFromWalletsBatch(addressesToUnsubscribe);
             }
-
-            // Удаляем из базы данных
-            await this.monitoringService.removeAllWallets(groupId, userId);
-
-            // Если это текущая активная группа/пользователь, переподписываемся
-            if ((groupId && groupId === this.activeGroupId) || (userId && userId === this.activeUserId)) {
-                console.log(`[${new Date().toISOString()}] 🔄 Resubscribing after removal...`);
+            
+            // 3. Удаляем кошельки и связанные данные из базы данных
+            const deleteResult = await this.monitoringService.removeAllWallets(groupId, userId);
+            
+            console.log(`[${new Date().toISOString()}] ✅ Database deletion completed:`);
+            console.log(`  - Wallets: ${deleteResult.deletedCount}`);
+            console.log(`  - Transactions: ${deleteResult.deletedTransactions || 0}`);
+            console.log(`  - Token operations: ${deleteResult.deletedTokenOperations || 0}`);
+            
+            // 4. Логика переподписки - НЕ переподписываемся, так как удалили нужные кошельки
+            // Переподписка нужна только если удаляем ВСЕ кошельки без фильтра
+            if (!groupId && !userId && this.isStarted) {
+                console.log(`[${new Date().toISOString()}] 🔄 Removed all wallets, resubscribing to any remaining...`);
                 await this.subscribeToWallets();
+            } else {
+                console.log(`[${new Date().toISOString()}] ℹ️ Selective deletion completed. Current active subscriptions: ${this.subscriptions.size}`);
             }
-
-            console.log(`[${new Date().toISOString()}] ✅ Optimized removal completed: ${addressesToUnsubscribe.length} wallets removed`);
-
+            
+            return deleteResult;
+            
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error in optimized removeAllWallets:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error in removeAllWallets:`, error.message);
             throw error;
         }
     }

@@ -294,27 +294,186 @@ class Database {
     }
 
     async removeAllWallets(groupId = null, userId = null) {
-        let query = `DELETE FROM wallets WHERE 1=1`;
-        const params = [];
-        let paramIndex = 1;
-        
-        if (userId) {
-            query += ` AND user_id = $${paramIndex++}`;
-            params.push(userId);
-        }
-        
-        if (groupId) {
-            query += ` AND group_id = $${paramIndex}`;
-            params.push(groupId);
-        }
+        const client = await this.pool.connect();
         
         try {
-            const result = await this.pool.query(query, params);
-            console.log(`[${new Date().toISOString()}] 🗑️ Removed ${result.rowCount} wallets and associated data${userId ? ` for user ${userId}` : ''}${groupId ? ` for group ${groupId}` : ''}`);
-            return { deletedCount: result.rowCount };
+            await client.query('BEGIN');
+            
+            // Строим WHERE условие для фильтрации
+            let whereCondition = 'WHERE 1=1';
+            const params = [];
+            let paramIndex = 1;
+            
+            if (userId) {
+                whereCondition += ` AND user_id = $${paramIndex++}`;
+                params.push(userId);
+            }
+            
+            if (groupId) {
+                whereCondition += ` AND group_id = $${paramIndex++}`;
+                params.push(groupId);
+            }
+            
+            console.log(`[${new Date().toISOString()}] 🗑️ Removing wallets and related data${userId ? ` for user ${userId}` : ''}${groupId ? ` for group ${groupId}` : ''}`);
+            
+            // 1. Получаем список кошельков для удаления (для логирования)
+            const walletsQuery = `SELECT id, address, name, group_id, user_id FROM wallets ${whereCondition}`;
+            const walletsResult = await client.query(walletsQuery, params);
+            const walletsToDelete = walletsResult.rows;
+            
+            if (walletsToDelete.length === 0) {
+                console.log(`[${new Date().toISOString()}] ℹ️ No wallets found to delete`);
+                await client.query('COMMIT');
+                return { deletedCount: 0 };
+            }
+            
+            console.log(`[${new Date().toISOString()}] 📋 Found ${walletsToDelete.length} wallets to delete:`);
+            walletsToDelete.slice(0, 5).forEach(wallet => {
+                console.log(`  - ${wallet.address.slice(0, 8)}... (${wallet.name || 'Unnamed'}) [Group: ${wallet.group_id || 'None'}]`);
+            });
+            if (walletsToDelete.length > 5) {
+                console.log(`  ... and ${walletsToDelete.length - 5} more`);
+            }
+            
+            // 2. Удаляем связанные token_operations (через transactions)
+            const deleteTokenOpsQuery = `
+                DELETE FROM token_operations 
+                WHERE transaction_id IN (
+                    SELECT t.id FROM transactions t 
+                    JOIN wallets w ON t.wallet_id = w.id 
+                    ${whereCondition}
+                )
+            `;
+            const tokenOpsResult = await client.query(deleteTokenOpsQuery, params);
+            console.log(`[${new Date().toISOString()}] 🗑️ Deleted ${tokenOpsResult.rowCount} token operations`);
+            
+            // 3. Удаляем транзакции
+            const deleteTransactionsQuery = `
+                DELETE FROM transactions 
+                WHERE wallet_id IN (
+                    SELECT id FROM wallets ${whereCondition}
+                )
+            `;
+            const transactionsResult = await client.query(deleteTransactionsQuery, params);
+            console.log(`[${new Date().toISOString()}] 🗑️ Deleted ${transactionsResult.rowCount} transactions`);
+            
+            // 4. Удаляем статистику кошельков
+            const deleteStatsQuery = `
+                DELETE FROM wallet_stats 
+                WHERE wallet_id IN (
+                    SELECT id FROM wallets ${whereCondition}
+                )
+            `;
+            const statsResult = await client.query(deleteStatsQuery, params);
+            console.log(`[${new Date().toISOString()}] 🗑️ Deleted ${statsResult.rowCount} wallet stats`);
+            
+            // 5. Наконец удаляем сами кошельки
+            const deleteWalletsQuery = `DELETE FROM wallets ${whereCondition}`;
+            const walletsDeleteResult = await client.query(deleteWalletsQuery, params);
+            
+            await client.query('COMMIT');
+            
+            console.log(`[${new Date().toISOString()}] ✅ Successfully removed:`);
+            console.log(`  - ${walletsDeleteResult.rowCount} wallets`);
+            console.log(`  - ${transactionsResult.rowCount} transactions`);
+            console.log(`  - ${tokenOpsResult.rowCount} token operations`);
+            console.log(`  - ${statsResult.rowCount} wallet stats`);
+            
+            return { 
+                deletedCount: walletsDeleteResult.rowCount,
+                deletedTransactions: transactionsResult.rowCount,
+                deletedTokenOperations: tokenOpsResult.rowCount,
+                deletedStats: statsResult.rowCount
+            };
+            
         } catch (error) {
+            await client.query('ROLLBACK');
             console.error(`[${new Date().toISOString()}] ❌ Error removing wallets:`, error);
             throw new Error(`Failed to remove wallets: ${error.message}`);
+        } finally {
+            client.release();
+        }
+    }
+
+    async removeWalletWithTransactions(address, userId = null) {
+        const client = await this.pool.connect();
+        
+        try {
+            await client.query('BEGIN');
+            
+            // Находим кошелек
+            let walletQuery = `SELECT id, address, name, group_id, user_id FROM wallets WHERE address = $1`;
+            const params = [address];
+            
+            if (userId) {
+                walletQuery += ` AND user_id = $2`;
+                params.push(userId);
+            }
+            
+            const walletResult = await client.query(walletQuery, params);
+            
+            if (walletResult.rows.length === 0) {
+                throw new Error('Wallet not found or access denied');
+            }
+            
+            const wallet = walletResult.rows[0];
+            console.log(`[${new Date().toISOString()}] 🗑️ Removing wallet ${address.slice(0, 8)}... and related data`);
+            
+            // Получаем статистику перед удалением
+            const statsQuery = `
+                SELECT 
+                    COUNT(t.id) as transaction_count,
+                    COUNT(to_.id) as token_operation_count
+                FROM transactions t
+                LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
+                WHERE t.wallet_id = $1
+            `;
+            const statsResult = await client.query(statsQuery, [wallet.id]);
+            const stats = statsResult.rows[0];
+            
+            // 1. Удаляем token_operations
+            const deleteTokenOpsResult = await client.query(`
+                DELETE FROM token_operations 
+                WHERE transaction_id IN (
+                    SELECT id FROM transactions WHERE wallet_id = $1
+                )
+            `, [wallet.id]);
+            
+            // 2. Удаляем transactions
+            const deleteTransactionsResult = await client.query(`
+                DELETE FROM transactions WHERE wallet_id = $1
+            `, [wallet.id]);
+            
+            // 3. Удаляем wallet_stats
+            const deleteStatsResult = await client.query(`
+                DELETE FROM wallet_stats WHERE wallet_id = $1
+            `, [wallet.id]);
+            
+            // 4. Удаляем сам кошелек
+            const deleteWalletResult = await client.query(`
+                DELETE FROM wallets WHERE id = $1
+            `, [wallet.id]);
+            
+            await client.query('COMMIT');
+            
+            console.log(`[${new Date().toISOString()}] ✅ Successfully removed wallet ${address.slice(0, 8)}...:`);
+            console.log(`  - ${deleteTransactionsResult.rowCount} transactions`);
+            console.log(`  - ${deleteTokenOpsResult.rowCount} token operations`);
+            console.log(`  - ${deleteStatsResult.rowCount} wallet stats`);
+            
+            return {
+                deletedWallet: wallet,
+                deletedTransactions: deleteTransactionsResult.rowCount,
+                deletedTokenOperations: deleteTokenOpsResult.rowCount,
+                deletedStats: deleteStatsResult.rowCount
+            };
+            
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error(`[${new Date().toISOString()}] ❌ Error removing wallet:`, error);
+            throw error;
+        } finally {
+            client.release();
         }
     }
 
