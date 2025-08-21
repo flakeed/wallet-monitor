@@ -148,34 +148,33 @@ class Database {
         console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert of ${wallets.length} wallets`);
         const startTime = Date.now();
     
-        // Проверяем, что все кошельки имеют userId
         const walletsWithUser = wallets.filter(w => w.userId);
         if (walletsWithUser.length !== wallets.length) {
             throw new Error('All wallets must have userId specified');
         }
     
+        // Проверяем существующие кошельки
+        const addresses = wallets.map(w => w.address);
+        const existingWallets = await this.checkWalletsExistBatch(addresses, wallets[0].userId);
+        const existingAddresses = new Set(existingWallets.map(w => w.address));
+        const newWallets = wallets.filter(w => !existingAddresses.has(w.address));
+    
+        if (newWallets.length === 0) {
+            console.log(`[${new Date().toISOString()}] ⚠️ No new wallets to insert`);
+            return existingWallets;
+        }
+    
         try {
             const client = await this.pool.connect();
-            
             try {
                 await client.query('BEGIN');
     
-                console.log(`[${new Date().toISOString()}] ⚡ Executing optimized batch insert for ${wallets.length} wallets...`);
-                
-                // Исправленная версия с правильными параметрами
                 const values = [];
                 const placeholders = [];
-                
-                wallets.forEach((wallet, index) => {
+                newWallets.forEach((wallet, index) => {
                     const offset = index * 4;
-                    // ИСПРАВЛЕНО: добавлен знак $ перед номерами параметров и ::uuid для UUID полей
                     placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}::uuid, $${offset + 4}::uuid)`);
-                    values.push(
-                        wallet.address,
-                        wallet.name || null,
-                        wallet.groupId || null,
-                        wallet.userId
-                    );
+                    values.push(wallet.address, wallet.name || null, wallet.groupId || null, wallet.userId);
                 });
     
                 const insertQuery = `
@@ -185,31 +184,26 @@ class Database {
                     RETURNING id, address, name, group_id, user_id, created_at
                 `;
     
-                console.log(`[${new Date().toISOString()}] 📝 Query sample: ${insertQuery.substring(0, 200)}...`);
-                console.log(`[${new Date().toISOString()}] 📊 Values count: ${values.length}, Expected: ${wallets.length * 4}`);
-    
+                console.log(`[${new Date().toISOString()}] 📝 Inserting ${newWallets.length} wallets`);
                 const insertResult = await client.query(insertQuery, values);
     
                 await client.query('COMMIT');
     
                 const insertTime = Date.now() - startTime;
                 const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
-                
+    
                 console.log(`[${new Date().toISOString()}] 🎉 Optimized batch insert completed in ${insertTime}ms:`);
-                console.log(`  - Attempted: ${wallets.length} wallets`);
+                console.log(`  - Attempted: ${newWallets.length} wallets`);
                 console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
-                console.log(`  - Duplicates: ${wallets.length - insertResult.rows.length} wallets`);
                 console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
     
-                return insertResult.rows;
-    
+                return [...existingWallets, ...insertResult.rows];
             } catch (error) {
                 await client.query('ROLLBACK');
                 throw error;
             } finally {
                 client.release();
             }
-    
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Optimized batch insert failed:`, error.message);
             throw new Error(`Optimized batch insert failed: ${error.message}`);
@@ -313,46 +307,53 @@ class Database {
         }
     }
 
-    async getActiveWallets(groupId = null, userId = null) {
+    async getActiveWallets(groupId = null, userId = null, limit = 50, offset = 0) {
         let query = `
-            SELECT w.*, g.name as group_name
+            SELECT 
+                w.id,
+                w.address,
+                w.name,
+                w.group_id,
+                w.user_id,
+                w.created_at,
+                g.name as group_name,
+                COUNT(*) OVER() as total_count
             FROM wallets w
             LEFT JOIN groups g ON w.group_id = g.id
             WHERE w.is_active = TRUE
         `;
         const params = [];
         let paramIndex = 1;
-        
-        // ОБЯЗАТЕЛЬНО фильтруем по пользователю если указан
+    
         if (userId) {
             query += ` AND w.user_id = $${paramIndex++}`;
             params.push(userId);
             console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by user_id: ${userId}`);
         }
-        
+    
         if (groupId) {
-            query += ` AND w.group_id = $${paramIndex}`;
+            query += ` AND w.group_id = $${paramIndex++}`;
             params.push(groupId);
             console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by group_id: ${groupId}`);
         }
-        
-        query += ` ORDER BY w.created_at DESC`;
-        
-        const result = await this.pool.query(query, params);
-        
-        console.log(`[${new Date().toISOString()}] 📊 Found ${result.rows.length} active wallets for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
-        
-        // Логируем первые несколько кошельков для отладки
-        if (result.rows.length > 0) {
-            console.log(`[${new Date().toISOString()}] 🔍 Sample wallets from DB:`);
-            result.rows.slice(0, 3).forEach(wallet => {
-                console.log(`  - ${wallet.address.slice(0, 8)}... (user: ${wallet.user_id}, group: ${wallet.group_id || 'none'})`);
-            });
+    
+        query += ` ORDER BY w.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+        params.push(limit, offset);
+    
+        try {
+            const result = await this.pool.query(query, params);
+            console.log(`[${new Date().toISOString()}] 📊 Found ${result.rows.length} active wallets for user ${userId || 'all'}${groupId ? `, group ${groupId}` : ''}`);
+    
+            return {
+                wallets: result.rows,
+                totalCount: result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0,
+                hasMore: result.rows.length === limit,
+            };
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching active wallets:`, error);
+            throw error;
         }
-        
-        return result.rows;
     }
-
     async checkWalletsExistBatch(addresses, userId) {
         if (!addresses || addresses.length === 0) return [];
         
@@ -676,54 +677,7 @@ class Database {
     // UPDATED: Transaction methods with user context
     async getRecentTransactions(hours = 24, limit = 400, transactionType = null, groupId = null, userId = null) {
         try {
-            let typeFilter = '';
-            let queryParams = [limit];
-            let paramIndex = 2;
-            
-            if (transactionType) {
-                typeFilter = `AND t.transaction_type = $${paramIndex++}`;
-                queryParams.push(transactionType);
-            }
-            if (groupId) {
-                typeFilter += ` AND w.group_id = $${paramIndex++}`;
-                queryParams.push(groupId);
-            }
-            if (userId) {
-                typeFilter += ` AND w.user_id = $${paramIndex++}`;
-                queryParams.push(userId);
-            }
-
-            const uniqueTransactionsQuery = `
-                SELECT 
-                    t.signature,
-                    t.block_time,
-                    t.transaction_type,
-                    t.sol_spent,
-                    t.sol_received,
-                    w.address as wallet_address,
-                    w.name as wallet_name,
-                    w.group_id,
-                    w.user_id,
-                    g.name as group_name
-                FROM transactions t
-                JOIN wallets w ON t.wallet_id = w.id
-                LEFT JOIN groups g ON w.group_id = g.id
-                WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
-                ${typeFilter}
-                ORDER BY t.block_time DESC
-                LIMIT $1
-            `;
-
-            const uniqueTransactions = await this.pool.query(uniqueTransactionsQuery, queryParams);
-            
-            if (uniqueTransactions.rows.length === 0) {
-                return [];
-            }
-
-            const signatures = uniqueTransactions.rows.map(row => row.signature);
-            const placeholders = signatures.map((_, index) => `$${index + 1}`).join(',');
-
-            const fullDataQuery = `
+            let query = `
                 SELECT 
                     t.signature,
                     t.block_time,
@@ -738,26 +692,58 @@ class Database {
                     tk.mint,
                     tk.symbol,
                     tk.name as token_name,
+                    tk.decimals,
                     to_.amount as token_amount,
-                    to_.operation_type,
-                    tk.decimals
+                    to_.operation_type
                 FROM transactions t
                 JOIN wallets w ON t.wallet_id = w.id
                 LEFT JOIN groups g ON w.group_id = g.id
                 LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
                 LEFT JOIN tokens tk ON to_.token_id = tk.id
-                WHERE t.signature IN (${placeholders})
-                ORDER BY t.block_time DESC, t.signature, to_.id
+                WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
             `;
-
-            const result = await this.pool.query(fullDataQuery, signatures);
-            
-            console.log(`📊 getRecentTransactions: Found ${uniqueTransactions.rows.length} unique transactions, ${result.rows.length} total rows with tokens${userId ? ` for user ${userId}` : ''}`);
-            
-            return result.rows;
-
+            const params = [limit];
+            let paramIndex = 2;
+    
+            if (transactionType) {
+                query += ` AND t.transaction_type = $${paramIndex++}`;
+                params.push(transactionType);
+            }
+            if (userId) {
+                query += ` AND w.user_id = $${paramIndex++}`;
+                params.push(userId);
+            }
+            if (groupId) {
+                query += ` AND w.group_id = $${paramIndex++}`;
+                params.push(groupId);
+            }
+    
+            query += ` ORDER BY t.block_time DESC LIMIT $${1}`;
+    
+            const result = await this.pool.query(query, params);
+    
+            console.log(`[${new Date().toISOString()}] 📊 getRecentTransactions: Found ${result.rows.length} rows${userId ? ` for user ${userId}` : ''}`);
+    
+            return result.rows.map(row => ({
+                signature: row.signature,
+                block_time: row.block_time,
+                transaction_type: row.transaction_type,
+                sol_spent: Number(row.sol_spent || 0),
+                sol_received: Number(row.sol_received || 0),
+                wallet_address: row.wallet_address,
+                wallet_name: row.wallet_name,
+                group_id: row.group_id,
+                user_id: row.user_id,
+                group_name: row.group_name,
+                mint: row.mint,
+                symbol: row.symbol || 'Unknown',
+                token_name: row.token_name || 'Unknown Token',
+                decimals: Number(row.decimals) || 9,
+                token_amount: Number(row.token_amount || 0),
+                operation_type: row.operation_type,
+            }));
         } catch (error) {
-            console.error('❌ Error in getRecentTransactions:', error);
+            console.error(`[${new Date().toISOString()}] ❌ Error in getRecentTransactions:`, error);
             throw error;
         }
     }
@@ -798,8 +784,8 @@ class Database {
     // UPDATED: Token aggregates with user context
     async getTokenWalletAggregates(hours = 24, groupId = null, userId = null) {
         const EXCLUDED_TOKENS = [
-            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 
-            'So11111111111111111111111111111111111111112',  
+            'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            'So11111111111111111111111111111111111111112',
         ];
     
         let query = `
@@ -818,13 +804,9 @@ class Database {
                 COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.sol_spent ELSE 0 END), 0) as sol_spent,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.sol_received ELSE 0 END), 0) as sol_received,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN t.usdc_spent ELSE 0 END), 0) as usdc_spent_original,
-                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN t.usdc_received ELSE 0 END), 0) as usdc_received_original,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_bought,
                 COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
-                MAX(t.block_time) as last_activity,
-                MIN(CASE WHEN to_.operation_type = 'buy' THEN t.block_time END) as first_buy_time,
-                MIN(CASE WHEN to_.operation_type = 'sell' THEN t.block_time END) as first_sell_time
+                MAX(t.block_time) as last_activity
             FROM tokens tk
             JOIN token_operations to_ ON tk.id = to_.token_id
             JOIN transactions t ON to_.transaction_id = t.id
@@ -833,40 +815,32 @@ class Database {
             WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
             AND tk.mint NOT IN (${EXCLUDED_TOKENS.map((_, i) => `$${i + 1}`).join(', ')})
         `;
-        
+    
         const params = [...EXCLUDED_TOKENS];
         let paramIndex = EXCLUDED_TOKENS.length + 1;
-        
+    
         if (userId) {
             query += ` AND w.user_id = $${paramIndex++}`;
             params.push(userId);
         }
-        
+    
         if (groupId) {
             query += ` AND w.group_id = $${paramIndex}`;
             params.push(groupId);
         }
-        
+    
         query += `
             GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, w.user_id, g.name
             ORDER BY last_activity DESC, tk.mint, w.address
+            LIMIT 100
         `;
-        
-        const result = await this.pool.query(query, params);
     
-        console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows (excluded ${EXCLUDED_TOKENS.length} tokens)${userId ? ` for user ${userId}` : ''}`);
+        try {
+            const result = await this.pool.query(query, params);
     
-        return result.rows.map(row => {
-            const solSpent = Number(row.sol_spent) || 0;
-            const solReceived = Number(row.sol_received) || 0;
-            const tokensBought = Number(row.tokens_bought) || 0;
-            const tokensSold = Number(row.tokens_sold) || 0;
-            const txBuys = Number(row.tx_buys) || 0;
-            const txSells = Number(row.tx_sells) || 0;
-            
-            const pnlSol = +(solReceived - solSpent).toFixed(6);
-            
-            return {
+            console.log(`[${new Date().toISOString()}] 📊 Token aggregates query returned ${result.rows.length} rows (excluded ${EXCLUDED_TOKENS.length} tokens)${userId ? ` for user ${userId}` : ''}`);
+    
+            return result.rows.map(row => ({
                 mint: row.mint,
                 symbol: row.symbol || 'Unknown',
                 name: row.name || 'Unknown Token',
@@ -877,21 +851,19 @@ class Database {
                 group_id: row.group_id,
                 user_id: row.user_id,
                 group_name: row.group_name,
-                tx_buys: txBuys,
-                tx_sells: txSells,
-                sol_spent: solSpent,
-                sol_received: solReceived,
-                usdc_spent_original: Number(row.usdc_spent_original) || 0,
-                usdc_received_original: Number(row.usdc_received_original) || 0,
-                tokens_bought: tokensBought,
-                tokens_sold: tokensSold,
-                pnl_sol: pnlSol,
+                tx_buys: Number(row.tx_buys) || 0,
+                tx_sells: Number(row.tx_sells) || 0,
+                sol_spent: Number(row.sol_spent) || 0,
+                sol_received: Number(row.sol_received) || 0,
+                tokens_bought: Number(row.tokens_bought) || 0,
+                tokens_sold: Number(row.tokens_sold) || 0,
                 last_activity: row.last_activity,
-                first_buy_time: row.first_buy_time,
-                first_sell_time: row.first_sell_time
-            };
-        });
-    }
+            }));
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error in getTokenWalletAggregates:`, error);
+            throw error;
+        }
+    } 
 
     // UPDATED: Top tokens with user context
     async getTopTokens(limit = 10, operationType = null, groupId = null, userId = null) {
