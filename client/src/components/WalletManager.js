@@ -374,8 +374,6 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
                         Phase: {importProgress.phase} • 
                         {importProgress.current}/{importProgress.total} wallets • 
                         Batch {importProgress.batch} • 
-                        Speed: {importProgress.speed} wallets/sec
-                        {importProgress.timeRemaining > 0 && ` • ETA: ${formatTime(importProgress.timeRemaining)}`}
                       </span>
                     ) : (
                       'Preparing optimized import...'
