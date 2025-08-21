@@ -315,25 +315,24 @@ class Database {
 
     async getActiveWallets(groupId = null, userId = null) {
         let query = `
-            SELECT w.*, g.name as group_name
-            FROM wallets w
-            LEFT JOIN groups g ON w.group_id = g.id
-            WHERE w.is_active = TRUE
+          SELECT w.*, g.name as group_name
+          FROM wallets w
+          LEFT JOIN groups g ON w.group_id = g.id
+          WHERE w.is_active = TRUE
         `;
         const params = [];
         let paramIndex = 1;
         
-        // ОБЯЗАТЕЛЬНО фильтруем по пользователю если указан
         if (userId) {
-            query += ` AND w.user_id = $${paramIndex++}`;
-            params.push(userId);
-            console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by user_id: ${userId}`);
+          query += ` AND w.user_id = $${paramIndex++}`;
+          params.push(userId);
+          console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by user_id: ${userId}`);
         }
         
         if (groupId) {
-            query += ` AND w.group_id = $${paramIndex}`;
-            params.push(groupId);
-            console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by group_id: ${groupId}`);
+          query += ` AND w.group_id = $${paramIndex}`;
+          params.push(groupId);
+          console.log(`[${new Date().toISOString()}] 🔍 Filtering wallets by group_id: ${groupId}`);
         }
         
         query += ` ORDER BY w.created_at DESC`;
@@ -342,16 +341,8 @@ class Database {
         
         console.log(`[${new Date().toISOString()}] 📊 Found ${result.rows.length} active wallets for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
         
-        // Логируем первые несколько кошельков для отладки
-        if (result.rows.length > 0) {
-            console.log(`[${new Date().toISOString()}] 🔍 Sample wallets from DB:`);
-            result.rows.slice(0, 3).forEach(wallet => {
-                console.log(`  - ${wallet.address.slice(0, 8)}... (user: ${wallet.user_id}, group: ${wallet.group_id || 'none'})`);
-            });
-        }
-        
         return result.rows;
-    }
+      }
 
     async checkWalletsExistBatch(addresses, userId) {
         if (!addresses || addresses.length === 0) return [];

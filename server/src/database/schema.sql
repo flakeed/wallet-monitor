@@ -320,3 +320,6 @@ ON CONFLICT (telegram_id) DO UPDATE SET
 INSERT INTO whitelist (telegram_id, notes)
 VALUES (789676557, 'Initial admin user')
 ON CONFLICT (telegram_id) DO NOTHING;
+
+CREATE INDEX idx_wallets_active_user_group ON wallets (is_active, user_id, group_id, created_at);
+CREATE INDEX idx_groups_id ON groups (id);
