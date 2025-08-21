@@ -101,7 +101,7 @@ function App() {
   const ultraFastInit = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
-      console.log(`🚀 ULTRA-FAST initialization: hours=${hours}, type=${type}, groupId=${groupId}`);
+      // console.log(`🚀 ULTRA-FAST initialization: hours=${hours}, type=${type}, groupId=${groupId}`);
       const startTime = Date.now();
 
       const headers = getAuthHeaders();
@@ -136,8 +136,8 @@ function App() {
       const clientTime = Date.now() - startTime;
       setInitializationTime(duration);
       
-      console.log(`✅ ULTRA-FAST init completed: ${duration}ms server + ${clientTime}ms client = ${duration + clientTime}ms total`);
-      console.log(`📊 Loaded: ${data.wallets.totalCount} wallets, ${data.transactions.length} transactions`);
+      // console.log(`✅ ULTRA-FAST init completed: ${duration}ms server + ${clientTime}ms client = ${duration + clientTime}ms total`);
+      // console.log(`📊 Loaded: ${data.wallets.totalCount} wallets, ${data.transactions.length} transactions`);
 
     } catch (err) {
       setError(err.message);
@@ -309,7 +309,7 @@ function App() {
     const startTime = Date.now();
     
     try {
-      console.log(`🚀 Starting ULTRA-OPTIMIZED bulk import of ${wallets.length} wallets`);
+      // console.log(`🚀 Starting ULTRA-OPTIMIZED bulk import of ${wallets.length} wallets`);
 
       if (progressCallback) {
         progressCallback({
@@ -327,7 +327,7 @@ function App() {
         chunks.push(wallets.slice(i, i + ULTRA_CHUNK_SIZE));
       }
 
-      console.log(`📦 Created ${chunks.length} ultra-optimized chunks`);
+      // console.log(`📦 Created ${chunks.length} ultra-optimized chunks`);
 
       let totalResults = {
         total: wallets.length,
@@ -351,7 +351,7 @@ function App() {
         }
 
         try {
-          console.log(`🚀 Processing ultra-optimized chunk ${i + 1}/${chunks.length} (${chunk.length} wallets)`);
+          // console.log(`🚀 Processing ultra-optimized chunk ${i + 1}/${chunks.length} (${chunk.length} wallets)`);
 
           const response = await fetch(`${API_BASE}/wallets/bulk-optimized`, {
             method: 'POST',
@@ -401,7 +401,7 @@ function App() {
             }
           }
 
-          console.log(`✅ Ultra-optimized chunk ${i + 1} completed: ${result.results.successful} successful`);
+          // console.log(`✅ Ultra-optimized chunk ${i + 1} completed: ${result.results.successful} successful`);
 
         } catch (chunkError) {
           console.error(`❌ Ultra-optimized chunk ${i + 1} failed:`, chunkError.message);
@@ -434,7 +434,7 @@ function App() {
       const walletsPerSecond = Math.round((totalResults.successful / duration) * 1000);
       const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
 
-      console.log(`🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${totalResults.successful}/${totalResults.total} successful (${successRate}%, ${walletsPerSecond} wallets/sec)`);
+      // console.log(`🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${totalResults.successful}/${totalResults.total} successful (${successRate}%, ${walletsPerSecond} wallets/sec)`);
 
       return {
         success: totalResults.successful > 0,

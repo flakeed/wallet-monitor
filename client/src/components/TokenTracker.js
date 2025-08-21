@@ -26,7 +26,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
     return matchesTimeframe && matchesGroup;
   });
 
-  console.log(`Processing ${filteredTransactions.length} filtered transactions`);
+  // console.log(`Processing ${filteredTransactions.length} filtered transactions`);
 
   filteredTransactions.forEach((tx) => {
     const tokens = tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold;
@@ -34,7 +34,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
 
     tokens.forEach((token) => {
       if (EXCLUDED_TOKENS.includes(token.mint)) {
-        console.log(`Excluding token ${token.symbol || token.mint} from tracker`);
+        // console.log(`Excluding token ${token.symbol || token.mint} from tracker`);
         return;
       }
 
@@ -128,7 +128,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
     wallets: t.wallets.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity))
   }));
 
-  console.log(`Aggregated ${result.length} unique tokens (excluded ${EXCLUDED_TOKENS.length} system tokens)`);
+  // console.log(`Aggregated ${result.length} unique tokens (excluded ${EXCLUDED_TOKENS.length} system tokens)`);
 
   return result;
 };
@@ -175,7 +175,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
     try {
       const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
       const sortedTokens = sortTokens(aggregatedTokens, sortBy);
-      console.log('Aggregated and sorted tokens:', sortedTokens);
+      // console.log('Aggregated and sorted tokens:', sortedTokens);
       setItems(sortedTokens);
       setError(null);
     } catch (e) {

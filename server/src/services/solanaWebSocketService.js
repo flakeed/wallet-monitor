@@ -579,11 +579,9 @@ class SolanaWebSocketService {
             this.activeUserId = userId;
 
             // Подписываемся на новую группу
-            console.log(`[${new Date().toISOString()}] 📥 Subscribing to new group/user scope...`);
             await this.subscribeToWallets();
 
             const duration = Date.now() - startTime;
-            console.log(`[${new Date().toISOString()}] ✅ Optimized group switch completed in ${duration}ms to ${groupId || 'all'} (${this.subscriptions.size} active subscriptions)`);
 
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error in optimized switchGroup:`, error.message);

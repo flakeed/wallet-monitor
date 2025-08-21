@@ -113,7 +113,6 @@ class Database {
         
         try {
             const result = await this.pool.query(query, [address, name, groupId, userId]);
-            console.log(`[${new Date().toISOString()}] ✅ Added wallet ${address.slice(0, 8)}... for user ${userId}${groupId ? ` in group ${groupId}` : ''}`);
             return result.rows[0];
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Error adding wallet:`, error);
@@ -145,7 +144,6 @@ class Database {
             throw new Error(`Batch size too large. Maximum ${maxBatchSize} wallets per batch.`);
         }
     
-        console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert of ${wallets.length} wallets`);
         const startTime = Date.now();
     
         // Проверяем, что все кошельки имеют userId
@@ -160,7 +158,6 @@ class Database {
             try {
                 await client.query('BEGIN');
     
-                console.log(`[${new Date().toISOString()}] ⚡ Executing optimized batch insert for ${wallets.length} wallets...`);
                 
                 // Исправленная версия с правильными параметрами
                 const values = [];
@@ -185,8 +182,6 @@ class Database {
                     RETURNING id, address, name, group_id, user_id, created_at
                 `;
     
-                console.log(`[${new Date().toISOString()}] 📝 Query sample: ${insertQuery.substring(0, 200)}...`);
-                console.log(`[${new Date().toISOString()}] 📊 Values count: ${values.length}, Expected: ${wallets.length * 4}`);
     
                 const insertResult = await client.query(insertQuery, values);
     
@@ -195,12 +190,6 @@ class Database {
                 const insertTime = Date.now() - startTime;
                 const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
                 
-                console.log(`[${new Date().toISOString()}] 🎉 Optimized batch insert completed in ${insertTime}ms:`);
-                console.log(`  - Attempted: ${wallets.length} wallets`);
-                console.log(`  - Inserted: ${insertResult.rows.length} wallets`);
-                console.log(`  - Duplicates: ${wallets.length - insertResult.rows.length} wallets`);
-                console.log(`  - Performance: ${walletsPerSecond} wallets/second`);
-    
                 return insertResult.rows;
     
             } catch (error) {
@@ -256,7 +245,6 @@ class Database {
               const result = await this.pool.query(query, values);
               results.push(...result.rows);
               
-              console.log(`[${new Date().toISOString()}] ✅ Batch ${Math.floor(i / batchSize) + 1} completed: ${result.rows.length}/${batch.length} inserted`);
             } catch (error) {
               console.error(`[${new Date().toISOString()}] ❌ Batch ${Math.floor(i / batchSize) + 1} failed:`, error.message);
               throw new Error(`Batch insert failed: ${error.message}`);

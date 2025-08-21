@@ -304,19 +304,19 @@ app.get('/api/transactions/stream', async (req, res) => {
           const wallet = await db.getWalletByAddress(transaction.walletAddress);
           
           if (!wallet) {
-            console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${transaction.walletAddress} not found, skipping transaction`);
+            // console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${transaction.walletAddress} not found, skipping transaction`);
             return;
           }
           
           // Фильтруем по пользователю
           if (wallet.user_id !== userId) {
-            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${wallet.user_id} != ${userId}), skipping`);
+            // console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${wallet.user_id} != ${userId}), skipping`);
             return;
           }
           
           // Фильтруем по группе если указана
           if (groupId !== null && wallet.group_id !== groupId) {
-            console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different group (${wallet.group_id} != ${groupId}), skipping`);
+            // console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different group (${wallet.group_id} != ${groupId}), skipping`);
             return;
           }
           
@@ -355,7 +355,7 @@ app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
     
-    console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count request for user ${userId}, group ${groupId}`);
+    // console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count request for user ${userId}, group ${groupId}`);
     
     // Используем оптимизированный метод из базы данных
     const countData = await db.getWalletCountFast(userId, groupId);
@@ -386,7 +386,7 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 10,000 addresses allowed for validation' });
     }
 
-    console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId}`);
+    // console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId}`);
 
     const validation = await db.validateWalletsBatch(addresses, userId);
     
@@ -411,7 +411,7 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
     const limit = parseInt(req.query.limit) || 50; // Лимит по умолчанию
     const offset = parseInt(req.query.offset) || 0;
     
-    console.log(`[${new Date().toISOString()}] 📋 Wallets request: user ${userId}, group ${groupId}, stats: ${includeStats}, limit: ${limit}`);
+    // console.log(`[${new Date().toISOString()}] 📋 Wallets request: user ${userId}, group ${groupId}, stats: ${includeStats}, limit: ${limit}`);
     
     if (includeStats) {
       // Старая логика со статистикой (только если явно запрошена)
@@ -521,7 +521,7 @@ app.delete('/api/wallets', auth.authRequired, async (req, res) => {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
     
-    console.log(`[${new Date().toISOString()}] 🗑️ Ultra-fast removal request: user ${userId}, group ${groupId}`);
+    // console.log(`[${new Date().toISOString()}] 🗑️ Ultra-fast removal request: user ${userId}, group ${groupId}`);
     
     // Быстрое удаление через WebSocket сервис (он обновит подписки)
     await solanaWebSocketService.removeAllWallets(groupId, userId);
@@ -552,7 +552,7 @@ app.get('/api/init', auth.authRequired, async (req, res) => {
     const hours = parseInt(req.query.hours) || 24;
     const transactionType = req.query.type;
     
-    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-FAST app initialization for user ${userId}`);
+    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-FAST app initialization for user ${userId}`);
     const startTime = Date.now();
     
     // Параллельная загрузка всех необходимых данных
@@ -566,7 +566,7 @@ app.get('/api/init', auth.authRequired, async (req, res) => {
     const websocketStatus = solanaWebSocketService.getStatus();
     
     const duration = Date.now() - startTime;
-    console.log(`[${new Date().toISOString()}] ⚡ ULTRA-FAST initialization completed in ${duration}ms`);
+    // console.log(`[${new Date().toISOString()}] ⚡ ULTRA-FAST initialization completed in ${duration}ms`);
     
     res.json({
       success: true,
@@ -613,12 +613,12 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
 
-    console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions request for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
+    // console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions request for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
 
     // Используем оптимизированный метод транзакций
     const transactions = await db.getRecentTransactionsOptimized(hours, limit, type, groupId, userId);
     
-    console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} optimized transactions for user ${userId}`);
+    // console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} optimized transactions for user ${userId}`);
     res.json(transactions);
     
   } catch (error) {
@@ -632,7 +632,7 @@ app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
     
-    console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
+    // console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
     
     // Параллельное получение статуса WebSocket и статистики базы данных
     const [websocketStatus, dbStats] = await Promise.all([
@@ -687,7 +687,7 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
   // Если chunk size больше 500, разбиваем на меньшие части
   const { wallets } = req.body;
   if (wallets && wallets.length > 500) {
-    console.log(`[${new Date().toISOString()}] 🔄 Large non-optimized request (${wallets.length} wallets), redirecting to optimized endpoint`);
+    // console.log(`[${new Date().toISOString()}] 🔄 Large non-optimized request (${wallets.length} wallets), redirecting to optimized endpoint`);
     req.body.optimized = true;
   }
   
@@ -707,7 +707,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const { wallets, groupId, optimized } = req.body;
     const userId = req.user.id;
 
-    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
+    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
 
     if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
       return res.status(400).json({ 
@@ -734,7 +734,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     };
 
     // 1. БЫСТРАЯ ВАЛИДАЦИЯ (без обращения к БД)
-    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
+    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
     const validationStart = Date.now();
 
     const validWallets = [];
@@ -786,7 +786,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     }
 
     const validationTime = Date.now() - validationStart;
-    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
+    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
 
     if (validWallets.length === 0) {
       return res.json({
@@ -798,7 +798,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     }
 
     // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT С СЧЕТЧИКАМИ
-    console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
+    // console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
     const dbStart = Date.now();
 
     try {
@@ -806,7 +806,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       const dbResult = await db.addWalletsBatchOptimizedWithCount(validWallets);
       
       const dbTime = Date.now() - dbStart;
-      console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
+      // console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
 
       results.successful = dbResult.insertedWallets.length;
       results.failed += (validWallets.length - dbResult.insertedWallets.length); // дубликаты в БД
@@ -826,7 +826,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
     // 3. ПАРАЛЛЕЛЬНАЯ WEBSOCKET ПОДПИСКА (неблокирующая)
     if (results.successful > 0) {
-      console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
+      // console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
       
       // Запускаем подписку асинхронно, не ждем завершения
       setImmediate(async () => {
@@ -856,7 +856,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const duration = Date.now() - startTime;
     const walletsPerSecond = Math.round((results.successful / duration) * 1000);
 
-    console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
+    // console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
 
     res.json({
       success: results.successful > 0,

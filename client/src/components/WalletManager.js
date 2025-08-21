@@ -163,7 +163,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     });
 
     try {
-      console.log(`Starting optimized bulk import of ${wallets.length} wallets...`);
+      // console.log(`Starting optimized bulk import of ${wallets.length} wallets...`);
 
       const result = await onAddWalletsBulk(wallets, groupId || null, (progress) => {
         const elapsed = (Date.now() - startTime) / 1000;

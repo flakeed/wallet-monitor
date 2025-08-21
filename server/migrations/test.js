@@ -2,7 +2,7 @@ const Database = require('../src/database/connection');
 require('dotenv').config();
 
 async function hotfixDatabase() {
-    console.log('🔧 Running hotfix for database NOT NULL constraints...');
+    // console.log('🔧 Running hotfix for database NOT NULL constraints...');
     
     try {
         const db = new Database();
@@ -11,7 +11,7 @@ async function hotfixDatabase() {
         try {
             await client.query('BEGIN');
             
-            console.log('📝 Updating transactions table constraints...');
+            // console.log('📝 Updating transactions table constraints...');
             
             const alterCommands = [
                 'ALTER TABLE transactions ALTER COLUMN sol_spent SET DEFAULT 0',
@@ -23,13 +23,13 @@ async function hotfixDatabase() {
             for (const command of alterCommands) {
                 try {
                     await client.query(command);
-                    console.log(`✅ Executed: ${command}`);
+                    // console.log(`✅ Executed: ${command}`);
                 } catch (err) {
                     console.warn(`⚠️ Warning: ${err.message}`);
                 }
             }
             
-            console.log('📝 Updating existing NULL values...');
+            // console.log('📝 Updating existing NULL values...');
             
             const updateCommands = [
                 'UPDATE transactions SET sol_spent = 0 WHERE sol_spent IS NULL',
@@ -41,13 +41,13 @@ async function hotfixDatabase() {
             for (const command of updateCommands) {
                 try {
                     const result = await client.query(command);
-                    console.log(`✅ ${command} - Updated ${result.rowCount} rows`);
+                    // console.log(`✅ ${command} - Updated ${result.rowCount} rows`);
                 } catch (err) {
                     console.warn(`⚠️ Warning: ${err.message}`);
                 }
             }
             
-            console.log('📝 Setting NOT NULL constraints...');
+            // console.log('📝 Setting NOT NULL constraints...');
             
             const notNullCommands = [
                 'ALTER TABLE transactions ALTER COLUMN sol_spent SET NOT NULL',
@@ -59,14 +59,14 @@ async function hotfixDatabase() {
             for (const command of notNullCommands) {
                 try {
                     await client.query(command);
-                    console.log(`✅ ${command}`);
+                    // console.log(`✅ ${command}`);
                 } catch (err) {
                     console.warn(`⚠️ Warning: ${err.message}`);
                 }
             }
             
             await client.query('COMMIT');
-            console.log('✅ Hotfix completed successfully!');
+            // console.log('✅ Hotfix completed successfully!');
             
             const statsQuery = `
                 SELECT 
@@ -81,12 +81,12 @@ async function hotfixDatabase() {
             const stats = await client.query(statsQuery);
             const row = stats.rows[0];
             
-            console.log('\n📊 Current Statistics:');
-            console.log(`Total Transactions: ${row.total_transactions}`);
-            console.log(`Buy Transactions: ${row.buy_count}`);
-            console.log(`Sell Transactions: ${row.sell_count}`);
-            console.log(`Avg SOL Spent: ${Number(row.avg_sol_spent || 0).toFixed(6)}`);
-            console.log(`Avg SOL Received: ${Number(row.avg_sol_received || 0).toFixed(6)}`);
+            // console.log('\n📊 Current Statistics:');
+            // console.log(`Total Transactions: ${row.total_transactions}`);
+            // console.log(`Buy Transactions: ${row.buy_count}`);
+            // console.log(`Sell Transactions: ${row.sell_count}`);
+            // console.log(`Avg SOL Spent: ${Number(row.avg_sol_spent || 0).toFixed(6)}`);
+            // console.log(`Avg SOL Received: ${Number(row.avg_sol_received || 0).toFixed(6)}`);
             
         } catch (error) {
             await client.query('ROLLBACK');

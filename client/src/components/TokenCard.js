@@ -81,14 +81,14 @@ function TokenCard({ token, onOpenChart }) {
             totalReceivedSOL += wallet.solReceived || 0;
         });
 
-        console.log('PnL Calculation Debug:', {
-            totalTokensBought,
-            totalTokensSold,
-            totalSpentSOL,
-            totalReceivedSOL,
-            tokenPrice: priceData.price,
-            solPrice
-        });
+        // console.log('PnL Calculation Debug:', {
+        //     totalTokensBought,
+        //     totalTokensSold,
+        //     totalSpentSOL,
+        //     totalReceivedSOL,
+        //     tokenPrice: priceData.price,
+        //     solPrice
+        // });
 
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         
@@ -118,15 +118,15 @@ function TokenCard({ token, onOpenChart }) {
         const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
         const totalPnLSOL = totalPnLUSD / solPrice;
 
-        console.log('PnL Results:', {
-            realizedPnLSOL,
-            unrealizedPnLSOL,
-            totalPnLSOL,
-            currentHoldings,
-            currentTokenValueUSD,
-            remainingCostBasisSOL,
-            remainingCostBasisUSD
-        });
+        // console.log('PnL Results:', {
+        //     realizedPnLSOL,
+        //     unrealizedPnLSOL,
+        //     totalPnLSOL,
+        //     currentHoldings,
+        //     currentTokenValueUSD,
+        //     remainingCostBasisSOL,
+        //     remainingCostBasisUSD
+        // });
 
         return {
             totalTokensBought,

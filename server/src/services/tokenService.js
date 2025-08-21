@@ -24,7 +24,6 @@ const PROMISE_TTL = 60;
     try {
         const tokens = await new TokenListProvider().resolve();
         const tokenList = tokens.filterByChainId(101).getList();
-        console.log(`[${new Date().toISOString()}] ✅ Loaded ${tokenList.length} tokens from registry`);
 
         const pipeline = redis.pipeline();
         for (const token of tokenList) {
@@ -100,12 +99,10 @@ async function processQueue() {
 async function processTokenMetadataRequest(mint, connection) {
     const cachedToken = await redis.get(`token:${mint}`);
     if (cachedToken) {
-        console.log(`[${new Date().toISOString()}] Using Redis cached metadata for mint ${mint}`);
         return JSON.parse(cachedToken);
     }
 
     try {
-        console.log(`[${new Date().toISOString()}] Fetching on-chain metadata for mint: ${mint}`);
         const onChainData = await fetchOnChainMetadata(mint, connection);
         const data = onChainData || { address: mint, symbol: 'Unknown', name: 'Unknown Token', decimals: 0 };
         await redis.set(`token:${mint}`, JSON.stringify(data), 'EX', TOKEN_CACHE_TTL);
@@ -121,13 +118,11 @@ async function processTokenMetadataRequest(mint, connection) {
 async function fetchTokenMetadata(mint, connection) {
     const cachedToken = await redis.get(`token:${mint}`);
     if (cachedToken) {
-        console.log(`[${new Date().toISOString()}] ⚡ Fast cache hit for mint ${mint}`);
         return JSON.parse(cachedToken);
     }
 
     return new Promise((resolve, reject) => {
         const requestId = uuidv4();
-        console.log(`[${new Date().toISOString()}] Enqueued metadata request ${requestId} for mint ${mint}`);
 
         promiseStore.set(requestId, { resolve, reject });
 
