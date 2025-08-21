@@ -3,23 +3,35 @@ import React, { useState, useEffect } from 'react';
 function WalletPill({ wallet, tokenMint }) {
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
     const pnlColor = wallet.pnlSol > 0 ? 'text-green-700' : wallet.pnlSol < 0 ? 'text-red-700' : 'text-gray-700';
-    const [isHighlighted, setIsHighlighted] = useState(false);
+    const [highlightType, setHighlightType] = useState(null); // 'buy', 'sell', or null
 
-    // Check if the wallet has a recent buy (within 5 seconds)
+    // Check if the wallet has a recent buy or sell (within 5 seconds)
     useEffect(() => {
         if (wallet.txBuys > 0 && wallet.firstBuyTime) {
             const buyTime = new Date(wallet.firstBuyTime);
             const now = new Date();
             const diffInSeconds = (now - buyTime) / 1000;
             if (diffInSeconds <= 5) {
-                setIsHighlighted(true);
+                setHighlightType('buy');
                 const timer = setTimeout(() => {
-                    setIsHighlighted(false);
+                    setHighlightType(null);
                 }, 5000); // Remove highlight after 5 seconds
                 return () => clearTimeout(timer);
             }
         }
-    }, [wallet.firstBuyTime, wallet.txBuys]);
+        if (wallet.txSells > 0 && wallet.lastActivity) {
+            const sellTime = new Date(wallet.lastActivity);
+            const now = new Date();
+            const diffInSeconds = (now - sellTime) / 1000;
+            if (diffInSeconds <= 5 && wallet.txSells > 0) {
+                setHighlightType('sell');
+                const timer = setTimeout(() => {
+                    setHighlightType(null);
+                }, 5000); // Remove highlight after 5 seconds
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [wallet.firstBuyTime, wallet.lastActivity, wallet.txBuys, wallet.txSells]);
 
     const openGmgnTokenWithMaker = () => {
         if (!tokenMint || !wallet.address) {
@@ -49,15 +61,20 @@ function WalletPill({ wallet, tokenMint }) {
     return (
         <div
             className={`flex items-center justify-between border rounded-md px-2 py-1 bg-white transition-all duration-500 ${
-                isHighlighted ? 'bg-green-100 border-green-400' : ''
+                highlightType === 'buy' ? 'bg-green-100 border-green-400' :
+                highlightType === 'sell' ? 'bg-red-100 border-red-400' : ''
             }`}
         >
             <div className="truncate max-w-xs">
                 <div className="flex items-center space-x-2">
                     <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
-                    {isHighlighted && (
-                        <span className="text-xs px-1 py-0.5 rounded-full bg-green-500 text-white">
-                            New Buy
+                    {highlightType && (
+                        <span
+                            className={`text-xs px-1 py-0.5 rounded-full text-white ${
+                                highlightType === 'buy' ? 'bg-green-500' : 'bg-red-500'
+                            }`}
+                        >
+                            {highlightType === 'buy' ? 'New Buy' : 'New Sell'}
                         </span>
                     )}
                     <button
@@ -94,7 +111,9 @@ function WalletPill({ wallet, tokenMint }) {
                 </div>
             </div>
             <div className="text-right ml-2">
-                <div className={`text-xs font-semibold ${pnlColor}`}>{wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL</div>
+                <div className={`text-xs font-semibold ${pnlColor}`}>
+                    {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL
+                </div>
                 <div className="text-[9px] text-gray-400">
                     spent {wallet.solSpent.toFixed(4)} SOL 
                     <br />

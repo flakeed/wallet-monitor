@@ -7,22 +7,22 @@ function TokenCard({ token, onOpenChart, transactions }) {
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
-    const [isNewToken, setIsNewToken] = useState(false);
+    const [highlightType, setHighlightType] = useState(null); // 'buy', 'sell', or null
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
-    // Highlight new buy transactions for this token for 5 seconds
+    // Highlight new buy or sell transactions for this token for 5 seconds
     useEffect(() => {
         if (transactions && token.mint) {
-            const recentBuy = transactions.find(
+            const recentTx = transactions.find(
                 (tx) =>
-                    tx.transactionType === 'buy' &&
-                    tx.tokensBought?.some((t) => t.mint === token.mint) &&
+                    (tx.transactionType === 'buy' || tx.transactionType === 'sell') &&
+                    (tx.tokensBought?.some((t) => t.mint === token.mint) || tx.tokensSold?.some((t) => t.mint === token.mint)) &&
                     (new Date() - new Date(tx.time)) / 1000 <= 5
             );
-            if (recentBuy) {
-                setIsNewToken(true);
+            if (recentTx) {
+                setHighlightType(recentTx.transactionType);
                 const timer = setTimeout(() => {
-                    setIsNewToken(false);
+                    setHighlightType(null);
                 }, 5000); // Remove highlight after 5 seconds
                 return () => clearTimeout(timer);
             }
@@ -219,15 +219,26 @@ function TokenCard({ token, onOpenChart, transactions }) {
     };
 
     return (
-        <div className={`border rounded-lg p-4 bg-gray-50 transition-all duration-500 ${isNewToken ? 'bg-green-100 border-green-400' : ''}`}>
+        <div
+            className={`border rounded-lg p-4 bg-gray-50 transition-all duration-500 ${
+                highlightType === 'buy' ? 'bg-green-100 border-green-400' :
+                highlightType === 'sell' ? 'bg-red-100 border-red-400' : ''
+            }`}
+        >
             <div className="flex items-center justify-between mb-3">
                 <div className="min-w-0">
                     <div className="flex items-center space-x-2">
-                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
+                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">
+                            {token.symbol || 'Unknown'}
+                        </span>
                         <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
-                        {isNewToken && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-green-500 text-white">
-                                New Buy
+                        {highlightType && (
+                            <span
+                                className={`text-xs px-2 py-0.5 rounded-full text-white ${
+                                    highlightType === 'buy' ? 'bg-green-500' : 'bg-red-500'
+                                }`}
+                            >
+                                {highlightType === 'buy' ? 'New Buy' : 'New Sell'}
                             </span>
                         )}
                     </div>
@@ -250,8 +261,12 @@ function TokenCard({ token, onOpenChart, transactions }) {
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
-                    <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+                    <div className={`text-base font-bold ${netColor}`}>
+                        {token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
+                    </div>
+                    <div className="text-xs text-gray-500">
+                        {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+                    </div>
                 </div>
             </div>
 
