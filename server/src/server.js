@@ -352,27 +352,30 @@ app.get('/api/transactions/stream', async (req, res) => {
 
 app.get('/api/wallets', auth.authRequired, async (req, res) => {
   try {
-      const groupId = req.query.groupId || null;
-      const userId = req.user.id;
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 50;
-      const offset = (page - 1) * limit;
-
-      const { wallets, totalCount, hasMore } = await db.getActiveWallets(groupId, userId, limit, offset);
-
-      res.json({
-          wallets,
-          pagination: {
-              page,
-              limit,
-              total: totalCount,
-              totalPages: Math.ceil(totalCount / limit),
-              hasMore,
+    const groupId = req.query.groupId || null;
+    const userId = req.user.id;
+    const wallets = await db.getActiveWallets(groupId, userId);
+    const walletsWithStats = await Promise.all(
+      wallets.map(async (wallet) => {
+        const stats = await db.getWalletStats(wallet.id);
+        return {
+          ...wallet,
+          stats: {
+            totalBuyTransactions: stats.total_buy_transactions || 0,
+            totalSellTransactions: stats.total_sell_transactions || 0,
+            totalTransactions: (stats.total_buy_transactions || 0) + (stats.total_sell_transactions || 0),
+            totalSpentSOL: Number(stats.total_sol_spent || 0).toFixed(6),
+            totalReceivedSOL: Number(stats.total_sol_received || 0).toFixed(6),
+            netSOL: (Number(stats.total_sol_received || 0) - Number(stats.total_sol_spent || 0)).toFixed(6),
+            lastTransactionAt: stats.last_transaction_at,
           },
-      });
+        };
+      })
+    );
+    res.json(walletsWithStats);
   } catch (error) {
-      console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error);
-      res.status(500).json({ error: 'Failed to fetch wallets' });
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching wallets:`, error);
+    res.status(500).json({ error: 'Failed to fetch wallets' });
   }
 });
 
