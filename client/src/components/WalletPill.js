@@ -162,11 +162,6 @@ function WalletPill({ wallet, tokenMint }) {
                         <div className="animate-spin rounded-full h-2 w-2 border border-gray-400 border-t-transparent mr-1"></div>
                     ) : null}
                     {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
-                    {tokenMint && totalPnL !== null ? (
-                        <span className="text-[8px] text-blue-600 ml-1" title="Total PnL (realized + unrealized)">T</span>
-                    ) : (
-                        <span className="text-[8px] text-orange-600 ml-1" title="Realized PnL only">R</span>
-                    )}
                 </div>
                 <div className="text-[9px] text-gray-400">
                     spent {(wallet.solSpent || 0).toFixed(4)} SOL 
