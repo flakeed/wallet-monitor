@@ -6,7 +6,7 @@ function TokenCard({ token, onOpenChart }) {
     const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
-    const [groupPnL, setGroupPnL] = useState(0);
+    const [groupPnL, setGroupPnL] = useState(null);
     const netColor = groupPnL.totalPnLSOL > 0 ? 'text-green-700' : groupPnL.totalPnLSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
     // Helper function to get auth headers
@@ -226,8 +226,7 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
                 <div className="text-right">
                     <div className={`text-base font-bold ${netColor}`}>{groupPnL && groupPnL.totalPnLSOL !== undefined
-    ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toString().slice(-4)}`
-    : '0'} SOL</div>
+    ? `groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)`: '0'} SOL</div>
                     <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
                 </div>
             </div>
