@@ -1,4 +1,4 @@
-// client/src/App.js - УЛЬТРА-БЫСТРАЯ версия
+// client/src/App.js - УЛЬТРА-БЫСТРАЯ версия с подсветкой новых транзакций
 
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
@@ -34,6 +34,9 @@ function App() {
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedGroupInfo, setSelectedGroupInfo] = useState(null);
   const [initializationTime, setInitializationTime] = useState(null);
+
+  // Состояние для отслеживания новых транзакций
+  const [newTransactionIds, setNewTransactionIds] = useState(new Set());
 
   // Check authentication on app load
   useEffect(() => {
@@ -191,7 +194,7 @@ function App() {
     }
   };
 
-  // SSE connection остается прежним
+  // SSE connection с обработкой новых транзакций
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -245,6 +248,23 @@ function App() {
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
             };
+
+            // Помечаем транзакцию как новую
+            setNewTransactionIds(prevIds => {
+              const newIds = new Set(prevIds);
+              newIds.add(newTransaction.signature);
+              return newIds;
+            });
+
+            // Убираем пометку через 5 секунд
+            setTimeout(() => {
+              setNewTransactionIds(prevIds => {
+                const newIds = new Set(prevIds);
+                newIds.delete(newTransaction.signature);
+                return newIds;
+              });
+            }, 5000);
+
             return [formattedTransaction, ...prev].slice(0, 400);
           });
         }
@@ -603,7 +623,8 @@ function App() {
               <TokenTracker 
                 groupId={selectedGroup} 
                 transactions={transactions} 
-                timeframe={timeframe} 
+                timeframe={timeframe}
+                newTransactionIds={newTransactionIds}
               />
             )}
           </div>

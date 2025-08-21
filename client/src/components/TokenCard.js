@@ -7,7 +7,15 @@ function TokenCard({ token, onOpenChart }) {
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
+    const [showAllWallets, setShowAllWallets] = useState(false);
+    
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
+
+    // Константы для отображения кошельков
+    const INITIAL_WALLETS_SHOWN = 6;
+    const shouldShowExpandButton = token.wallets.length > INITIAL_WALLETS_SHOWN;
+    const walletsToShow = showAllWallets ? token.wallets : token.wallets.slice(0, INITIAL_WALLETS_SHOWN);
+    const hiddenWalletsCount = token.wallets.length - INITIAL_WALLETS_SHOWN;
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -286,11 +294,49 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {token.wallets.map((w) => (
+            {/* Заголовок с информацией о кошельках */}
+            <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-medium text-gray-700">
+                    Wallets ({token.wallets.length})
+                </div>
+                {shouldShowExpandButton && (
+                    <button
+                        onClick={() => setShowAllWallets(!showAllWallets)}
+                        className="text-xs text-blue-600 hover:text-blue-800 flex items-center space-x-1 transition-colors"
+                    >
+                        <span>
+                            {showAllWallets ? 'Show less' : `Show ${hiddenWalletsCount} more`}
+                        </span>
+                        <svg 
+                            className={`w-3 h-3 transform transition-transform duration-200 ${showAllWallets ? 'rotate-180' : ''}`} 
+                            fill="none" 
+                            stroke="currentColor" 
+                            viewBox="0 0 24 24"
+                        >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </button>
+                )}
+            </div>
+
+            {/* Список кошельков */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                {walletsToShow.map((w) => (
                     <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
                 ))}
             </div>
+
+            {/* Показать скрытые кошельки если кнопка не нажата */}
+            {!showAllWallets && shouldShowExpandButton && (
+                <div className="text-center mb-3">
+                    <div className="text-xs text-gray-500 bg-gray-100 rounded-full px-3 py-1 inline-flex items-center space-x-1">
+                        <span>{hiddenWalletsCount} more wallets hidden</span>
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </div>
+                </div>
+            )}
 
             <div className="mt-2 flex space-x-2">
                 <button

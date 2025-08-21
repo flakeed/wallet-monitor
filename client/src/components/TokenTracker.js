@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
+import TransactionRow from './TransactionRow';
 
-function TokenTracker({ groupId, transactions, timeframe }) {
+function TokenTracker({ groupId, transactions, timeframe, newTransactionIds }) {
   const [items, setItems] = useState([]);
   const [hours, setHours] = useState(timeframe || '24');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest');
+  const [view, setView] = useState('tokens'); // 'tokens' или 'transactions'
 
 const aggregateTokens = (transactions, hours, groupId) => {
   const EXCLUDED_TOKENS = [
@@ -131,8 +133,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
   console.log(`Aggregated ${result.length} unique tokens (excluded ${EXCLUDED_TOKENS.length} system tokens)`);
 
   return result;
-};
-
+}
   const sortTokens = (tokens, sortBy) => {
     const sortedTokens = [...tokens];
     
@@ -170,20 +171,36 @@ const aggregateTokens = (transactions, hours, groupId) => {
     }
   };
 
+  const getFilteredTransactions = () => {
+    const now = new Date();
+    return transactions.filter((tx) => {
+      const txTime = new Date(tx.time);
+      const hoursDiff = (now - txTime) / (1000 * 60 * 60);
+      const matchesTimeframe = hoursDiff <= parseInt(hours);
+      const matchesGroup = !groupId || tx.wallet.group_id === groupId;
+      return matchesTimeframe && matchesGroup;
+    }).sort((a, b) => new Date(b.time) - new Date(a.time));
+  };
+
   useEffect(() => {
     setLoading(true);
     try {
-      const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
-      const sortedTokens = sortTokens(aggregatedTokens, sortBy);
-      console.log('Aggregated and sorted tokens:', sortedTokens);
-      setItems(sortedTokens);
+      if (view === 'tokens') {
+        const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
+        const sortedTokens = sortTokens(aggregatedTokens, sortBy);
+        console.log('Aggregated and sorted tokens:', sortedTokens);
+        setItems(sortedTokens);
+      } else {
+        const filteredTransactions = getFilteredTransactions();
+        setItems(filteredTransactions);
+      }
       setError(null);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [transactions, hours, groupId, sortBy]);
+  }, [transactions, hours, groupId, sortBy, view]);
 
   useEffect(() => {
     setHours(timeframe);
@@ -213,23 +230,51 @@ const aggregateTokens = (transactions, hours, groupId) => {
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-xl font-semibold text-gray-900">Token Tracker</h3>
+        <h3 className="text-xl font-semibold text-gray-900">
+          {view === 'tokens' ? 'Token Tracker' : 'Recent Transactions'}
+        </h3>
         <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-500">Sort by:</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          {/* View Toggle */}
+          <div className="flex bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setView('tokens')}
+              className={`px-3 py-1 text-sm rounded-md transition-all ${
+                view === 'tokens' 
+                  ? 'bg-white text-gray-900 shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
             >
-              <option value="latest">Latest Activity</option>
-              <option value="firstBuy">Recent Purchases</option>
-              <option value="profit">Most Profitable</option>
-              <option value="loss">Biggest Losses</option>
-              <option value="volume">Highest Volume</option>
-              <option value="activity">Most Active</option>
-            </select>
+              Tokens
+            </button>
+            <button
+              onClick={() => setView('transactions')}
+              className={`px-3 py-1 text-sm rounded-md transition-all ${
+                view === 'transactions' 
+                  ? 'bg-white text-gray-900 shadow-sm' 
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Transactions
+            </button>
           </div>
+
+          {view === 'tokens' && (
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-500">Sort by:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="latest">Latest Activity</option>
+                <option value="firstBuy">Recent Purchases</option>
+                <option value="profit">Most Profitable</option>
+                <option value="loss">Biggest Losses</option>
+                <option value="volume">Highest Volume</option>
+                <option value="activity">Most Active</option>
+              </select>
+            </div>
+          )}
           
           <div className="flex items-center space-x-2">
             <span className="text-sm text-gray-500">Period:</span>
@@ -249,7 +294,9 @@ const aggregateTokens = (transactions, hours, groupId) => {
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
-          <span className="text-gray-500">Loading token data...</span>
+          <span className="text-gray-500">
+            Loading {view === 'tokens' ? 'token' : 'transaction'} data...
+          </span>
         </div>
       ) : error ? (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
@@ -264,18 +311,33 @@ const aggregateTokens = (transactions, hours, groupId) => {
                 d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
           </div>
-          <p className="text-gray-500 text-lg">No token activity found</p>
+          <p className="text-gray-500 text-lg">
+            No {view === 'tokens' ? 'token activity' : 'transactions'} found
+          </p>
           <p className="text-sm text-gray-400 mt-1">
-            No token transactions detected for the selected timeframe and group
+            No {view === 'tokens' ? 'token transactions' : 'transactions'} detected for the selected timeframe and group
           </p>
         </div>
       ) : (
         <div className="space-y-4">
-          {items.map((token) => (
-            <div key={token.mint}>
-              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
-            </div>
-          ))}
+          {view === 'tokens' ? (
+            // Token cards
+            items.map((token) => (
+              <div key={token.mint}>
+                <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
+              </div>
+            ))
+          ) : (
+            // Transaction rows
+            items.map((transaction, index) => (
+              <TransactionRow 
+                key={transaction.signature} 
+                transaction={transaction} 
+                index={index}
+                isNew={newTransactionIds && newTransactionIds.has(transaction.signature)}
+              />
+            ))
+          )}
         </div>
       )}
     </div>
