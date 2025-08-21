@@ -409,7 +409,7 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
   }
 });
 
-pp.delete('/api/wallets', auth.authRequired, async (req, res) => {
+app.delete('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
     const userId = req.user.id;
