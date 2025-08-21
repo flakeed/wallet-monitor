@@ -7,7 +7,6 @@ function TokenCard({ token, onOpenChart }) {
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
-    const netColor = groupPnL.totalPnLSOL > 0 ? 'text-green-700' : groupPnL.totalPnLSOL < 0 ? 'text-red-700' : 'text-gray-700';
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -197,7 +196,13 @@ function TokenCard({ token, onOpenChart }) {
         if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
         return `${Math.floor(diffInMinutes / 1440)}d ago`;
     };
-
+    const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
+    ? groupPnL.totalPnLSOL > 0
+        ? 'text-green-700'
+        : groupPnL.totalPnLSOL < 0
+        ? 'text-red-700'
+        : 'text-gray-700'
+    : 'text-gray-700';
     return (
         <div className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
