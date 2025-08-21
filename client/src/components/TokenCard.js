@@ -1,33 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import WalletPill from './WalletPill';
 
-function TokenCard({ token, onOpenChart, transactions }) {
+function TokenCard({ token, onOpenChart }) {
     const [priceData, setPriceData] = useState(null);
     const [solPrice, setSolPrice] = useState(null);
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
-    const [highlightType, setHighlightType] = useState(null); // 'buy', 'sell', or null
     const netColor = token.summary.netSOL > 0 ? 'text-green-700' : token.summary.netSOL < 0 ? 'text-red-700' : 'text-gray-700';
-
-    // Highlight new buy or sell transactions for this token for 5 seconds
-    useEffect(() => {
-        if (transactions && token.mint) {
-            const recentTx = transactions.find(
-                (tx) =>
-                    (tx.transactionType === 'buy' || tx.transactionType === 'sell') &&
-                    (tx.tokensBought?.some((t) => t.mint === token.mint) || tx.tokensSold?.some((t) => t.mint === token.mint)) &&
-                    (new Date() - new Date(tx.time)) / 1000 <= 5
-            );
-            if (recentTx) {
-                setHighlightType(recentTx.transactionType);
-                const timer = setTimeout(() => {
-                    setHighlightType(null);
-                }, 5000); // Remove highlight after 5 seconds
-                return () => clearTimeout(timer);
-            }
-        }
-    }, [transactions, token.mint]);
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -76,7 +56,7 @@ function TokenCard({ token, onOpenChart, transactions }) {
                 setSolPrice(data.price);
             } else {
                 console.error('Failed to fetch SOL price:', data.error);
-                setSolPrice(150);
+                setSolPrice(150); 
             }
         } catch (error) {
             console.error('Error fetching SOL price:', error);
@@ -219,28 +199,12 @@ function TokenCard({ token, onOpenChart, transactions }) {
     };
 
     return (
-        <div
-            className={`border rounded-lg p-4 bg-gray-50 transition-all duration-500 ${
-                highlightType === 'buy' ? 'bg-green-100 border-green-400' :
-                highlightType === 'sell' ? 'bg-red-100 border-red-400' : ''
-            }`}
-        >
+        <div className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
                 <div className="min-w-0">
                     <div className="flex items-center space-x-2">
-                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">
-                            {token.symbol || 'Unknown'}
-                        </span>
+                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
                         <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
-                        {highlightType && (
-                            <span
-                                className={`text-xs px-2 py-0.5 rounded-full text-white ${
-                                    highlightType === 'buy' ? 'bg-green-500' : 'bg-red-500'
-                                }`}
-                            >
-                                {highlightType === 'buy' ? 'New Buy' : 'New Sell'}
-                            </span>
-                        )}
                     </div>
                     <div className="flex items-center space-x-1">
                         <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
@@ -261,12 +225,8 @@ function TokenCard({ token, onOpenChart, transactions }) {
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>
-                        {token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL
-                    </div>
-                    <div className="text-xs text-gray-500">
-                        {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
-                    </div>
+                    <div className={`text-base font-bold ${netColor}`}>{token.summary.netSOL > 0 ? '+' : ''}{token.summary.netSOL.toFixed(4)} SOL</div>
+                    <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
                 </div>
             </div>
 

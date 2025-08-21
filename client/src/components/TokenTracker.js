@@ -273,7 +273,7 @@ const aggregateTokens = (transactions, hours, groupId) => {
         <div className="space-y-4">
           {items.map((token) => (
             <div key={token.mint}>
-              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} transactions={transactions} />
+              <TokenCard token={token} onOpenChart={() => openGmgnChart(token.mint)} />
             </div>
           ))}
         </div>
