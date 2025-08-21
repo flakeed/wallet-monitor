@@ -22,7 +22,7 @@ constructor() {
             lastScanDuration: 0,
             startTime: Date.now(),
         };
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:CwBXeFAGuARpNfwwziJyFttVApFFFyGD@switchback.proxy.rlwy.net:25212');
+        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
         this.isProcessingQueue = false;
         this.queueKey = 'webhook:queue';
         this.batchSize = 400;
