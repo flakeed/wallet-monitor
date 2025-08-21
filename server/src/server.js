@@ -382,72 +382,88 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
 app.delete('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id; // Всегда используем ID текущего пользователя
+    const userId = req.user.id;
     
-    console.log(`[${new Date().toISOString()}] 🗑️ Delete request from user ${userId}${groupId ? ` for group ${groupId}` : ' for ALL groups'}`);
+    console.log(`[${new Date().toISOString()}] 🗑️ Starting removal of all wallets for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
     
-    // Проверяем права доступа к группе (если указана)
-    if (groupId) {
-      const groupCheck = await db.pool.query(
-        `SELECT id FROM groups WHERE id = $1 AND user_id = $2`,
-        [groupId, userId]
-      );
-      
-      if (groupCheck.rows.length === 0) {
-        return res.status(404).json({ 
-          error: 'Group not found or access denied' 
-        });
-      }
-    }
+    // 1. Сначала получаем список кошельков которые будем удалять
+    const walletsToRemove = await db.getActiveWallets(groupId, userId);
+    const addressesToRemove = walletsToRemove.map(w => w.address);
     
-    // Получаем статистику ДО удаления для отчета
-    const beforeStats = await db.pool.query(`
-      SELECT 
-        COUNT(w.id) as wallet_count,
-        COUNT(t.id) as transaction_count,
-        COUNT(to_.id) as token_operation_count
-      FROM wallets w
-      LEFT JOIN transactions t ON w.id = t.wallet_id
-      LEFT JOIN token_operations to_ ON t.id = to_.transaction_id
-      WHERE w.user_id = $1 ${groupId ? 'AND w.group_id = $2' : ''}
-    `, groupId ? [userId, groupId] : [userId]);
+    console.log(`[${new Date().toISOString()}] 📋 Found ${addressesToRemove.length} wallets to remove`);
     
-    const beforeCount = beforeStats.rows[0];
-    
-    if (beforeCount.wallet_count === 0) {
+    if (addressesToRemove.length === 0) {
       return res.json({
         success: true,
-        message: 'No wallets found to delete',
+        message: 'No wallets to remove',
         deletedCount: 0,
       });
     }
+
+    // 2. Отписываемся от WebSocket подписок ПЕРЕД удалением из БД
+    try {
+      console.log(`[${new Date().toISOString()}] 🔌 Unsubscribing from ${addressesToRemove.length} wallets...`);
+      
+      // Отписываемся от каждого кошелька через WebSocket сервис
+      const unsubscribePromises = addressesToRemove.map(async (address) => {
+        try {
+          await solanaWebSocketService.unsubscribeFromWallet(address);
+          console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from ${address.slice(0, 8)}...`);
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Failed to unsubscribe from ${address.slice(0, 8)}...: ${error.message}`);
+        }
+      });
+      
+      await Promise.all(unsubscribePromises);
+      console.log(`[${new Date().toISOString()}] ✅ WebSocket unsubscription completed`);
+      
+    } catch (wsError) {
+      console.error(`[${new Date().toISOString()}] ⚠️ WebSocket unsubscription error:`, wsError.message);
+      // Продолжаем выполнение даже если отписка не удалась
+    }
     
-    // Выполняем удаление через WebSocket сервис (который вызовет database)
-    const result = await solanaWebSocketService.removeAllWallets(groupId, userId);
+    // 3. Теперь удаляем из базы данных
+    console.log(`[${new Date().toISOString()}] 🗄️ Removing wallets from database...`);
     
-    // Формируем сообщение для ответа
-    const groupMessage = groupId ? ` from group ${groupId}` : ' from all groups';
-    const detailMessage = [
-      `${result.deletedCount} wallets`,
-      `${result.deletedTransactions || 0} transactions`,
-      `${result.deletedTokenOperations || 0} token operations`
-    ].join(', ');
+    const query = groupId 
+      ? `DELETE FROM wallets WHERE user_id = $1 AND group_id = $2 RETURNING address`
+      : `DELETE FROM wallets WHERE user_id = $1 RETURNING address`;
+    const params = groupId ? [userId, groupId] : [userId];
+    
+    const result = await db.pool.query(query, params);
+    const deletedAddresses = result.rows.map(row => row.address);
+    
+    console.log(`[${new Date().toISOString()}] ✅ Removed ${result.rowCount} wallets from database`);
+    
+    // 4. Дополнительная очистка - убираем из кэша подписок WebSocket сервиса
+    if (deletedAddresses.length > 0) {
+      deletedAddresses.forEach(address => {
+        if (solanaWebSocketService.subscriptions.has(address)) {
+          solanaWebSocketService.subscriptions.delete(address);
+          console.log(`[${new Date().toISOString()}] 🧹 Cleaned subscription cache for ${address.slice(0, 8)}...`);
+        }
+      });
+    }
+    
+    // 5. Логируем итоговое состояние
+    const remainingSubscriptions = solanaWebSocketService.subscriptions.size;
+    console.log(`[${new Date().toISOString()}] 📊 Removal summary:`);
+    console.log(`  - Database deletions: ${result.rowCount}`);
+    console.log(`  - WebSocket unsubscriptions: ${addressesToRemove.length}`);
+    console.log(`  - Remaining active subscriptions: ${remainingSubscriptions}`);
     
     res.json({
       success: true,
-      message: `Successfully removed ${detailMessage}${groupMessage}`,
-      deletedCount: result.deletedCount,
-      deletedTransactions: result.deletedTransactions || 0,
-      deletedTokenOperations: result.deletedTokenOperations || 0,
-      deletedStats: result.deletedStats || 0,
-      groupId: groupId,
-      userId: userId
+      message: `Successfully removed ${result.rowCount} wallets and their WebSocket subscriptions${groupId ? ` for group ${groupId}` : ''}`,
+      deletedCount: result.rowCount,
+      unsubscribedCount: addressesToRemove.length,
+      remainingSubscriptions,
     });
     
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error removing wallets:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error removing all wallets:`, error);
     res.status(500).json({ 
-      error: 'Failed to remove wallets',
+      error: 'Failed to remove all wallets',
       details: error.message 
     });
   }

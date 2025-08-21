@@ -433,17 +433,49 @@ class SolanaWebSocketService {
     }
 
     async unsubscribeFromWallet(walletAddress) {
-        const subData = this.subscriptions.get(walletAddress);
-        if (!subData?.logs || !this.ws || this.ws.readyState !== WS_READY_STATE_OPEN) return;
-
-        try {
-            await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
-            console.log(`[${new Date().toISOString()}] ✅ Unsubscribed from logs for ${walletAddress.slice(0, 8)}...`);
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error unsubscribing from ${walletAddress}:`, error.message);
-        }
+    const subData = this.subscriptions.get(walletAddress);
+    
+    // Всегда удаляем из локального кэша, даже если WebSocket недоступен
+    const hadSubscription = this.subscriptions.has(walletAddress);
+    
+    if (hadSubscription) {
         this.subscriptions.delete(walletAddress);
+        console.log(`[${new Date().toISOString()}] 🗑️ Removed ${walletAddress.slice(0, 8)}... from local subscription cache`);
     }
+    
+    // Пытаемся отписаться через WebSocket, если возможно
+    if (subData?.logs && this.ws && this.ws.readyState === WS_READY_STATE_OPEN) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔌 Sending WebSocket unsubscribe for ${walletAddress.slice(0, 8)}... (subscription: ${subData.logs})`);
+            
+            await this.sendRequest('logsUnsubscribe', [subData.logs], 'logsUnsubscribe');
+            
+            console.log(`[${new Date().toISOString()}] ✅ Successfully unsubscribed from logs for ${walletAddress.slice(0, 8)}... (subscription: ${subData.logs})`);
+            
+            return { success: true, method: 'websocket', subscriptionId: subData.logs };
+            
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ WebSocket unsubscribe error for ${walletAddress.slice(0, 8)}...: ${error.message}`);
+            
+            // Даже при ошибке WebSocket считаем операцию частично успешной, 
+            // так как мы удалили из локального кэша
+            return { success: true, method: 'cache_only', error: error.message };
+        }
+    } else {
+        const reason = !subData?.logs ? 'no_subscription_data' : 
+                      !this.ws ? 'no_websocket' : 
+                      'websocket_not_open';
+        
+        console.log(`[${new Date().toISOString()}] ⚠️ Cannot send WebSocket unsubscribe for ${walletAddress.slice(0, 8)}... (reason: ${reason})`);
+        
+        return { 
+            success: hadSubscription, 
+            method: 'cache_only', 
+            reason,
+            hadSubscription 
+        };
+    }
+}
 
     async subscribeToWallet(walletAddress) {
         if (this.subscriptions.size >= this.maxSubscriptions) {
@@ -510,41 +542,94 @@ class SolanaWebSocketService {
 
     async removeAllWallets(groupId = null, userId = null) {
         try {
-            console.log(`[${new Date().toISOString()}] 🗑️ Starting removal of wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
+            console.log(`[${new Date().toISOString()}] 🗑️ Starting COMPLETE removal of all wallets (group: ${groupId || 'all'}, user: ${userId || 'all'})`);
+            const startTime = Date.now();
             
-            // 1. Сначала получаем список кошельков для отписки (ДО удаления из БД)
+            // 1. Сначала получаем список кошельков для отписки ПЕРЕД удалением из БД
             const walletsToRemove = await this.db.getActiveWallets(groupId, userId);
             const addressesToUnsubscribe = walletsToRemove.map(w => w.address);
-            
-            console.log(`[${new Date().toISOString()}] 📋 Found ${walletsToRemove.length} wallets to remove and unsubscribe`);
-            
-            // 2. Отписываемся от WebSocket для найденных кошельков
+    
+            console.log(`[${new Date().toISOString()}] 📋 Found ${addressesToUnsubscribe.length} wallets to remove`);
+    
+            // 2. Отписываемся от WebSocket batch операцией ПЕРЕД удалением из БД
             if (addressesToUnsubscribe.length > 0) {
-                console.log(`[${new Date().toISOString()}] 📤 Unsubscribing from ${addressesToUnsubscribe.length} wallets...`);
-                await this.unsubscribeFromWalletsBatch(addressesToUnsubscribe);
+                console.log(`[${new Date().toISOString()}] 🔌 Unsubscribing from ${addressesToUnsubscribe.length} wallets via WebSocket...`);
+                
+                try {
+                    const unsubscribeResults = await this.unsubscribeFromWalletsBatch(addressesToUnsubscribe, 200);
+                    console.log(`[${new Date().toISOString()}] ✅ WebSocket unsubscription completed: ${unsubscribeResults.successful} successful, ${unsubscribeResults.failed} failed`);
+                } catch (wsError) {
+                    console.error(`[${new Date().toISOString()}] ⚠️ WebSocket unsubscription error:`, wsError.message);
+                    
+                    // Fallback: индивидуальная отписка
+                    console.log(`[${new Date().toISOString()}] 🔄 Fallback: individual unsubscription...`);
+                    for (const address of addressesToUnsubscribe) {
+                        try {
+                            await this.unsubscribeFromWallet(address);
+                        } catch (individualError) {
+                            console.error(`[${new Date().toISOString()}] ❌ Failed to unsubscribe ${address.slice(0, 8)}...: ${individualError.message}`);
+                        }
+                    }
+                }
             }
-            
-            // 3. Удаляем кошельки и связанные данные из базы данных
-            const deleteResult = await this.monitoringService.removeAllWallets(groupId, userId);
-            
-            console.log(`[${new Date().toISOString()}] ✅ Database deletion completed:`);
-            console.log(`  - Wallets: ${deleteResult.deletedCount}`);
-            console.log(`  - Transactions: ${deleteResult.deletedTransactions || 0}`);
-            console.log(`  - Token operations: ${deleteResult.deletedTokenOperations || 0}`);
-            
-            // 4. Логика переподписки - НЕ переподписываемся, так как удалили нужные кошельки
-            // Переподписка нужна только если удаляем ВСЕ кошельки без фильтра
-            if (!groupId && !userId && this.isStarted) {
-                console.log(`[${new Date().toISOString()}] 🔄 Removed all wallets, resubscribing to any remaining...`);
-                await this.subscribeToWallets();
-            } else {
-                console.log(`[${new Date().toISOString()}] ℹ️ Selective deletion completed. Current active subscriptions: ${this.subscriptions.size}`);
+    
+            // 3. Удаляем из базы данных через monitoring service
+            console.log(`[${new Date().toISOString()}] 🗄️ Removing wallets from database...`);
+            await this.monitoringService.removeAllWallets(groupId, userId);
+    
+            // 4. Дополнительная очистка локального кэша подписок
+            let cleanedFromCache = 0;
+            if (addressesToUnsubscribe.length > 0) {
+                console.log(`[${new Date().toISOString()}] 🧹 Cleaning local subscription cache...`);
+                
+                for (const address of addressesToUnsubscribe) {
+                    if (this.subscriptions.has(address)) {
+                        this.subscriptions.delete(address);
+                        cleanedFromCache++;
+                    }
+                }
+                
+                console.log(`[${new Date().toISOString()}] 🧹 Cleaned ${cleanedFromCache} entries from subscription cache`);
             }
+    
+            // 5. Если это текущая активная группа/пользователь, переподписываемся на оставшиеся кошельки
+            const shouldResubscribe = (
+                (groupId && groupId === this.activeGroupId) || 
+                (userId && userId === this.activeUserId) ||
+                (!groupId && !userId) // Если удаляем всё
+            );
+    
+            if (shouldResubscribe && this.isStarted) {
+                console.log(`[${new Date().toISOString()}] 🔄 Resubscribing to remaining wallets after removal...`);
+                
+                try {
+                    await this.subscribeToWallets();
+                    console.log(`[${new Date().toISOString()}] ✅ Resubscription completed: ${this.subscriptions.size} active subscriptions`);
+                } catch (resubError) {
+                    console.error(`[${new Date().toISOString()}] ❌ Resubscription error:`, resubError.message);
+                }
+            }
+    
+            const duration = Date.now() - startTime;
             
-            return deleteResult;
-            
+            console.log(`[${new Date().toISOString()}] 🎉 COMPLETE removal operation finished in ${duration}ms:`);
+            console.log(`  - Wallets processed: ${addressesToUnsubscribe.length}`);
+            console.log(`  - WebSocket unsubscriptions: ${addressesToUnsubscribe.length}`);
+            console.log(`  - Cache entries cleaned: ${cleanedFromCache}`);
+            console.log(`  - Current active subscriptions: ${this.subscriptions.size}`);
+            console.log(`  - Resubscribed: ${shouldResubscribe ? 'Yes' : 'No'}`);
+    
+            return {
+                success: true,
+                walletsRemoved: addressesToUnsubscribe.length,
+                cacheEntriesCleaned: cleanedFromCache,
+                currentSubscriptions: this.subscriptions.size,
+                resubscribed: shouldResubscribe,
+                duration
+            };
+    
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error in removeAllWallets:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error in COMPLETE removeAllWallets:`, error.message);
             throw error;
         }
     }
