@@ -163,13 +163,14 @@ class Database {
     
                 console.log(`[${new Date().toISOString()}] ⚡ Executing optimized batch insert for ${wallets.length} wallets...`);
                 
-                // Метод 1: Использование обычного INSERT (совместимо со всеми версиями PostgreSQL)
+                // Исправленная версия с правильными параметрами
                 const values = [];
                 const placeholders = [];
                 
                 wallets.forEach((wallet, index) => {
                     const offset = index * 4;
-                    placeholders.push(`(${offset + 1}, ${offset + 2}, ${offset + 3}, ${offset + 4})`);
+                    // ИСПРАВЛЕНО: добавлен знак $ перед номерами параметров и ::uuid для UUID полей
+                    placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}::uuid, $${offset + 4}::uuid)`);
                     values.push(
                         wallet.address,
                         wallet.name || null,
@@ -184,6 +185,9 @@ class Database {
                     ON CONFLICT (address, user_id) DO NOTHING
                     RETURNING id, address, name, group_id, user_id, created_at
                 `;
+    
+                console.log(`[${new Date().toISOString()}] 📝 Query sample: ${insertQuery.substring(0, 200)}...`);
+                console.log(`[${new Date().toISOString()}] 📊 Values count: ${values.length}, Expected: ${wallets.length * 4}`);
     
                 const insertResult = await client.query(insertQuery, values);
     
