@@ -1,96 +1,88 @@
+// client/src/components/WalletPill.js - OPTIMIZED VERSION
+
 import React, { useState, useEffect } from 'react';
 
-function WalletPill({ wallet, tokenMint }) {
-    const [totalPnL, setTotalPnL] = useState(null);
+function WalletPill({ wallet, tokenMint, pnlData }) {
+    const [walletPnL, setWalletPnL] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-    
-    // Helper function to get auth headers
-    const getAuthHeaders = () => {
-        const sessionToken = localStorage.getItem('sessionToken');
-        return {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${sessionToken}`
-        };
-    };
 
-    // Fetch token price and calculate total PnL
-    const calculateTotalPnL = async () => {
-        if (!tokenMint || isLoading) return;
-        
-        setIsLoading(true);
+    // Calculate individual wallet PnL based on group PnL data
+    const calculateWalletPnL = () => {
+        if (!pnlData || !pnlData.hasValidData || !pnlData.currentPrice || !pnlData.solPrice) {
+            // Fallback to realized PnL only
+            return {
+                totalPnLSOL: wallet.pnlSol || 0,
+                totalPnLUSD: (wallet.pnlSol || 0) * (pnlData?.solPrice || 150),
+                hasValidData: false
+            };
+        }
+
         try {
-            // Fetch token price from DexScreener
-            const priceResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
-            const priceData = await priceResponse.json();
+            const totalTokensBought = wallet.tokensBought || 0;
+            const totalTokensSold = wallet.tokensSold || 0;
+            const totalSpentSOL = wallet.solSpent || 0;
+            const totalReceivedSOL = wallet.solReceived || 0;
+
+            const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
             
-            // Fetch SOL price
-            const solResponse = await fetch('/api/solana/price', {
-                headers: getAuthHeaders()
-            });
-            const solData = await solResponse.json();
-            
-            if (priceData.pairs && priceData.pairs.length > 0 && solData.success) {
-                const bestPair = priceData.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                const tokenPriceUSD = parseFloat(bestPair.priceUsd || 0);
-                const solPriceUSD = solData.price;
+            let realizedPnLSOL = 0;
+            let remainingCostBasisSOL = 0;
 
-                if (tokenPriceUSD > 0 && solPriceUSD > 0) {
-                    // Calculate total PnL like in TokenCard.js
-                    const totalTokensBought = wallet.tokensBought || 0;
-                    const totalTokensSold = wallet.tokensSold || 0;
-                    const totalSpentSOL = wallet.solSpent || 0;
-                    const totalReceivedSOL = wallet.solReceived || 0;
-
-                    const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
-                    
-                    let realizedPnLSOL = 0;
-                    let remainingCostBasisSOL = 0;
-
-                    if (totalTokensBought > 0 && totalTokensSold > 0) {
-                        const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-                        const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
-                        realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
-                        remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-                    } else {
-                        realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
-                        remainingCostBasisSOL = totalSpentSOL;
-                    }
-
-                    const currentTokenValueUSD = currentHoldings * tokenPriceUSD;
-                    const remainingCostBasisUSD = remainingCostBasisSOL * solPriceUSD;
-                    
-                    const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
-                    const unrealizedPnLSOL = unrealizedPnLUSD / solPriceUSD;
-                    
-                    const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
-                    
-                    setTotalPnL(totalPnLSOL);
-                }
+            if (totalTokensBought > 0 && totalTokensSold > 0) {
+                const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+                const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
+                realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
+                remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+            } else {
+                realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
+                remainingCostBasisSOL = totalSpentSOL;
             }
+
+            const currentTokenValueUSD = currentHoldings * pnlData.currentPrice;
+            const remainingCostBasisUSD = remainingCostBasisSOL * pnlData.solPrice;
+            
+            const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
+            const unrealizedPnLSOL = unrealizedPnLUSD / pnlData.solPrice;
+            
+            const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
+            const totalPnLUSD = totalPnLSOL * pnlData.solPrice;
+            
+            return {
+                totalPnLSOL,
+                totalPnLUSD,
+                realizedPnLSOL,
+                unrealizedPnLSOL,
+                currentHoldings,
+                currentValueUSD: currentTokenValueUSD,
+                hasValidData: true
+            };
         } catch (error) {
-            console.error('Error calculating total PnL:', error);
-            // Fallback to realized PnL if calculation fails
-            setTotalPnL(wallet.pnlSol || 0);
-        } finally {
-            setIsLoading(false);
+            console.warn('Error calculating wallet PnL:', error);
+            return {
+                totalPnLSOL: wallet.pnlSol || 0,
+                totalPnLUSD: (wallet.pnlSol || 0) * (pnlData?.solPrice || 150),
+                hasValidData: false
+            };
         }
     };
 
+    // Recalculate when pnlData changes
     useEffect(() => {
-        if (tokenMint) {
-            calculateTotalPnL();
+        if (pnlData) {
+            setWalletPnL(calculateWalletPnL());
         } else {
-            // If no token mint, use realized PnL
-            setTotalPnL(wallet.pnlSol || 0);
+            setWalletPnL({
+                totalPnLSOL: wallet.pnlSol || 0,
+                totalPnLUSD: 0,
+                hasValidData: false
+            });
         }
-    }, [tokenMint, wallet]);
+    }, [pnlData, wallet]);
 
-    // Determine color based on total PnL or fallback to realized PnL
-    const displayPnL = totalPnL !== null ? totalPnL : (wallet.pnlSol || 0);
+    // Determine color based on PnL
+    const displayPnL = walletPnL ? walletPnL.totalPnLSOL : (wallet.pnlSol || 0);
     const pnlColor = displayPnL > 0 ? 'text-green-700' : displayPnL < 0 ? 'text-red-700' : 'text-gray-700';
 
     const openGmgnTokenWithMaker = () => {
@@ -103,7 +95,9 @@ function WalletPill({ wallet, tokenMint }) {
     };
 
     const copyToClipboard = () => {
-        navigator.clipboard.writeText(wallet.address);
+        navigator.clipboard.writeText(wallet.address)
+            .then(() => console.log('Wallet address copied'))
+            .catch(err => console.error('Failed to copy:', err));
     };
 
     const formatTime = (timeString) => {
@@ -137,37 +131,61 @@ function WalletPill({ wallet, tokenMint }) {
                             />
                         </svg>
                     </button>
-                    <button
-                        onClick={openGmgnTokenWithMaker}
-                        className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
-                        title="Open token chart with this wallet as maker"
-                    >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                            />
-                        </svg>
-                    </button>
+                    {tokenMint && (
+                        <button
+                            onClick={openGmgnTokenWithMaker}
+                            className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
+                            title="Open token chart with this wallet as maker"
+                        >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                                />
+                            </svg>
+                        </button>
+                    )}
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
-                    <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
+                    <span>{wallet.txBuys || 0} buys · {wallet.txSells || 0} sells</span>
+                    {walletPnL && walletPnL.currentHoldings > 0 && (
+                        <span className="text-blue-600">
+                            {walletPnL.currentHoldings.toFixed(0)} tokens
+                        </span>
+                    )}
                 </div>
             </div>
+            
             <div className="text-right ml-2">
                 <div className={`text-xs font-semibold ${pnlColor} flex items-center`}>
-                    {isLoading && tokenMint ? (
+                    {isLoading && (
                         <div className="animate-spin rounded-full h-2 w-2 border border-gray-400 border-t-transparent mr-1"></div>
-                    ) : null}
+                    )}
                     {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
+                    {walletPnL && !walletPnL.hasValidData && (
+                        <span className="text-gray-400 ml-1" title="Estimated (price data unavailable)">*</span>
+                    )}
                 </div>
-                <div className="text-[9px] text-gray-400">
-                    spent {(wallet.solSpent || 0).toFixed(4)} SOL 
-                    <br />
-                    recv {(wallet.solReceived || 0).toFixed(4)} SOL
-                </div>
+                
+                {/* Enhanced details when PnL data is available */}
+                {walletPnL && walletPnL.hasValidData ? (
+                    <div className="text-[9px] text-gray-400">
+                        <div>R: {walletPnL.realizedPnLSOL.toFixed(3)} SOL</div>
+                        <div>U: {walletPnL.unrealizedPnLSOL.toFixed(3)} SOL</div>
+                        {walletPnL.currentValueUSD > 0 && (
+                            <div className="text-blue-500">
+                                ${walletPnL.currentValueUSD.toFixed(0)}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="text-[9px] text-gray-400">
+                        <div>spent {(wallet.solSpent || 0).toFixed(4)} SOL</div>
+                        <div>recv {(wallet.solReceived || 0).toFixed(4)} SOL</div>
+                    </div>
+                )}
             </div>
         </div>
     );

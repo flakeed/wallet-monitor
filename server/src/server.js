@@ -7,7 +7,7 @@ const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
-
+const pnlService = require('./services/pnlService');
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -884,14 +884,233 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   }
 });
 
-app.get('/api/solana/price', auth.authRequired, async (req, res) => {
+
+app.post('/api/tokens/pnl', auth.authRequired, async (req, res) => {
   try {
-    const solPrice = await monitoringService.fetchSolPrice();
+    const { tokens } = req.body;
+    const userId = req.user.id;
+
+    if (!tokens || !Array.isArray(tokens) || tokens.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Tokens array is required' 
+      });
+    }
+
+    if (tokens.length > 100) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Maximum 100 tokens allowed per request' 
+      });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🚀 PnL calculation request for ${tokens.length} tokens (user: ${userId})`);
+    const startTime = Date.now();
+
+    // Validate token data
+    const validTokens = tokens.filter(token => 
+      token.mint && 
+      typeof token.totalTokensBought === 'number' && 
+      typeof token.totalTokensSold === 'number' &&
+      typeof token.totalSpentSOL === 'number' && 
+      typeof token.totalReceivedSOL === 'number'
+    );
+
+    if (validTokens.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'No valid token data provided' 
+      });
+    }
+
+    // Calculate PnL using the optimized service
+    const pnlResults = await pnlService.calculateBatchPnL(validTokens);
+
+    const duration = Date.now() - startTime;
+    const successfulCalculations = pnlResults.filter(r => r.hasValidData).length;
+
+    console.log(`[${new Date().toISOString()}] ✅ PnL calculation completed in ${duration}ms: ${successfulCalculations}/${validTokens.length} successful`);
+
+    res.json({
+      success: true,
+      pnlData: pnlResults,
+      performance: {
+        duration,
+        totalTokens: tokens.length,
+        validTokens: validTokens.length,
+        successfulCalculations,
+        tokensPerSecond: Math.round((validTokens.length / duration) * 1000)
+      }
+    });
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in PnL calculation:`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to calculate PnL data',
+      details: error.message 
+    });
+  }
+});
+
+// Fast SOL price endpoint with caching
+app.get('/api/solana/price-fast', auth.authRequired, async (req, res) => {
+  try {
+    const startTime = Date.now();
+    const solPrice = await pnlService.getSolPrice();
+    const duration = Date.now() - startTime;
+
     res.json({
       success: true,
       price: solPrice,
       currency: 'USD',
-      lastUpdated: monitoringService.solPriceCache.lastUpdated
+      cached: duration < 50, // If very fast, likely from cache
+      duration,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching fast SOL price:`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch SOL price',
+      fallbackPrice: 150 
+    });
+  }
+});
+
+// Batch token price endpoint
+app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    const userId = req.user.id;
+
+    if (!mints || !Array.isArray(mints) || mints.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Mints array is required' 
+      });
+    }
+
+    if (mints.length > 50) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Maximum 50 token mints allowed per request' 
+      });
+    }
+
+    console.log(`[${new Date().toISOString()}] 💰 Batch price request for ${mints.length} tokens (user: ${userId})`);
+    const startTime = Date.now();
+
+    // Get prices for all mints
+    const pricePromises = mints.map(async (mint) => {
+      try {
+        const price = await pnlService.getTokenPrice(mint);
+        return { mint, price, success: true };
+      } catch (error) {
+        console.warn(`[${new Date().toISOString()}] ⚠️ Failed to get price for ${mint}:`, error.message);
+        return { mint, price: null, success: false, error: error.message };
+      }
+    });
+
+    const results = await Promise.all(pricePromises);
+    const duration = Date.now() - startTime;
+    const successfulPrices = results.filter(r => r.success).length;
+
+    console.log(`[${new Date().toISOString()}] ✅ Batch price fetch completed in ${duration}ms: ${successfulPrices}/${mints.length} successful`);
+
+    res.json({
+      success: true,
+      prices: results,
+      performance: {
+        duration,
+        totalRequested: mints.length,
+        successful: successfulPrices,
+        failed: mints.length - successfulPrices,
+        pricesPerSecond: Math.round((mints.length / duration) * 1000)
+      }
+    });
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in batch price fetch:`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch token prices',
+      details: error.message 
+    });
+  }
+});
+
+// Preload token prices for better UX
+app.post('/api/tokens/preload-prices', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    const userId = req.user.id;
+
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Mints array is required' 
+      });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🔄 Preloading prices for ${mints.length} tokens (user: ${userId})`);
+
+    // Fire and forget - start loading prices in background
+    setImmediate(async () => {
+      try {
+        const pricePromises = mints.slice(0, 20).map(mint => 
+          pnlService.getTokenPrice(mint).catch(() => null)
+        );
+        await Promise.all(pricePromises);
+        console.log(`[${new Date().toISOString()}] ✅ Preloaded prices for user ${userId}`);
+      } catch (error) {
+        console.warn(`[${new Date().toISOString()}] ⚠️ Preload failed for user ${userId}:`, error.message);
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `Started preloading prices for ${Math.min(mints.length, 20)} tokens`,
+      preloading: Math.min(mints.length, 20)
+    });
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in price preload:`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to start price preloading' 
+    });
+  }
+});
+
+// Cache statistics endpoint (for debugging)
+app.get('/api/admin/cache-stats', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const cacheStats = pnlService.getCacheStats();
+    
+    res.json({
+      success: true,
+      cache: cacheStats,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching cache stats:`, error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch cache statistics' 
+    });
+  }
+});
+
+// Update existing /api/solana/price endpoint to use PnL service
+app.get('/api/solana/price', auth.authRequired, async (req, res) => {
+  try {
+    const solPrice = await pnlService.getSolPrice();
+    res.json({
+      success: true,
+      price: solPrice,
+      currency: 'USD',
+      lastUpdated: Date.now()
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);

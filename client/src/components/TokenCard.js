@@ -1,146 +1,28 @@
-import React, { useState, useEffect } from 'react';
+// client/src/components/TokenCard.js - FINAL OPTIMIZED VERSION
+
+import React, { useState, useMemo } from 'react';
 import WalletPill from './WalletPill';
+import { useTokenPnL } from '../hooks/useTokenPnL';
 
 function TokenCard({ token, onOpenChart }) {
-    const [priceData, setPriceData] = useState(null);
-    const [solPrice, setSolPrice] = useState(null);
-    const [loadingPrice, setLoadingPrice] = useState(false);
-    const [loadingSolPrice, setLoadingSolPrice] = useState(false);
-    const [groupPnL, setGroupPnL] = useState(null);
     const [showAllWallets, setShowAllWallets] = useState(false);
 
     const WALLETS_DISPLAY_LIMIT = 6;
 
-    // Helper function to get auth headers
-    const getAuthHeaders = () => {
-        const sessionToken = localStorage.getItem('sessionToken');
-        return {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${sessionToken}`
-        };
-    };
+    // Prepare token data for PnL calculation
+    const tokenForPnL = useMemo(() => ({
+        mint: token.mint,
+        symbol: token.symbol,
+        name: token.name,
+        totalTokensBought: token.wallets.reduce((sum, w) => sum + (w.tokensBought || 0), 0),
+        totalTokensSold: token.wallets.reduce((sum, w) => sum + (w.tokensSold || 0), 0),
+        totalSpentSOL: token.wallets.reduce((sum, w) => sum + (w.solSpent || 0), 0),
+        totalReceivedSOL: token.wallets.reduce((sum, w) => sum + (w.solReceived || 0), 0)
+    }), [token]);
 
-    const fetchTokenPrice = async () => {
-        if (!token.mint || loadingPrice) return;
-        setLoadingPrice(true);
-        try {
-            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token.mint}`);
-            const data = await response.json();
-            if (data.pairs && data.pairs.length > 0) {
-                const bestPair = data.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                setPriceData({
-                    price: parseFloat(bestPair.priceUsd || 0),
-                    change24h: parseFloat(bestPair.priceChange?.h24 || 0),
-                    volume24h: parseFloat(bestPair.volume?.h24 || 0),
-                    liquidity: parseFloat(bestPair.liquidity?.usd || 0),
-                    dexId: bestPair.dexId,
-                    pairAddress: bestPair.pairAddress
-                });
-            }
-        } catch (error) {
-            console.error('Error fetching token price:', error);
-        } finally {
-            setLoadingPrice(false);
-        }
-    };
-
-    const fetchSolPrice = async () => {
-        if (loadingSolPrice) return;
-        setLoadingSolPrice(true);
-        try {
-            const response = await fetch('/api/solana/price', {
-                headers: getAuthHeaders()
-            });
-            const data = await response.json();
-            if (data.success) {
-                setSolPrice(data.price);
-            } else {
-                console.error('Failed to fetch SOL price:', data.error);
-                setSolPrice(150); 
-            }
-        } catch (error) {
-            console.error('Error fetching SOL price:', error);
-            setSolPrice(150);
-        } finally {
-            setLoadingSolPrice(false);
-        }
-    };
-
-    const calculateGroupPnL = () => {
-        if (!priceData || !priceData.price || !solPrice) return null;
-
-        let totalTokensBought = 0;
-        let totalTokensSold = 0;
-        let totalSpentSOL = 0;
-        let totalReceivedSOL = 0;
-
-        token.wallets.forEach(wallet => {
-            totalTokensBought += wallet.tokensBought || 0;
-            totalTokensSold += wallet.tokensSold || 0;
-            totalSpentSOL += wallet.solSpent || 0;
-            totalReceivedSOL += wallet.solReceived || 0;
-        });
-
-        const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
-        
-        let realizedPnLSOL = 0;
-        let remainingCostBasisSOL = 0;
-
-        if (totalTokensBought > 0 && totalTokensSold > 0) {
-            const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-            
-            const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
-            realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
-            
-            remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-        } else {
-            realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
-            remainingCostBasisSOL = totalSpentSOL;
-        }
-
-        const currentTokenValueUSD = currentHoldings * priceData.price;
-        const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
-        
-        const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
-        const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
-        
-        const realizedPnLUSD = realizedPnLSOL * solPrice;
-        
-        const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
-        const totalPnLSOL = totalPnLUSD / solPrice;
-
-        return {
-            totalTokensBought,
-            totalTokensSold,
-            currentHoldings,
-            totalSpentSOL,
-            totalReceivedSOL,
-            realizedPnLSOL,
-            realizedPnLUSD,
-            unrealizedPnLSOL,
-            unrealizedPnLUSD,
-            totalPnLSOL,
-            totalPnLUSD,
-            currentTokenValueUSD,
-            remainingCostBasisUSD,
-            currentPriceUSD: priceData.price,
-            solPrice,
-            avgBuyPriceSOL: totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0
-        };
-    };
-
-    useEffect(() => {
-        fetchTokenPrice();
-        fetchSolPrice();
-    }, [token.mint]);
-
-    useEffect(() => {
-        if (priceData && priceData.price && solPrice) {
-            setGroupPnL(calculateGroupPnL());
-        }
-    }, [priceData, solPrice, token.wallets]);
+    // Use optimized PnL hook
+    const { getTokenPnL, loading, error } = useTokenPnL([tokenForPnL]);
+    const pnlData = getTokenPnL(token.mint);
 
     const copyToClipboard = (text) => {
         navigator.clipboard.writeText(text)
@@ -169,13 +51,45 @@ function TokenCard({ token, onOpenChart }) {
         return `$${formatNumber(num)}`;
     };
 
-    const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
-        ? groupPnL.totalPnLSOL > 0
-            ? 'text-green-700'
-            : groupPnL.totalPnLSOL < 0
-            ? 'text-red-700'
-            : 'text-gray-700'
-        : 'text-gray-700';
+    // Determine color and display values
+    const getPnLDisplay = () => {
+        if (loading) {
+            return {
+                solValue: '... SOL',
+                usdValue: '$...',
+                color: 'text-gray-500',
+                loading: true,
+                hasValidData: false
+            };
+        }
+
+        if (!pnlData) {
+            // Fallback to basic calculation
+            const basicPnL = token.wallets.reduce((sum, w) => sum + (w.pnlSol || 0), 0);
+            return {
+                solValue: `${basicPnL >= 0 ? '+' : ''}${basicPnL.toFixed(4)} SOL`,
+                usdValue: '$0',
+                color: basicPnL > 0 ? 'text-green-700' : basicPnL < 0 ? 'text-red-700' : 'text-gray-700',
+                loading: false,
+                hasValidData: false
+            };
+        }
+
+        const solValue = pnlData.totalPnLSOL || 0;
+        const usdValue = pnlData.totalPnLUSD || 0;
+        
+        const color = solValue > 0 ? 'text-green-700' : solValue < 0 ? 'text-red-700' : 'text-gray-700';
+        
+        return {
+            solValue: `${solValue >= 0 ? '+' : ''}${solValue.toFixed(4)} SOL`,
+            usdValue: formatCurrency(Math.abs(usdValue)),
+            color,
+            loading: false,
+            hasValidData: pnlData.hasValidData
+        };
+    };
+
+    const pnlDisplay = getPnLDisplay();
 
     // Determine which wallets to show
     const walletsToShow = showAllWallets 
@@ -194,8 +108,13 @@ function TokenCard({ token, onOpenChart }) {
             <div className="flex items-center justify-between mb-3">
                 <div className="min-w-0">
                     <div className="flex items-center space-x-2">
-                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
+                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">
+                            {token.symbol || 'Unknown'}
+                        </span>
                         <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
+                        {error && (
+                            <span className="text-xs text-red-500" title={error}>⚠️</span>
+                        )}
                     </div>
                     <div className="flex items-center space-x-1">
                         <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
@@ -216,63 +135,70 @@ function TokenCard({ token, onOpenChart }) {
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>
-                        {groupPnL && groupPnL.totalPnLSOL !== undefined
-                            ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
-                            : '0 SOL'}
+                    <div className={`text-base font-bold ${pnlDisplay.color} flex items-center`}>
+                        {pnlDisplay.loading && (
+                            <div className="animate-spin rounded-full h-3 w-3 border border-gray-400 border-t-transparent mr-2"></div>
+                        )}
+                        {pnlDisplay.solValue}
+                        {!pnlDisplay.hasValidData && !pnlDisplay.loading && (
+                            <span className="text-xs text-gray-400 ml-1" title="Price data unavailable">*</span>
+                        )}
                     </div>
-                    <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+                    <div className="text-xs text-gray-500">
+                        {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+                    </div>
                 </div>
             </div>
 
-            {groupPnL && (
+            {/* Enhanced PnL Details */}
+            {pnlData && pnlData.hasValidData && (
                 <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
                     <div className="grid grid-cols-2 gap-3 text-xs">
                         <div className="space-y-1">
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Holdings:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.currentHoldings, 0)} tokens</span>
+                                <span className="font-medium">{formatNumber(pnlData.currentHoldings, 0)} tokens</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Total Spent:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalSpentSOL, 4)} SOL</span>
+                                <span className="text-gray-600">Current Value:</span>
+                                <span className="font-medium">{formatCurrency(pnlData.currentValueUSD)}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Total Received:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalReceivedSOL, 4)} SOL</span>
+                                <span className="text-gray-600">Token Price:</span>
+                                <span className="font-medium">{formatCurrency(pnlData.currentPrice)}</span>
                             </div>
                         </div>
                         <div className="space-y-1">
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Realized PnL:</span>
                                 <div className="text-right">
-                                    <div className={`font-medium ${groupPnL.realizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
+                                    <div className={`font-medium ${pnlData.realizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {pnlData.realizedPnLSOL >= 0 ? '+' : ''}{pnlData.realizedPnLSOL.toFixed(4)} SOL
                                     </div>
-                                    <div className={`text-xs ${groupPnL.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.realizedPnLUSD)}
+                                    <div className={`text-xs ${pnlData.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {formatCurrency(pnlData.realizedPnLUSD)}
                                     </div>
                                 </div>
                             </div>
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Unrealized PnL:</span>
                                 <div className="text-right">
-                                    <div className={`font-medium ${groupPnL.unrealizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
+                                    <div className={`font-medium ${pnlData.unrealizedPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {pnlData.unrealizedPnLSOL >= 0 ? '+' : ''}{pnlData.unrealizedPnLSOL.toFixed(4)} SOL
                                     </div>
-                                    <div className={`text-xs ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.unrealizedPnLUSD)}
+                                    <div className={`text-xs ${pnlData.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {formatCurrency(pnlData.unrealizedPnLUSD)}
                                     </div>
                                 </div>
                             </div>
                             <div className="flex justify-between border-t border-blue-200 pt-1">
                                 <span className="text-gray-600 font-medium">Total PnL:</span>
                                 <div className="text-right">
-                                    <div className={`font-bold ${groupPnL.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL
+                                    <div className={`font-bold ${pnlData.totalPnLSOL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {pnlData.totalPnLSOL >= 0 ? '+' : ''}{pnlData.totalPnLSOL.toFixed(4)} SOL
                                     </div>
-                                    <div className={`text-xs ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.totalPnLUSD)}
+                                    <div className={`text-xs ${pnlData.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {formatCurrency(pnlData.totalPnLUSD)}
                                     </div>
                                 </div>
                             </div>
@@ -281,9 +207,34 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
             )}
 
+            {/* Loading state for PnL */}
+            {loading && !pnlData && (
+                <div className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
+                        <div className="animate-spin rounded-full h-4 w-4 border border-gray-300 border-t-transparent"></div>
+                        <span>Loading PnL data...</span>
+                    </div>
+                </div>
+            )}
+
+            {/* Error state for PnL */}
+            {error && !loading && (
+                <div className="mb-3 p-3 bg-red-50 rounded-lg border border-red-200">
+                    <div className="flex items-center space-x-2 text-sm text-red-600">
+                        <span>⚠️</span>
+                        <span>Failed to load PnL data - using basic calculation</span>
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {walletsToShow.map((w) => (
-                    <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
+                    <WalletPill 
+                        key={w.address} 
+                        wallet={w} 
+                        tokenMint={token.mint}
+                        pnlData={pnlData}
+                    />
                 ))}
             </div>
 
