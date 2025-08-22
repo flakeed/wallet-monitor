@@ -7,6 +7,9 @@ function TokenCard({ token, onOpenChart }) {
     const [loadingPrice, setLoadingPrice] = useState(false);
     const [loadingSolPrice, setLoadingSolPrice] = useState(false);
     const [groupPnL, setGroupPnL] = useState(null);
+    const [showAllWallets, setShowAllWallets] = useState(false);
+
+    const WALLETS_DISPLAY_LIMIT = 6;
 
     // Helper function to get auth headers
     const getAuthHeaders = () => {
@@ -80,15 +83,6 @@ function TokenCard({ token, onOpenChart }) {
             totalReceivedSOL += wallet.solReceived || 0;
         });
 
-        // console.log('PnL Calculation Debug:', {
-        //     totalTokensBought,
-        //     totalTokensSold,
-        //     totalSpentSOL,
-        //     totalReceivedSOL,
-        //     tokenPrice: priceData.price,
-        //     solPrice
-        // });
-
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         
         let realizedPnLSOL = 0;
@@ -116,16 +110,6 @@ function TokenCard({ token, onOpenChart }) {
         
         const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
         const totalPnLSOL = totalPnLUSD / solPrice;
-
-        // console.log('PnL Results:', {
-        //     realizedPnLSOL,
-        //     unrealizedPnLSOL,
-        //     totalPnLSOL,
-        //     currentHoldings,
-        //     currentTokenValueUSD,
-        //     remainingCostBasisSOL,
-        //     remainingCostBasisUSD
-        // });
 
         return {
             totalTokensBought,
@@ -185,24 +169,26 @@ function TokenCard({ token, onOpenChart }) {
         return `$${formatNumber(num)}`;
     };
 
-    const formatTime = (timeString) => {
-        if (!timeString) return 'N/A';
-        const date = new Date(timeString);
-        const now = new Date();
-        const diffInMinutes = Math.floor((now - date) / (1000 * 60));
-        
-        if (diffInMinutes < 1) return 'Just now';
-        if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
-        if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
-        return `${Math.floor(diffInMinutes / 1440)}d ago`;
-    };
     const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
-    ? groupPnL.totalPnLSOL > 0
-        ? 'text-green-700'
-        : groupPnL.totalPnLSOL < 0
-        ? 'text-red-700'
-        : 'text-gray-700'
-    : 'text-gray-700';
+        ? groupPnL.totalPnLSOL > 0
+            ? 'text-green-700'
+            : groupPnL.totalPnLSOL < 0
+            ? 'text-red-700'
+            : 'text-gray-700'
+        : 'text-gray-700';
+
+    // Determine which wallets to show
+    const walletsToShow = showAllWallets 
+        ? token.wallets 
+        : token.wallets.slice(0, WALLETS_DISPLAY_LIMIT);
+    
+    const hiddenWalletsCount = token.wallets.length - WALLETS_DISPLAY_LIMIT;
+    const shouldShowToggle = token.wallets.length > WALLETS_DISPLAY_LIMIT;
+
+    const toggleWalletsDisplay = () => {
+        setShowAllWallets(!showAllWallets);
+    };
+
     return (
         <div className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
@@ -230,7 +216,7 @@ function TokenCard({ token, onOpenChart }) {
                     </div>
                 </div>
                 <div className="text-right">
-                <div className={`text-base font-bold ${netColor}`}>
+                    <div className={`text-base font-bold ${netColor}`}>
                         {groupPnL && groupPnL.totalPnLSOL !== undefined
                             ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
                             : '0 SOL'}
@@ -296,10 +282,36 @@ function TokenCard({ token, onOpenChart }) {
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {token.wallets.map((w) => (
+                {walletsToShow.map((w) => (
                     <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
                 ))}
             </div>
+
+            {/* Toggle button for showing/hiding wallets */}
+            {shouldShowToggle && (
+                <div className="mt-2 flex justify-center">
+                    <button
+                        onClick={toggleWalletsDisplay}
+                        className="text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 px-3 py-1 rounded-md transition-colors duration-200 flex items-center space-x-1"
+                    >
+                        {showAllWallets ? (
+                            <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                                </svg>
+                                <span>Show fewer wallets</span>
+                            </>
+                        ) : (
+                            <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                                <span>Show {hiddenWalletsCount} more wallet{hiddenWalletsCount === 1 ? '' : 's'}</span>
+                            </>
+                        )}
+                    </button>
+                </div>
+            )}
 
             <div className="mt-2 flex space-x-2">
                 <button
