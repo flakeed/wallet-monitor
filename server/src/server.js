@@ -7,7 +7,10 @@ const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
+const PriceService = require('./services/priceService');
 
+// Добавить после создания других сервисов
+const priceService = new PriceService();
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -886,16 +889,65 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
 app.get('/api/solana/price', auth.authRequired, async (req, res) => {
   try {
-    const solPrice = await monitoringService.fetchSolPrice();
+    const priceData = await priceService.getSolPrice();
+    res.json(priceData);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in price endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch SOL price',
+      price: 150 // Fallback price
+    });
+  }
+});
+
+// Новый эндпоинт для получения цен токенов в batch
+app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 100) {
+      return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
+    const startTime = Date.now();
+    
+    const prices = await priceService.getTokenPrices(mints);
+    const duration = Date.now() - startTime;
+    
+    // Convert Map to object for JSON response
+    const result = {};
+    prices.forEach((data, mint) => {
+      result[mint] = data;
+    });
+    
+    console.log(`[${new Date().toISOString()}] ✅ Batch price request completed in ${duration}ms`);
+    
     res.json({
       success: true,
-      price: solPrice,
-      currency: 'USD',
-      lastUpdated: monitoringService.solPriceCache.lastUpdated
+      prices: result,
+      count: prices.size,
+      duration
     });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching SOL price:`, error.message);
-    res.status(500).json({ error: 'Failed to fetch SOL price' });
+    console.error(`[${new Date().toISOString()}] ❌ Error in batch price endpoint:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch token prices' });
+  }
+});
+
+// Эндпоинт для статистики сервиса цен
+app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) => {
+  try {
+    const stats = priceService.getStats();
+    res.json(stats);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting price stats:`, error.message);
+    res.status(500).json({ error: 'Failed to get price service stats' });
   }
 });
 

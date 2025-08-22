@@ -1,74 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import WalletPill from './WalletPill';
+import { usePrices } from '../hooks/usePrices';
 
 function TokenCard({ token, onOpenChart }) {
-    const [priceData, setPriceData] = useState(null);
-    const [solPrice, setSolPrice] = useState(null);
-    const [loadingPrice, setLoadingPrice] = useState(false);
-    const [loadingSolPrice, setLoadingSolPrice] = useState(false);
-    const [groupPnL, setGroupPnL] = useState(null);
     const [showAllWallets, setShowAllWallets] = useState(false);
+    const { solPrice, tokenPrice: priceData, loading: loadingPrice } = usePrices(token.mint);
 
     const WALLETS_DISPLAY_LIMIT = 6;
 
-    // Helper function to get auth headers
-    const getAuthHeaders = () => {
-        const sessionToken = localStorage.getItem('sessionToken');
-        return {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${sessionToken}`
-        };
-    };
-
-    const fetchTokenPrice = async () => {
-        if (!token.mint || loadingPrice) return;
-        setLoadingPrice(true);
-        try {
-            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token.mint}`);
-            const data = await response.json();
-            if (data.pairs && data.pairs.length > 0) {
-                const bestPair = data.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                setPriceData({
-                    price: parseFloat(bestPair.priceUsd || 0),
-                    change24h: parseFloat(bestPair.priceChange?.h24 || 0),
-                    volume24h: parseFloat(bestPair.volume?.h24 || 0),
-                    liquidity: parseFloat(bestPair.liquidity?.usd || 0),
-                    dexId: bestPair.dexId,
-                    pairAddress: bestPair.pairAddress
-                });
-            }
-        } catch (error) {
-            console.error('Error fetching token price:', error);
-        } finally {
-            setLoadingPrice(false);
-        }
-    };
-
-    const fetchSolPrice = async () => {
-        if (loadingSolPrice) return;
-        setLoadingSolPrice(true);
-        try {
-            const response = await fetch('/api/solana/price', {
-                headers: getAuthHeaders()
-            });
-            const data = await response.json();
-            if (data.success) {
-                setSolPrice(data.price);
-            } else {
-                console.error('Failed to fetch SOL price:', data.error);
-                setSolPrice(150); 
-            }
-        } catch (error) {
-            console.error('Error fetching SOL price:', error);
-            setSolPrice(150);
-        } finally {
-            setLoadingSolPrice(false);
-        }
-    };
-
-    const calculateGroupPnL = () => {
+    // Memoized PnL calculation - now using the hook data
+    const groupPnL = useMemo(() => {
         if (!priceData || !priceData.price || !solPrice) return null;
 
         let totalTokensBought = 0;
@@ -129,18 +70,18 @@ function TokenCard({ token, onOpenChart }) {
             solPrice,
             avgBuyPriceSOL: totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0
         };
-    };
-
-    useEffect(() => {
-        fetchTokenPrice();
-        fetchSolPrice();
-    }, [token.mint]);
-
-    useEffect(() => {
-        if (priceData && priceData.price && solPrice) {
-            setGroupPnL(calculateGroupPnL());
-        }
     }, [priceData, solPrice, token.wallets]);
+
+    // Memoize wallet display calculations
+    const walletCounts = useMemo(() => {
+        const walletsToShow = showAllWallets 
+            ? token.wallets 
+            : token.wallets.slice(0, WALLETS_DISPLAY_LIMIT);
+        const hiddenWalletsCount = token.wallets.length - WALLETS_DISPLAY_LIMIT;
+        const shouldShowToggle = token.wallets.length > WALLETS_DISPLAY_LIMIT;
+        
+        return { walletsToShow, hiddenWalletsCount, shouldShowToggle };
+    }, [token.wallets, showAllWallets]);
 
     const copyToClipboard = (text) => {
         navigator.clipboard.writeText(text)
@@ -177,14 +118,6 @@ function TokenCard({ token, onOpenChart }) {
             : 'text-gray-700'
         : 'text-gray-700';
 
-    // Determine which wallets to show
-    const walletsToShow = showAllWallets 
-        ? token.wallets 
-        : token.wallets.slice(0, WALLETS_DISPLAY_LIMIT);
-    
-    const hiddenWalletsCount = token.wallets.length - WALLETS_DISPLAY_LIMIT;
-    const shouldShowToggle = token.wallets.length > WALLETS_DISPLAY_LIMIT;
-
     const toggleWalletsDisplay = () => {
         setShowAllWallets(!showAllWallets);
     };
@@ -216,7 +149,10 @@ function TokenCard({ token, onOpenChart }) {
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className={`text-base font-bold ${netColor}`}>
+                    <div className={`text-base font-bold ${netColor} flex items-center`}>
+                        {loadingPrice && (
+                            <div className="animate-spin rounded-full h-3 w-3 border border-gray-400 border-t-transparent mr-1"></div>
+                        )}
                         {groupPnL && groupPnL.totalPnLSOL !== undefined
                             ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
                             : '0 SOL'}
@@ -282,13 +218,13 @@ function TokenCard({ token, onOpenChart }) {
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {walletsToShow.map((w) => (
+                {walletCounts.walletsToShow.map((w) => (
                     <WalletPill key={w.address} wallet={w} tokenMint={token.mint} />
                 ))}
             </div>
 
             {/* Toggle button for showing/hiding wallets */}
-            {shouldShowToggle && (
+            {walletCounts.shouldShowToggle && (
                 <div className="mt-2 flex justify-center">
                     <button
                         onClick={toggleWalletsDisplay}
@@ -306,7 +242,7 @@ function TokenCard({ token, onOpenChart }) {
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                 </svg>
-                                <span>Show {hiddenWalletsCount} more wallet{hiddenWalletsCount === 1 ? '' : 's'}</span>
+                                <span>Show {walletCounts.hiddenWalletsCount} more wallet{walletCounts.hiddenWalletsCount === 1 ? '' : 's'}</span>
                             </>
                         )}
                     </button>
@@ -317,12 +253,14 @@ function TokenCard({ token, onOpenChart }) {
                 <button
                     onClick={onOpenChart}
                     className="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+                    disabled={loadingPrice}
                 >
-                    Open Chart
+                    {loadingPrice ? 'Loading...' : 'Open Chart'}
                 </button>
                 <button
                     onClick={openGmgnChart}
                     className="flex-1 bg-green-600 text-white py-2 rounded hover:bg-green-700 transition"
+                    disabled={loadingPrice}
                 >
                     Open new tab
                 </button>

@@ -1,95 +1,52 @@
-import React, { useState, useEffect } from 'react';
+import { usePrices } from '../hooks/usePrices';
 
 function WalletPill({ wallet, tokenMint }) {
     const [totalPnL, setTotalPnL] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
+    const { solPrice, tokenPrice, loading, error, ready } = usePrices(tokenMint);
     
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
-    
-    // Helper function to get auth headers
-    const getAuthHeaders = () => {
-        const sessionToken = localStorage.getItem('sessionToken');
-        return {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${sessionToken}`
-        };
-    };
 
-    // Fetch token price and calculate total PnL
-    const calculateTotalPnL = async () => {
-        if (!tokenMint || isLoading) return;
+    // Memoized PnL calculation - much faster than async fetch
+    const calculatedPnL = useMemo(() => {
+        if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) {
+            return wallet.pnlSol || 0;
+        }
+
+        const totalTokensBought = wallet.tokensBought || 0;
+        const totalTokensSold = wallet.tokensSold || 0;
+        const totalSpentSOL = wallet.solSpent || 0;
+        const totalReceivedSOL = wallet.solReceived || 0;
+
+        const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         
-        setIsLoading(true);
-        try {
-            // Fetch token price from DexScreener
-            const priceResponse = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
-            const priceData = await priceResponse.json();
-            
-            // Fetch SOL price
-            const solResponse = await fetch('/api/solana/price', {
-                headers: getAuthHeaders()
-            });
-            const solData = await solResponse.json();
-            
-            if (priceData.pairs && priceData.pairs.length > 0 && solData.success) {
-                const bestPair = priceData.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                const tokenPriceUSD = parseFloat(bestPair.priceUsd || 0);
-                const solPriceUSD = solData.price;
+        let realizedPnLSOL = 0;
+        let remainingCostBasisSOL = 0;
 
-                if (tokenPriceUSD > 0 && solPriceUSD > 0) {
-                    // Calculate total PnL like in TokenCard.js
-                    const totalTokensBought = wallet.tokensBought || 0;
-                    const totalTokensSold = wallet.tokensSold || 0;
-                    const totalSpentSOL = wallet.solSpent || 0;
-                    const totalReceivedSOL = wallet.solReceived || 0;
-
-                    const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
-                    
-                    let realizedPnLSOL = 0;
-                    let remainingCostBasisSOL = 0;
-
-                    if (totalTokensBought > 0 && totalTokensSold > 0) {
-                        const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-                        const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
-                        realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
-                        remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-                    } else {
-                        realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
-                        remainingCostBasisSOL = totalSpentSOL;
-                    }
-
-                    const currentTokenValueUSD = currentHoldings * tokenPriceUSD;
-                    const remainingCostBasisUSD = remainingCostBasisSOL * solPriceUSD;
-                    
-                    const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
-                    const unrealizedPnLSOL = unrealizedPnLUSD / solPriceUSD;
-                    
-                    const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
-                    
-                    setTotalPnL(totalPnLSOL);
-                }
-            }
-        } catch (error) {
-            console.error('Error calculating total PnL:', error);
-            // Fallback to realized PnL if calculation fails
-            setTotalPnL(wallet.pnlSol || 0);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        if (tokenMint) {
-            calculateTotalPnL();
+        if (totalTokensBought > 0 && totalTokensSold > 0) {
+            const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+            const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
+            realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
+            remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
         } else {
-            // If no token mint, use realized PnL
-            setTotalPnL(wallet.pnlSol || 0);
+            realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
+            remainingCostBasisSOL = totalSpentSOL;
         }
-    }, [tokenMint, wallet]);
 
-    // Determine color based on total PnL or fallback to realized PnL
+        const currentTokenValueUSD = currentHoldings * tokenPrice.price;
+        const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
+        
+        const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
+        const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
+        
+        return realizedPnLSOL + unrealizedPnLSOL;
+    }, [tokenMint, ready, solPrice, tokenPrice, wallet.tokensBought, wallet.tokensSold, wallet.solSpent, wallet.solReceived]);
+
+    // Update state when calculation changes
+    useEffect(() => {
+        setTotalPnL(calculatedPnL);
+    }, [calculatedPnL]);
+
+    // Determine color based on PnL
     const displayPnL = totalPnL !== null ? totalPnL : (wallet.pnlSol || 0);
     const pnlColor = displayPnL > 0 ? 'text-green-700' : displayPnL < 0 ? 'text-red-700' : 'text-gray-700';
 
@@ -104,18 +61,6 @@ function WalletPill({ wallet, tokenMint }) {
 
     const copyToClipboard = () => {
         navigator.clipboard.writeText(wallet.address);
-    };
-
-    const formatTime = (timeString) => {
-        if (!timeString) return 'N/A';
-        const date = new Date(timeString);
-        const now = new Date();
-        const diffInMinutes = Math.floor((now - date) / (1000 * 60));
-        
-        if (diffInMinutes < 1) return 'now';
-        if (diffInMinutes < 60) return `${diffInMinutes}m`;
-        if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h`;
-        return `${Math.floor(diffInMinutes / 1440)}d`;
     };
 
     return (
@@ -154,11 +99,12 @@ function WalletPill({ wallet, tokenMint }) {
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
+                    {error && <span className="text-red-500" title={error}>⚠</span>}
                 </div>
             </div>
             <div className="text-right ml-2">
                 <div className={`text-xs font-semibold ${pnlColor} flex items-center`}>
-                    {isLoading && tokenMint ? (
+                    {loading && tokenMint ? (
                         <div className="animate-spin rounded-full h-2 w-2 border border-gray-400 border-t-transparent mr-1"></div>
                     ) : null}
                     {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
@@ -168,6 +114,11 @@ function WalletPill({ wallet, tokenMint }) {
                     <br />
                     recv {(wallet.solReceived || 0).toFixed(4)} SOL
                 </div>
+                {error && (
+                    <div className="text-[8px] text-red-500" title={error}>
+                        ⚠ Price error
+                    </div>
+                )}
             </div>
         </div>
     );
