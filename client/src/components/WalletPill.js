@@ -1,5 +1,5 @@
 import { usePrices } from '../hooks/usePrices';
-
+import { useState, useEffect } from 'react';
 function WalletPill({ wallet, tokenMint }) {
     const [totalPnL, setTotalPnL] = useState(null);
     const { solPrice, tokenPrice, loading, error, ready } = usePrices(tokenMint);
