@@ -1,3 +1,4 @@
+// client/src/components/TokenCard.js - Исправленный расчет PnL
 import React, { useState, useEffect, useMemo } from 'react';
 import WalletPill from './WalletPill';
 import { usePrices } from '../hooks/usePrices';
@@ -8,7 +9,7 @@ function TokenCard({ token, onOpenChart }) {
 
     const WALLETS_DISPLAY_LIMIT = 6;
 
-    // Memoized PnL calculation - now using the hook data
+    // Improved PnL calculation with accurate accounting
     const groupPnL = useMemo(() => {
         if (!priceData || !priceData.price || !solPrice) return null;
     
@@ -23,42 +24,37 @@ function TokenCard({ token, onOpenChart }) {
             totalSpentSOL += wallet.solSpent || 0;
             totalReceivedSOL += wallet.solReceived || 0;
         });
-    
+
+        // Если нет покупок - нет PnL
+        if (totalTokensBought === 0) return null;
+
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
+        const soldTokens = Math.min(totalTokensSold, totalTokensBought);
+        
+        // Средняя цена покупки в SOL за токен
+        const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
         
         let realizedPnLSOL = 0;
         let unrealizedPnLSOL = 0;
-    
-        // ИСПРАВЛЕННАЯ ЛОГИКА
-        if (totalTokensSold > 0) {
-            // Есть продажи - считаем реализованный PnL
-            // Средняя цена покупки в SOL за токен
-            const avgBuyPriceSOL = totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0;
-            
+
+        // Расчет реализованного PnL (только если были продажи)
+        if (soldTokens > 0) {
             // Стоимость проданных токенов по цене покупки
-            const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
-            
-            // Реализованный PnL = получили при продаже - потратили на эти же токены
-            realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
+            const soldTokensCostBasisSOL = soldTokens * avgBuyPriceSOL;
+            // Реализованный PnL = выручка от продажи - себестоимость проданных токенов
+            realizedPnLSOL = totalReceivedSOL - soldTokensCostBasisSOL;
         }
-    
+
+        // Расчет нереализованного PnL (только для оставшихся токенов)
         if (currentHoldings > 0) {
-            // Есть холдинги - считаем нереализованный PnL
-            if (totalTokensSold > 0) {
-                // Частичная продажа - используем среднюю цену покупки для оставшихся токенов
-                const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-                const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-                const currentTokenValueSOL = (currentHoldings * priceData.price) / solPrice;
-                
-                unrealizedPnLSOL = currentTokenValueSOL - remainingCostBasisSOL;
-            } else {
-                // Только покупки, никаких продаж
-                // Нереализованный PnL = текущая стоимость - потраченное
-                const currentTokenValueSOL = (currentHoldings * priceData.price) / solPrice;
-                unrealizedPnLSOL = currentTokenValueSOL - totalSpentSOL;
-            }
+            // Себестоимость оставшихся токенов
+            const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+            // Текущая рыночная стоимость оставшихся токенов
+            const currentMarketValueSOL = (currentHoldings * priceData.price) / solPrice;
+            // Нереализованный PnL = текущая стоимость - себестоимость
+            unrealizedPnLSOL = currentMarketValueSOL - remainingCostBasisSOL;
         }
-    
+
         const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
         
         // Конвертируем в USD для отображения
@@ -66,29 +62,57 @@ function TokenCard({ token, onOpenChart }) {
         const unrealizedPnLUSD = unrealizedPnLSOL * solPrice;
         const totalPnLUSD = totalPnLSOL * solPrice;
         
-        // Дополнительные метрики
+        // Дополнительные метрики для анализа
+        const totalInvestedSOL = totalSpentSOL;
+        const totalInvestedUSD = totalInvestedSOL * solPrice;
         const currentTokenValueUSD = currentHoldings * priceData.price;
-        const remainingCostBasisUSD = totalTokensSold > 0 
-            ? (currentHoldings * (totalSpentSOL / totalTokensBought) * solPrice)
-            : (totalSpentSOL * solPrice);
-    
+        const totalReturnSOL = totalReceivedSOL + ((currentHoldings * priceData.price) / solPrice);
+        const totalReturnUSD = totalReturnSOL * solPrice;
+        
+        // ROI расчеты
+        const realizedROI = totalSpentSOL > 0 ? (realizedPnLSOL / totalSpentSOL) * 100 : 0;
+        const totalROI = totalSpentSOL > 0 ? (totalPnLSOL / totalSpentSOL) * 100 : 0;
+
         return {
+            // Основные метрики
             totalTokensBought,
             totalTokensSold,
             currentHoldings,
+            soldTokens,
+            
+            // SOL метрики
             totalSpentSOL,
             totalReceivedSOL,
+            avgBuyPriceSOL,
+            
+            // PnL в SOL
             realizedPnLSOL,
-            realizedPnLUSD,
             unrealizedPnLSOL,
-            unrealizedPnLUSD,
             totalPnLSOL,
+            
+            // PnL в USD
+            realizedPnLUSD,
+            unrealizedPnLUSD,
             totalPnLUSD,
+            
+            // Дополнительные метрики
+            totalInvestedSOL,
+            totalInvestedUSD,
             currentTokenValueUSD,
-            remainingCostBasisUSD,
+            totalReturnSOL,
+            totalReturnUSD,
+            
+            // ROI
+            realizedROI,
+            totalROI,
+            
+            // Текущие цены
             currentPriceUSD: priceData.price,
             solPrice,
-            avgBuyPriceSOL: totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0
+            
+            // Проценты
+            soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
+            holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0
         };
     }, [priceData, solPrice, token.wallets]);
 
@@ -127,7 +151,7 @@ function TokenCard({ token, onOpenChart }) {
 
     const formatCurrency = (num) => {
         if (num === null || num === undefined) return '$0';
-        return `$${formatNumber(num)}`;
+        return `${formatNumber(num)}`;
     };
 
     const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
@@ -187,15 +211,24 @@ function TokenCard({ token, onOpenChart }) {
                         <div className="space-y-1">
                             <div className="flex justify-between">
                                 <span className="text-gray-600">Holdings:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.currentHoldings, 0)} tokens</span>
+                                <span className="font-medium">
+                                    {formatNumber(groupPnL.currentHoldings, 0)} tokens
+                                    <span className="text-xs text-gray-400 ml-1">
+                                        ({groupPnL.holdingPercentage.toFixed(1)}%)
+                                    </span>
+                                </span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Total Spent:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalSpentSOL, 4)} SOL</span>
+                                <span className="text-gray-600">Avg Buy Price:</span>
+                                <span className="font-medium">{formatCurrency(groupPnL.avgBuyPriceSOL * groupPnL.solPrice)}</span>
                             </div>
                             <div className="flex justify-between">
-                                <span className="text-gray-600">Total Received:</span>
-                                <span className="font-medium">{formatNumber(groupPnL.totalReceivedSOL, 4)} SOL</span>
+                                <span className="text-gray-600">Total Invested:</span>
+                                <span className="font-medium">{formatCurrency(groupPnL.totalInvestedUSD)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span className="text-gray-600">Current Value:</span>
+                                <span className="font-medium">{formatCurrency(groupPnL.currentTokenValueUSD)}</span>
                             </div>
                         </div>
                         <div className="space-y-1">
@@ -206,7 +239,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.realizedPnLUSD)}
+                                        {formatCurrency(groupPnL.realizedPnLUSD)} ({groupPnL.realizedROI >= 0 ? '+' : ''}{groupPnL.realizedROI.toFixed(1)}%)
                                     </div>
                                 </div>
                             </div>
@@ -228,9 +261,23 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.totalPnLUSD)}
+                                        {formatCurrency(groupPnL.totalPnLUSD)} ({groupPnL.totalROI >= 0 ? '+' : ''}{groupPnL.totalROI.toFixed(1)}%)
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Дополнительная информация для понимания расчетов */}
+                    <div className="mt-2 pt-2 border-t border-blue-200">
+                        <div className="text-xs text-gray-500 space-y-1">
+                            <div className="flex justify-between">
+                                <span>Bought: {formatNumber(groupPnL.totalTokensBought, 0)} tokens</span>
+                                <span>Sold: {formatNumber(groupPnL.soldTokens, 0)} tokens ({groupPnL.soldPercentage.toFixed(1)}%)</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span>Spent: {groupPnL.totalSpentSOL.toFixed(4)} SOL</span>
+                                <span>Received: {groupPnL.totalReceivedSOL.toFixed(4)} SOL</span>
                             </div>
                         </div>
                     </div>

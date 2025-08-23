@@ -1,50 +1,55 @@
 import { usePrices } from '../hooks/usePrices';
-import { useState, useEffect,useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+
 function WalletPill({ wallet, tokenMint }) {
     const [totalPnL, setTotalPnL] = useState(null);
     const { solPrice, tokenPrice, loading, error, ready } = usePrices(tokenMint);
     
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
 
-    // Memoized PnL calculation - much faster than async fetch
+    // Improved PnL calculation with accurate accounting for individual wallet
     const calculatedPnL = useMemo(() => {
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) {
             return wallet.pnlSol || 0;
         }
-    
+
         const totalTokensBought = wallet.tokensBought || 0;
         const totalTokensSold = wallet.tokensSold || 0;
         const totalSpentSOL = wallet.solSpent || 0;
         const totalReceivedSOL = wallet.solReceived || 0;
-    
+
+        // Если нет покупок - возвращаем базовый PnL
+        if (totalTokensBought === 0) {
+            return wallet.pnlSol || 0;
+        }
+
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
+        const soldTokens = Math.min(totalTokensSold, totalTokensBought);
+        
+        // Средняя цена покупки в SOL за токен
+        const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
         
         let realizedPnLSOL = 0;
         let unrealizedPnLSOL = 0;
-    
-        // ИСПРАВЛЕННАЯ ЛОГИКА - такая же как в TokenCard
-        if (totalTokensSold > 0) {
-            // Есть продажи - считаем реализованный PnL
-            const avgBuyPriceSOL = totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0;
-            const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
-            realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
+
+        // Расчет реализованного PnL (только если были продажи)
+        if (soldTokens > 0) {
+            // Стоимость проданных токенов по цене покупки
+            const soldTokensCostBasisSOL = soldTokens * avgBuyPriceSOL;
+            // Реализованный PnL = выручка от продажи - себестоимость проданных токенов
+            realizedPnLSOL = totalReceivedSOL - soldTokensCostBasisSOL;
         }
-    
+
+        // Расчет нереализованного PnL (только для оставшихся токенов)
         if (currentHoldings > 0) {
-            // Есть холдинги - считаем нереализованный PnL
-            if (totalTokensSold > 0) {
-                // Частичная продажа
-                const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-                const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-                const currentTokenValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
-                unrealizedPnLSOL = currentTokenValueSOL - remainingCostBasisSOL;
-            } else {
-                // Только покупки - ОСНОВНАЯ ИСПРАВЛЕНИЕ ЗДЕСЬ!
-                const currentTokenValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
-                unrealizedPnLSOL = currentTokenValueSOL - totalSpentSOL;
-            }
+            // Себестоимость оставшихся токенов
+            const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+            // Текущая рыночная стоимость оставшихся токенов
+            const currentMarketValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
+            // Нереализованный PnL = текущая стоимость - себестоимость
+            unrealizedPnLSOL = currentMarketValueSOL - remainingCostBasisSOL;
         }
-    
+
         return realizedPnLSOL + unrealizedPnLSOL;
     }, [tokenMint, ready, solPrice, tokenPrice, wallet.tokensBought, wallet.tokensSold, wallet.solSpent, wallet.solReceived]);
 
@@ -69,6 +74,57 @@ function WalletPill({ wallet, tokenMint }) {
     const copyToClipboard = () => {
         navigator.clipboard.writeText(wallet.address);
     };
+
+    // Additional metrics for tooltip or detailed view
+    const getDetailedMetrics = () => {
+        if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) return null;
+
+        const totalTokensBought = wallet.tokensBought || 0;
+        const totalTokensSold = wallet.tokensSold || 0;
+        const totalSpentSOL = wallet.solSpent || 0;
+        const totalReceivedSOL = wallet.solReceived || 0;
+
+        if (totalTokensBought === 0) return null;
+
+        const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
+        const soldTokens = Math.min(totalTokensSold, totalTokensBought);
+        const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+        
+        let realizedPnLSOL = 0;
+        let unrealizedPnLSOL = 0;
+
+        if (soldTokens > 0) {
+            const soldTokensCostBasisSOL = soldTokens * avgBuyPriceSOL;
+            realizedPnLSOL = totalReceivedSOL - soldTokensCostBasisSOL;
+        }
+
+        if (currentHoldings > 0) {
+            const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+            const currentMarketValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
+            unrealizedPnLSOL = currentMarketValueSOL - remainingCostBasisSOL;
+        }
+
+        return {
+            totalTokensBought,
+            totalTokensSold,
+            currentHoldings,
+            soldTokens,
+            avgBuyPriceSOL,
+            avgBuyPriceUSD: avgBuyPriceSOL * solPrice,
+            currentPriceUSD: tokenPrice.price,
+            realizedPnLSOL,
+            unrealizedPnLSOL,
+            totalPnLSOL: realizedPnLSOL + unrealizedPnLSOL,
+            realizedPnLUSD: realizedPnLSOL * solPrice,
+            unrealizedPnLUSD: unrealizedPnLSOL * solPrice,
+            totalPnLUSD: (realizedPnLSOL + unrealizedPnLSOL) * solPrice,
+            soldPercentage: (soldTokens / totalTokensBought) * 100,
+            holdingPercentage: (currentHoldings / totalTokensBought) * 100,
+            totalROI: totalSpentSOL > 0 ? ((realizedPnLSOL + unrealizedPnLSOL) / totalSpentSOL) * 100 : 0
+        };
+    };
+
+    const metrics = getDetailedMetrics();
 
     return (
         <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
@@ -108,6 +164,13 @@ function WalletPill({ wallet, tokenMint }) {
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
                     {error && <span className="text-red-500" title={error}>⚠</span>}
                 </div>
+                {/* Дополнительная информация при наличии детальных метрик */}
+                {metrics && (
+                    <div className="text-[9px] text-gray-400 mt-1" title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%) • Avg buy: $${metrics.avgBuyPriceUSD.toFixed(6)} • Current: $${metrics.currentPriceUSD.toFixed(6)} • ROI: ${metrics.totalROI >= 0 ? '+' : ''}${metrics.totalROI.toFixed(1)}%`}>
+                        Holdings: {metrics.currentHoldings > 1000 ? (metrics.currentHoldings/1000).toFixed(1) + 'K' : metrics.currentHoldings.toFixed(0)} 
+                        {metrics.soldTokens > 0 && ` • Sold: ${metrics.soldPercentage.toFixed(0)}%`}
+                    </div>
+                )}
             </div>
             <div className="text-right ml-2">
                 <div className={`text-xs font-semibold ${pnlColor} flex items-center`}>
@@ -116,11 +179,22 @@ function WalletPill({ wallet, tokenMint }) {
                     ) : null}
                     {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
                 </div>
-                <div className="text-[9px] text-gray-400">
-                    spent {(wallet.solSpent || 0).toFixed(4)} SOL 
-                    <br />
-                    recv {(wallet.solReceived || 0).toFixed(4)} SOL
-                </div>
+                {metrics ? (
+                    <div className="text-[9px] text-gray-400">
+                        <div className={metrics.realizedPnLSOL !== 0 ? (metrics.realizedPnLSOL > 0 ? 'text-green-500' : 'text-red-500') : ''}>
+                            Real: {metrics.realizedPnLSOL >= 0 ? '+' : ''}{metrics.realizedPnLSOL.toFixed(4)} SOL
+                        </div>
+                        <div className={metrics.unrealizedPnLSOL !== 0 ? (metrics.unrealizedPnLSOL > 0 ? 'text-green-500' : 'text-red-500') : ''}>
+                            Unreal: {metrics.unrealizedPnLSOL >= 0 ? '+' : ''}{metrics.unrealizedPnLSOL.toFixed(4)} SOL
+                        </div>
+                    </div>
+                ) : (
+                    <div className="text-[9px] text-gray-400">
+                        spent {(wallet.solSpent || 0).toFixed(4)} SOL 
+                        <br />
+                        recv {(wallet.solReceived || 0).toFixed(4)} SOL
+                    </div>
+                )}
                 {error && (
                     <div className="text-[8px] text-red-500" title={error}>
                         ⚠ Price error
