@@ -168,8 +168,6 @@ function WalletPill({ wallet, tokenMint }) {
                 {metrics && (
                     <div className="text-[9px] text-gray-400 mt-1" title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%)`}>
                         Holdings: {metrics.currentHoldings > 1000 ? (metrics.currentHoldings/1000).toFixed(1) + 'K' : metrics.currentHoldings.toFixed(0)} 
-                        {metrics.soldTokens > 0 }
-                        Sold: ${metrics.soldPercentage.toFixed(0)}%
                     </div>
                     
                 )}
