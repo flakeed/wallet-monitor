@@ -1117,6 +1117,748 @@ async addWalletsBatchOptimizedWithCount(wallets) {
     }
 }
 
+async getTokenWalletAggregatesWithPrices(hours = 24, groupId = null, userId = null) {
+    const EXCLUDED_TOKENS = [
+        'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 
+        'So11111111111111111111111111111111111111112',  
+    ];
+
+    let query = `
+        SELECT 
+            tk.mint,
+            tk.symbol,
+            tk.name,
+            tk.decimals,
+            w.id as wallet_id,
+            w.address as wallet_address,
+            w.name as wallet_name,
+            w.group_id,
+            w.user_id,
+            g.name as group_name,
+            
+            -- Buy operations with prices
+            COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as tx_buys,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as tokens_bought,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.sol_amount ELSE 0 END), 0) as sol_spent,
+            COALESCE(AVG(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 THEN to_.token_price_usd END), 0) as avg_buy_price_usd,
+            COALESCE(AVG(CASE WHEN to_.operation_type = 'buy' AND to_.sol_price_usd > 0 THEN to_.sol_price_usd END), 0) as avg_buy_sol_price,
+            
+            -- Sell operations with prices  
+            COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as tx_sells,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as tokens_sold,
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount ELSE 0 END), 0) as sol_received,
+            COALESCE(AVG(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 THEN to_.token_price_usd END), 0) as avg_sell_price_usd,
+            COALESCE(AVG(CASE WHEN to_.operation_type = 'sell' AND to_.sol_price_usd > 0 THEN to_.sol_price_usd END), 0) as avg_sell_sol_price,
+            
+            -- Price-based PnL calculations
+            -- Total invested (cost basis) 
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 
+                THEN to_.amount * to_.token_price_usd ELSE 0 END), 0) as total_invested_usd,
+            
+            -- Realized gains from sales
+            COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 
+                THEN ABS(to_.amount) * to_.token_price_usd ELSE 0 END), 0) as realized_value_usd,
+                
+            -- Time tracking
+            MAX(t.block_time) as last_activity,
+            MIN(CASE WHEN to_.operation_type = 'buy' THEN t.block_time END) as first_buy_time,
+            MIN(CASE WHEN to_.operation_type = 'sell' THEN t.block_time END) as first_sell_time
+            
+        FROM tokens tk
+        JOIN token_operations to_ ON tk.id = to_.token_id
+        JOIN transactions t ON to_.transaction_id = t.id
+        JOIN wallets w ON t.wallet_id = w.id
+        LEFT JOIN groups g ON w.group_id = g.id
+        WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+        AND tk.mint NOT IN (${EXCLUDED_TOKENS.map((_, i) => `$${i + 1}`).join(', ')})
+    `;
+    
+    const params = [...EXCLUDED_TOKENS];
+    let paramIndex = EXCLUDED_TOKENS.length + 1;
+    
+    if (userId) {
+        query += ` AND w.user_id = $${paramIndex++}`;
+        params.push(userId);
+    }
+    
+    if (groupId) {
+        query += ` AND w.group_id = $${paramIndex}`;
+        params.push(groupId);
+    }
+    
+    query += `
+        GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, w.id, w.address, w.name, w.group_id, w.user_id, g.name
+        ORDER BY last_activity DESC, tk.mint, w.address
+    `;
+    
+    const result = await this.pool.query(query, params);
+
+    console.log(`[${new Date().toISOString()}] 📊 Enhanced token aggregates with prices: ${result.rows.length} rows`);
+
+    return result.rows.map(row => {
+        const tokensBought = Number(row.tokens_bought) || 0;
+        const tokensSold = Number(row.tokens_sold) || 0;
+        const solSpent = Number(row.sol_spent) || 0;
+        const solReceived = Number(row.sol_received) || 0;
+        const txBuys = Number(row.tx_buys) || 0;
+        const txSells = Number(row.tx_sells) || 0;
+        
+        // Current holdings
+        const currentHoldings = Math.max(0, tokensBought - tokensSold);
+        
+        // Price-based calculations
+        const avgBuyPriceUsd = Number(row.avg_buy_price_usd) || 0;
+        const avgSellPriceUsd = Number(row.avg_sell_price_usd) || 0;
+        const avgBuySolPrice = Number(row.avg_buy_sol_price) || 150;
+        const avgSellSolPrice = Number(row.avg_sell_sol_price) || 150;
+        
+        const totalInvestedUsd = Number(row.total_invested_usd) || 0;
+        const realizedValueUsd = Number(row.realized_value_usd) || 0;
+        
+        // Realized PnL (from completed sales)
+        let realizedPnLUsd = 0;
+        if (tokensSold > 0 && avgBuyPriceUsd > 0) {
+            const costBasisForSold = tokensSold * avgBuyPriceUsd;
+            realizedPnLUsd = realizedValueUsd - costBasisForSold;
+        }
+        
+        // Convert to SOL for consistency
+        const realizedPnLSol = avgSellSolPrice > 0 ? realizedPnLUsd / avgSellSolPrice : solReceived - (solSpent * (tokensSold / Math.max(tokensBought, 1)));
+        
+        return {
+            mint: row.mint,
+            symbol: row.symbol || 'Unknown',
+            name: row.name || 'Unknown Token',
+            decimals: Number(row.decimals) || 9,
+            wallet_id: row.wallet_id,
+            wallet_address: row.wallet_address,
+            wallet_name: row.wallet_name,
+            group_id: row.group_id,
+            user_id: row.user_id,
+            group_name: row.group_name,
+            
+            // Basic metrics
+            tx_buys: txBuys,
+            tx_sells: txSells,
+            tokens_bought: tokensBought,
+            tokens_sold: tokensSold,
+            current_holdings: currentHoldings,
+            
+            // SOL amounts
+            sol_spent: solSpent,
+            sol_received: solReceived,
+            
+            // Price data
+            avg_buy_price_usd: avgBuyPriceUsd,
+            avg_sell_price_usd: avgSellPriceUsd,
+            avg_buy_sol_price: avgBuySolPrice,
+            avg_sell_sol_price: avgSellSolPrice,
+            
+            // Enhanced PnL
+            total_invested_usd: totalInvestedUsd,
+            realized_value_usd: realizedValueUsd,
+            realized_pnl_usd: realizedPnLUsd,
+            realized_pnl_sol: realizedPnLSol,
+            
+            // Legacy PnL for compatibility
+            pnl_sol: realizedPnLSol,
+            
+            // Time tracking
+            last_activity: row.last_activity,
+            first_buy_time: row.first_buy_time,
+            first_sell_time: row.first_sell_time,
+            
+            // Additional metrics
+            holding_percentage: tokensBought > 0 ? (currentHoldings / tokensBought) * 100 : 0,
+            sold_percentage: tokensBought > 0 ? (tokensSold / tokensBought) * 100 : 0,
+            roi_percentage: totalInvestedUsd > 0 ? (realizedPnLUsd / totalInvestedUsd) * 100 : 0,
+        };
+    });
+}
+
+async getWalletTokenPnL(walletId, tokenMint, currentTokenPrice = null) {
+    try {
+        const query = `
+            SELECT 
+                tk.mint,
+                tk.symbol,
+                tk.name,
+                tk.decimals,
+                w.address as wallet_address,
+                w.name as wallet_name,
+                
+                -- Buy operations
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END), 0) as total_bought,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.sol_amount ELSE 0 END), 0) as total_sol_spent,
+                COALESCE(AVG(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 THEN to_.token_price_usd END), 0) as avg_buy_price_usd,
+                COALESCE(AVG(CASE WHEN to_.operation_type = 'buy' AND to_.sol_price_usd > 0 THEN to_.sol_price_usd END), 0) as avg_buy_sol_price,
+                
+                -- Sell operations
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END), 0) as total_sold,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount ELSE 0 END), 0) as total_sol_received,
+                COALESCE(AVG(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 THEN to_.token_price_usd END), 0) as avg_sell_price_usd,
+                COALESCE(AVG(CASE WHEN to_.operation_type = 'sell' AND to_.sol_price_usd > 0 THEN to_.sol_price_usd END), 0) as avg_sell_sol_price,
+                
+                -- Transaction counts
+                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as buy_count,
+                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as sell_count,
+                
+                -- Time tracking
+                MIN(CASE WHEN to_.operation_type = 'buy' THEN t.block_time END) as first_buy_time,
+                MAX(t.block_time) as last_activity_time,
+                
+                -- Detailed price arrays for FIFO calculations
+                array_agg(
+                    CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 
+                    THEN json_build_object(
+                        'amount', to_.amount,
+                        'price_usd', to_.token_price_usd,
+                        'sol_price', to_.sol_price_usd,
+                        'timestamp', t.block_time
+                    ) END
+                    ORDER BY t.block_time
+                ) FILTER (WHERE to_.operation_type = 'buy' AND to_.token_price_usd > 0) as buy_history,
+                
+                array_agg(
+                    CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 
+                    THEN json_build_object(
+                        'amount', ABS(to_.amount),
+                        'price_usd', to_.token_price_usd,
+                        'sol_price', to_.sol_price_usd,
+                        'timestamp', t.block_time
+                    ) END
+                    ORDER BY t.block_time
+                ) FILTER (WHERE to_.operation_type = 'sell' AND to_.token_price_usd > 0) as sell_history
+                
+            FROM wallets w
+            JOIN transactions t ON w.id = t.wallet_id
+            JOIN token_operations to_ ON t.id = to_.transaction_id
+            JOIN tokens tk ON to_.token_id = tk.id
+            WHERE w.id = $1 AND tk.mint = $2
+            GROUP BY w.id, w.address, w.name, tk.id, tk.mint, tk.symbol, tk.name, tk.decimals
+        `;
+        
+        const result = await this.pool.query(query, [walletId, tokenMint]);
+        
+        if (result.rows.length === 0) {
+            return null;
+        }
+        
+        const row = result.rows[0];
+        
+        const totalBought = Number(row.total_bought) || 0;
+        const totalSold = Number(row.total_sold) || 0;
+        const currentHoldings = Math.max(0, totalBought - totalSold);
+        
+        const totalSolSpent = Number(row.total_sol_spent) || 0;
+        const totalSolReceived = Number(row.total_sol_received) || 0;
+        
+        const avgBuyPriceUsd = Number(row.avg_buy_price_usd) || 0;
+        const avgSellPriceUsd = Number(row.avg_sell_price_usd) || 0;
+        const avgBuySolPrice = Number(row.avg_buy_sol_price) || 150;
+        const avgSellSolPrice = Number(row.avg_sell_sol_price) || 150;
+        
+        // FIFO-based realized PnL calculation using price history
+        let realizedPnLUsd = 0;
+        let realizedPnLSol = 0;
+        
+        const buyHistory = row.buy_history || [];
+        const sellHistory = row.sell_history || [];
+        
+        if (buyHistory.length > 0 && sellHistory.length > 0) {
+            // Implement FIFO calculation
+            let remainingBuys = [...buyHistory];
+            let totalRealizedPnLUsd = 0;
+            
+            for (const sell of sellHistory) {
+                let remainingToSell = sell.amount;
+                
+                while (remainingToSell > 0 && remainingBuys.length > 0) {
+                    const oldestBuy = remainingBuys[0];
+                    const sellAmount = Math.min(remainingToSell, oldestBuy.amount);
+                    
+                    // Calculate PnL for this portion
+                    const costBasis = sellAmount * oldestBuy.price_usd;
+                    const proceeds = sellAmount * sell.price_usd;
+                    totalRealizedPnLUsd += (proceeds - costBasis);
+                    
+                    // Update remaining amounts
+                    remainingToSell -= sellAmount;
+                    oldestBuy.amount -= sellAmount;
+                    
+                    // Remove fully used buy order
+                    if (oldestBuy.amount <= 0) {
+                        remainingBuys.shift();
+                    }
+                }
+            }
+            
+            realizedPnLUsd = totalRealizedPnLUsd;
+            realizedPnLSol = realizedPnLUsd / avgSellSolPrice;
+        } else {
+            // Fallback to simple calculation
+            if (totalSold > 0 && avgBuyPriceUsd > 0 && avgSellPriceUsd > 0) {
+                const costBasis = totalSold * avgBuyPriceUsd;
+                const proceeds = totalSold * avgSellPriceUsd;
+                realizedPnLUsd = proceeds - costBasis;
+                realizedPnLSol = realizedPnLUsd / avgSellSolPrice;
+            } else {
+                realizedPnLSol = totalSolReceived - (totalSolSpent * (totalSold / Math.max(totalBought, 1)));
+            }
+        }
+        
+        // Unrealized PnL calculation
+        let unrealizedPnLUsd = 0;
+        let unrealizedPnLSol = 0;
+        
+        if (currentHoldings > 0 && currentTokenPrice && avgBuyPriceUsd > 0) {
+            const currentValue = currentHoldings * currentTokenPrice;
+            const costBasis = currentHoldings * avgBuyPriceUsd;
+            unrealizedPnLUsd = currentValue - costBasis;
+            unrealizedPnLSol = unrealizedPnLUsd / avgBuySolPrice;
+        }
+        
+        return {
+            mint: row.mint,
+            symbol: row.symbol || 'Unknown',
+            name: row.name || 'Unknown Token',
+            decimals: Number(row.decimals) || 9,
+            wallet_address: row.wallet_address,
+            wallet_name: row.wallet_name,
+            
+            // Holdings
+            total_bought: totalBought,
+            total_sold: totalSold,
+            current_holdings: currentHoldings,
+            holding_percentage: totalBought > 0 ? (currentHoldings / totalBought) * 100 : 0,
+            
+            // SOL amounts
+            total_sol_spent: totalSolSpent,
+            total_sol_received: totalSolReceived,
+            
+            // Price averages
+            avg_buy_price_usd: avgBuyPriceUsd,
+            avg_sell_price_usd: avgSellPriceUsd,
+            avg_buy_sol_price: avgBuySolPrice,
+            avg_sell_sol_price: avgSellSolPrice,
+            
+            // PnL breakdown
+            realized_pnl_usd: realizedPnLUsd,
+            realized_pnl_sol: realizedPnLSol,
+            unrealized_pnl_usd: unrealizedPnLUsd,
+            unrealized_pnl_sol: unrealizedPnLSol,
+            total_pnl_usd: realizedPnLUsd + unrealizedPnLUsd,
+            total_pnl_sol: realizedPnLSol + unrealizedPnLSol,
+            
+            // ROI calculations
+            realized_roi: totalSolSpent > 0 ? (realizedPnLSol / totalSolSpent) * 100 : 0,
+            total_roi: totalSolSpent > 0 ? ((realizedPnLSol + unrealizedPnLSol) / totalSolSpent) * 100 : 0,
+            
+            // Transaction counts
+            buy_count: Number(row.buy_count) || 0,
+            sell_count: Number(row.sell_count) || 0,
+            
+            // Time tracking
+            first_buy_time: row.first_buy_time,
+            last_activity_time: row.last_activity_time,
+            
+            // Raw data for further analysis
+            buy_history: buyHistory,
+            sell_history: sellHistory,
+        };
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error getting wallet token PnL:`, error);
+        throw error;
+    }
+}
+
+async updateHistoricalPricesForToken(tokenMint, priceAtTime) {
+    try {
+        const query = `
+            UPDATE token_operations 
+            SET 
+                token_price_usd = $2,
+                updated_at = CURRENT_TIMESTAMP
+            FROM transactions t, tokens tk
+            WHERE token_operations.transaction_id = t.id
+            AND token_operations.token_id = tk.id
+            AND tk.mint = $1
+            AND token_operations.token_price_usd IS NULL
+            AND t.block_time >= NOW() - INTERVAL '7 days'
+            RETURNING token_operations.id
+        `;
+        
+        const result = await this.pool.query(query, [tokenMint, priceAtTime]);
+        
+        console.log(`[${new Date().toISOString()}] ✅ Updated ${result.rowCount} token operations with price ${priceAtTime} for ${tokenMint}`);
+        
+        return result.rowCount;
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error updating historical prices:`, error);
+        throw error;
+    }
+}
+
+async getTokensWithMissingPrices(limit = 100) {
+    try {
+        const query = `
+            SELECT DISTINCT 
+                tk.mint,
+                tk.symbol,
+                tk.name,
+                COUNT(to_.id) as operations_without_price,
+                MIN(t.block_time) as earliest_time,
+                MAX(t.block_time) as latest_time
+            FROM tokens tk
+            JOIN token_operations to_ ON tk.id = to_.token_id
+            JOIN transactions t ON to_.transaction_id = t.id
+            WHERE to_.token_price_usd IS NULL 
+            AND t.block_time >= NOW() - INTERVAL '7 days'
+            AND tk.mint NOT IN (
+                'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                'So11111111111111111111111111111111111111112'
+            )
+            GROUP BY tk.mint, tk.symbol, tk.name
+            ORDER BY operations_without_price DESC, latest_time DESC
+            LIMIT $1
+        `;
+        
+        const result = await this.pool.query(query, [limit]);
+        
+        return result.rows.map(row => ({
+            mint: row.mint,
+            symbol: row.symbol,
+            name: row.name,
+            operations_without_price: Number(row.operations_without_price),
+            earliest_time: row.earliest_time,
+            latest_time: row.latest_time,
+        }));
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error getting tokens with missing prices:`, error);
+        throw error;
+    }
+}
+
+async batchUpdateTokenPrices(priceUpdates) {
+    try {
+        if (!priceUpdates || priceUpdates.length === 0) {
+            return 0;
+        }
+
+        const client = await this.pool.connect();
+        let totalUpdated = 0;
+
+        try {
+            await client.query('BEGIN');
+
+            for (const update of priceUpdates) {
+                const { mint, priceUsd, solPriceUsd, timestamp } = update;
+                
+                const query = `
+                    UPDATE token_operations 
+                    SET 
+                        token_price_usd = $2,
+                        sol_price_usd = $3,
+                        updated_at = CURRENT_TIMESTAMP
+                    FROM transactions t, tokens tk
+                    WHERE token_operations.transaction_id = t.id
+                    AND token_operations.token_id = tk.id
+                    AND tk.mint = $1
+                    AND token_operations.token_price_usd IS NULL
+                    AND ($4::timestamp IS NULL OR ABS(EXTRACT(EPOCH FROM (t.block_time - $4::timestamp))) < 3600)
+                `;
+                
+                const result = await client.query(query, [mint, priceUsd, solPriceUsd, timestamp]);
+                totalUpdated += result.rowCount;
+            }
+
+            await client.query('COMMIT');
+            
+            console.log(`[${new Date().toISOString()}] ✅ Batch updated ${totalUpdated} token operations with price data`);
+            
+            return totalUpdated;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error in batch update token prices:`, error);
+        throw error;
+    }
+}
+
+async getPortfolioSummary(userId, groupId = null) {
+    try {
+        let query = `
+            SELECT 
+                COUNT(DISTINCT tk.mint) as unique_tokens,
+                COUNT(DISTINCT w.id) as wallets_with_activity,
+                
+                -- Total investments
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.sol_amount ELSE 0 END), 0) as total_sol_invested,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 
+                    THEN to_.amount * to_.token_price_usd ELSE 0 END), 0) as total_usd_invested,
+                
+                -- Total returns  
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount ELSE 0 END), 0) as total_sol_received,
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 
+                    THEN ABS(to_.amount) * to_.token_price_usd ELSE 0 END), 0) as total_usd_received,
+                
+                -- Activity counts
+                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as total_buy_transactions,
+                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as total_sell_transactions,
+                
+                -- Holdings
+                COALESCE(SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount 
+                    WHEN to_.operation_type = 'sell' THEN -ABS(to_.amount) ELSE 0 END), 0) as total_tokens_held,
+                
+                -- Time range
+                MIN(t.block_time) as first_transaction,
+                MAX(t.block_time) as last_transaction,
+                
+                -- Best and worst performing tokens (by SOL)
+                MAX(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount - 
+                    (to_.sol_amount * 
+                     (SELECT AVG(to2.sol_amount) FROM token_operations to2 
+                      JOIN transactions t2 ON to2.transaction_id = t2.id 
+                      WHERE to2.token_id = to_.token_id AND to2.operation_type = 'buy' AND t2.wallet_id = t.wallet_id)
+                    ) ELSE 0 END) as best_trade_sol
+                
+            FROM wallets w
+            JOIN transactions t ON w.id = t.wallet_id
+            JOIN token_operations to_ ON t.id = to_.transaction_id
+            JOIN tokens tk ON to_.token_id = tk.id
+            WHERE w.user_id = $1
+            AND tk.mint NOT IN (
+                'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                'So11111111111111111111111111111111111111112'
+            )
+        `;
+        
+        const params = [userId];
+        let paramIndex = 2;
+        
+        if (groupId) {
+            query += ` AND w.group_id = ${paramIndex}`;
+            params.push(groupId);
+        }
+        
+        const result = await this.pool.query(query, params);
+        
+        if (result.rows.length === 0) {
+            return {
+                unique_tokens: 0,
+                wallets_with_activity: 0,
+                total_sol_invested: 0,
+                total_sol_received: 0,
+                realized_pnl_sol: 0,
+                total_transactions: 0,
+                portfolio_age_days: 0
+            };
+        }
+        
+        const row = result.rows[0];
+        
+        const totalSolInvested = Number(row.total_sol_invested) || 0;
+        const totalSolReceived = Number(row.total_sol_received) || 0;
+        const totalUsdInvested = Number(row.total_usd_invested) || 0;
+        const totalUsdReceived = Number(row.total_usd_received) || 0;
+        
+        const realizedPnlSol = totalSolReceived - totalSolInvested;
+        const realizedPnlUsd = totalUsdReceived - totalUsdInvested;
+        
+        const portfolioAgeDays = row.first_transaction ? 
+            Math.floor((new Date() - new Date(row.first_transaction)) / (1000 * 60 * 60 * 24)) : 0;
+        
+        return {
+            unique_tokens: Number(row.unique_tokens) || 0,
+            wallets_with_activity: Number(row.wallets_with_activity) || 0,
+            
+            // SOL metrics
+            total_sol_invested: totalSolInvested,
+            total_sol_received: totalSolReceived,
+            realized_pnl_sol: realizedPnlSol,
+            realized_roi_sol: totalSolInvested > 0 ? (realizedPnlSol / totalSolInvested) * 100 : 0,
+            
+            // USD metrics (when available)
+            total_usd_invested: totalUsdInvested,
+            total_usd_received: totalUsdReceived,
+            realized_pnl_usd: realizedPnlUsd,
+            realized_roi_usd: totalUsdInvested > 0 ? (realizedPnlUsd / totalUsdInvested) * 100 : 0,
+            
+            // Activity
+            total_buy_transactions: Number(row.total_buy_transactions) || 0,
+            total_sell_transactions: Number(row.total_sell_transactions) || 0,
+            total_transactions: (Number(row.total_buy_transactions) || 0) + (Number(row.total_sell_transactions) || 0),
+            
+            // Time metrics
+            first_transaction: row.first_transaction,
+            last_transaction: row.last_transaction,
+            portfolio_age_days: portfolioAgeDays,
+            
+            // Performance
+            best_trade_sol: Number(row.best_trade_sol) || 0,
+        };
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error getting portfolio summary:`, error);
+        throw error;
+    }
+}
+
+async getTopPerformingTokens(userId, groupId = null, limit = 10, sortBy = 'pnl_sol') {
+    try {
+        let orderByClause;
+        switch (sortBy) {
+            case 'pnl_usd':
+                orderByClause = 'realized_pnl_usd DESC';
+                break;
+            case 'roi':
+                orderByClause = 'roi_percentage DESC';
+                break;
+            case 'volume':
+                orderByClause = 'total_volume_sol DESC';
+                break;
+            default:
+                orderByClause = 'realized_pnl_sol DESC';
+        }
+
+        let query = `
+            SELECT 
+                tk.mint,
+                tk.symbol,
+                tk.name,
+                tk.decimals,
+                
+                -- Holdings
+                SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END) as total_bought,
+                SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END) as total_sold,
+                SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.amount ELSE 0 END) - 
+                SUM(CASE WHEN to_.operation_type = 'sell' THEN ABS(to_.amount) ELSE 0 END) as current_holdings,
+                
+                -- SOL amounts
+                SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.sol_amount ELSE 0 END) as total_sol_spent,
+                SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount ELSE 0 END) as total_sol_received,
+                SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.sol_amount ELSE 0 END) + 
+                SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount ELSE 0 END) as total_volume_sol,
+                
+                -- USD amounts (when available)
+                SUM(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 
+                    THEN to_.amount * to_.token_price_usd ELSE 0 END) as total_usd_invested,
+                SUM(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 
+                    THEN ABS(to_.amount) * to_.token_price_usd ELSE 0 END) as total_usd_received,
+                
+                -- PnL calculations
+                SUM(CASE WHEN to_.operation_type = 'sell' THEN to_.sol_amount ELSE 0 END) - 
+                SUM(CASE WHEN to_.operation_type = 'buy' THEN to_.sol_amount ELSE 0 END) as realized_pnl_sol,
+                
+                SUM(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 
+                    THEN ABS(to_.amount) * to_.token_price_usd ELSE 0 END) -
+                SUM(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 
+                    THEN to_.amount * to_.token_price_usd ELSE 0 END) as realized_pnl_usd,
+                
+                -- Price averages
+                AVG(CASE WHEN to_.operation_type = 'buy' AND to_.token_price_usd > 0 THEN to_.token_price_usd END) as avg_buy_price,
+                AVG(CASE WHEN to_.operation_type = 'sell' AND to_.token_price_usd > 0 THEN to_.token_price_usd END) as avg_sell_price,
+                
+                -- Activity
+                COUNT(CASE WHEN to_.operation_type = 'buy' THEN 1 END) as buy_count,
+                COUNT(CASE WHEN to_.operation_type = 'sell' THEN 1 END) as sell_count,
+                COUNT(DISTINCT w.id) as wallet_count,
+                
+                -- Time
+                MIN(CASE WHEN to_.operation_type = 'buy' THEN t.block_time END) as first_buy_time,
+                MAX(t.block_time) as last_activity
+                
+            FROM wallets w
+            JOIN transactions t ON w.id = t.wallet_id
+            JOIN token_operations to_ ON t.id = to_.transaction_id
+            JOIN tokens tk ON to_.token_id = tk.id
+            WHERE w.user_id = $1
+            AND tk.mint NOT IN (
+                'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                'So11111111111111111111111111111111111111112'
+            )
+        `;
+        
+        const params = [userId];
+        let paramIndex = 2;
+        
+        if (groupId) {
+            query += ` AND w.group_id = ${paramIndex++}`;
+            params.push(groupId);
+        }
+        
+        query += `
+            GROUP BY tk.mint, tk.symbol, tk.name, tk.decimals
+            HAVING COUNT(to_.id) > 0
+            ORDER BY ${orderByClause}
+            LIMIT ${paramIndex}
+        `;
+        params.push(limit);
+        
+        const result = await this.pool.query(query, params);
+        
+        return result.rows.map((row, index) => {
+            const totalSolSpent = Number(row.total_sol_spent) || 0;
+            const totalSolReceived = Number(row.total_sol_received) || 0;
+            const totalUsdInvested = Number(row.total_usd_invested) || 0;
+            const totalUsdReceived = Number(row.total_usd_received) || 0;
+            const realizedPnlSol = Number(row.realized_pnl_sol) || 0;
+            const realizedPnlUsd = Number(row.realized_pnl_usd) || 0;
+            
+            return {
+                rank: index + 1,
+                mint: row.mint,
+                symbol: row.symbol || 'Unknown',
+                name: row.name || 'Unknown Token',
+                decimals: Number(row.decimals) || 9,
+                
+                // Holdings
+                total_bought: Number(row.total_bought) || 0,
+                total_sold: Number(row.total_sold) || 0,
+                current_holdings: Number(row.current_holdings) || 0,
+                
+                // SOL metrics
+                total_sol_spent: totalSolSpent,
+                total_sol_received: totalSolReceived,
+                total_volume_sol: Number(row.total_volume_sol) || 0,
+                realized_pnl_sol: realizedPnlSol,
+                
+                // USD metrics  
+                total_usd_invested: totalUsdInvested,
+                total_usd_received: totalUsdReceived,
+                realized_pnl_usd: realizedPnlUsd,
+                
+                // Performance
+                roi_percentage: totalSolSpent > 0 ? (realizedPnlSol / totalSolSpent) * 100 : 0,
+                roi_usd_percentage: totalUsdInvested > 0 ? (realizedPnlUsd / totalUsdInvested) * 100 : 0,
+                
+                // Prices
+                avg_buy_price: Number(row.avg_buy_price) || 0,
+                avg_sell_price: Number(row.avg_sell_price) || 0,
+                price_improvement: row.avg_buy_price && row.avg_sell_price ? 
+                    ((Number(row.avg_sell_price) - Number(row.avg_buy_price)) / Number(row.avg_buy_price)) * 100 : 0,
+                
+                // Activity
+                buy_count: Number(row.buy_count) || 0,
+                sell_count: Number(row.sell_count) || 0,
+                wallet_count: Number(row.wallet_count) || 0,
+                
+                // Time
+                first_buy_time: row.first_buy_time,
+                last_activity: row.last_activity,
+                holding_days: row.first_buy_time ? 
+                    Math.floor((new Date() - new Date(row.first_buy_time)) / (1000 * 60 * 60 * 24)) : 0,
+            };
+        });
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ❌ Error getting top performing tokens:`, error);
+        throw error;
+    }
+}
+
 async getWalletsPaginated(userId, groupId = null, limit = 50, offset = 0, includeStats = false) {
     try {
         console.log(`[${new Date().toISOString()}] 📄 Paginated wallets: user ${userId}, group ${groupId}, limit ${limit}, offset ${offset}`);
