@@ -11,47 +11,67 @@ function TokenCard({ token, onOpenChart }) {
     // Memoized PnL calculation - now using the hook data
     const groupPnL = useMemo(() => {
         if (!priceData || !priceData.price || !solPrice) return null;
-
+    
         let totalTokensBought = 0;
         let totalTokensSold = 0;
         let totalSpentSOL = 0;
         let totalReceivedSOL = 0;
-
+    
         token.wallets.forEach(wallet => {
             totalTokensBought += wallet.tokensBought || 0;
             totalTokensSold += wallet.tokensSold || 0;
             totalSpentSOL += wallet.solSpent || 0;
             totalReceivedSOL += wallet.solReceived || 0;
         });
-
+    
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         
         let realizedPnLSOL = 0;
-        let remainingCostBasisSOL = 0;
-
-        if (totalTokensBought > 0 && totalTokensSold > 0) {
-            const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+        let unrealizedPnLSOL = 0;
+    
+        // ИСПРАВЛЕННАЯ ЛОГИКА
+        if (totalTokensSold > 0) {
+            // Есть продажи - считаем реализованный PnL
+            // Средняя цена покупки в SOL за токен
+            const avgBuyPriceSOL = totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0;
             
+            // Стоимость проданных токенов по цене покупки
             const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
-            realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
             
-            remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-        } else {
-            realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
-            remainingCostBasisSOL = totalSpentSOL;
+            // Реализованный PnL = получили при продаже - потратили на эти же токены
+            realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
         }
-
-        const currentTokenValueUSD = currentHoldings * priceData.price;
-        const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
+    
+        if (currentHoldings > 0) {
+            // Есть холдинги - считаем нереализованный PnL
+            if (totalTokensSold > 0) {
+                // Частичная продажа - используем среднюю цену покупки для оставшихся токенов
+                const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+                const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+                const currentTokenValueSOL = (currentHoldings * priceData.price) / solPrice;
+                
+                unrealizedPnLSOL = currentTokenValueSOL - remainingCostBasisSOL;
+            } else {
+                // Только покупки, никаких продаж
+                // Нереализованный PnL = текущая стоимость - потраченное
+                const currentTokenValueSOL = (currentHoldings * priceData.price) / solPrice;
+                unrealizedPnLSOL = currentTokenValueSOL - totalSpentSOL;
+            }
+        }
+    
+        const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
         
-        const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
-        const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
-        
+        // Конвертируем в USD для отображения
         const realizedPnLUSD = realizedPnLSOL * solPrice;
+        const unrealizedPnLUSD = unrealizedPnLSOL * solPrice;
+        const totalPnLUSD = totalPnLSOL * solPrice;
         
-        const totalPnLUSD = realizedPnLUSD + unrealizedPnLUSD;
-        const totalPnLSOL = totalPnLUSD / solPrice;
-
+        // Дополнительные метрики
+        const currentTokenValueUSD = currentHoldings * priceData.price;
+        const remainingCostBasisUSD = totalTokensSold > 0 
+            ? (currentHoldings * (totalSpentSOL / totalTokensBought) * solPrice)
+            : (totalSpentSOL * solPrice);
+    
         return {
             totalTokensBought,
             totalTokensSold,

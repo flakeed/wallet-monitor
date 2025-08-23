@@ -11,33 +11,40 @@ function WalletPill({ wallet, tokenMint }) {
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) {
             return wallet.pnlSol || 0;
         }
-
+    
         const totalTokensBought = wallet.tokensBought || 0;
         const totalTokensSold = wallet.tokensSold || 0;
         const totalSpentSOL = wallet.solSpent || 0;
         const totalReceivedSOL = wallet.solReceived || 0;
-
+    
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         
         let realizedPnLSOL = 0;
-        let remainingCostBasisSOL = 0;
-
-        if (totalTokensBought > 0 && totalTokensSold > 0) {
-            const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+        let unrealizedPnLSOL = 0;
+    
+        // ИСПРАВЛЕННАЯ ЛОГИКА - такая же как в TokenCard
+        if (totalTokensSold > 0) {
+            // Есть продажи - считаем реализованный PnL
+            const avgBuyPriceSOL = totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0;
             const costOfSoldTokens = totalTokensSold * avgBuyPriceSOL;
             realizedPnLSOL = totalReceivedSOL - costOfSoldTokens;
-            remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
-        } else {
-            realizedPnLSOL = totalReceivedSOL - totalSpentSOL;
-            remainingCostBasisSOL = totalSpentSOL;
         }
-
-        const currentTokenValueUSD = currentHoldings * tokenPrice.price;
-        const remainingCostBasisUSD = remainingCostBasisSOL * solPrice;
-        
-        const unrealizedPnLUSD = currentTokenValueUSD - remainingCostBasisUSD;
-        const unrealizedPnLSOL = unrealizedPnLUSD / solPrice;
-        
+    
+        if (currentHoldings > 0) {
+            // Есть холдинги - считаем нереализованный PnL
+            if (totalTokensSold > 0) {
+                // Частичная продажа
+                const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
+                const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+                const currentTokenValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
+                unrealizedPnLSOL = currentTokenValueSOL - remainingCostBasisSOL;
+            } else {
+                // Только покупки - ОСНОВНАЯ ИСПРАВЛЕНИЕ ЗДЕСЬ!
+                const currentTokenValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
+                unrealizedPnLSOL = currentTokenValueSOL - totalSpentSOL;
+            }
+        }
+    
         return realizedPnLSOL + unrealizedPnLSOL;
     }, [tokenMint, ready, solPrice, tokenPrice, wallet.tokensBought, wallet.tokensSold, wallet.solSpent, wallet.solReceived]);
 
