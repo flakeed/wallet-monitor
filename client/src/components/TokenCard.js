@@ -218,18 +218,6 @@ function TokenCard({ token, onOpenChart }) {
                                     </span>
                                 </span>
                             </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Avg Buy Price:</span>
-                                <span className="font-medium">{formatCurrency(groupPnL.avgBuyPriceSOL * groupPnL.solPrice)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Total Invested:</span>
-                                <span className="font-medium">{formatCurrency(groupPnL.totalInvestedUSD)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-600">Current Value:</span>
-                                <span className="font-medium">{formatCurrency(groupPnL.currentTokenValueUSD)}</span>
-                            </div>
                         </div>
                         <div className="space-y-1">
                             <div className="flex justify-between">
@@ -239,7 +227,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.realizedPnLUSD)} ({groupPnL.realizedROI >= 0 ? '+' : ''}{groupPnL.realizedROI.toFixed(1)}%)
+                                        {formatCurrency(groupPnL.realizedPnLUSD)}$
                                     </div>
                                 </div>
                             </div>
@@ -250,7 +238,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.unrealizedPnLUSD)}
+                                        {formatCurrency(groupPnL.unrealizedPnLUSD)}$
                                     </div>
                                 </div>
                             </div>
@@ -261,7 +249,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.totalPnLUSD)} ({groupPnL.totalROI >= 0 ? '+' : ''}{groupPnL.totalROI.toFixed(1)}%)
+                                        {formatCurrency(groupPnL.totalPnLUSD)}$
                                     </div>
                                 </div>
                             </div>

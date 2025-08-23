@@ -166,10 +166,12 @@ function WalletPill({ wallet, tokenMint }) {
                 </div>
                 {/* Дополнительная информация при наличии детальных метрик */}
                 {metrics && (
-                    <div className="text-[9px] text-gray-400 mt-1" title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%) • Avg buy: $${metrics.avgBuyPriceUSD.toFixed(6)} • Current: $${metrics.currentPriceUSD.toFixed(6)} • ROI: ${metrics.totalROI >= 0 ? '+' : ''}${metrics.totalROI.toFixed(1)}%`}>
+                    <div className="text-[9px] text-gray-400 mt-1" title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%)`}>
                         Holdings: {metrics.currentHoldings > 1000 ? (metrics.currentHoldings/1000).toFixed(1) + 'K' : metrics.currentHoldings.toFixed(0)} 
-                        {metrics.soldTokens > 0 && ` • Sold: ${metrics.soldPercentage.toFixed(0)}%`}
+                        {metrics.soldTokens > 0 }
+                        Sold: ${metrics.soldPercentage.toFixed(0)}%
                     </div>
+                    
                 )}
             </div>
             <div className="text-right ml-2">
