@@ -273,7 +273,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
               : 'text-gray-600 hover:text-gray-900'
             }`}
         >
-          Bulk Import (up to 10,000)
+          Bulk Import (up to 100,000)
         </button>
       </div>
 
@@ -281,7 +281,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         <>
           <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <div className="flex justify-between items-start mb-3">
-              <h4 className="text-sm font-medium text-blue-900">Bulk Import (up to 10,000 wallets):</h4>
+              <h4 className="text-sm font-medium text-blue-900">Bulk Import (up to 100,000 wallets):</h4>
             </div>
             <div className="text-sm text-blue-800 space-y-1">
               <p className="font-medium">• Example:</p>
@@ -336,7 +336,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
 
               {bulkValidation.tooMany && (
                 <div className="text-red-700 font-medium">
-                  ⚠️ Too many wallets! Found {bulkValidation.validWallets}, maximum 10,000 allowed. Please split your list.
+                  ⚠️ Too many wallets! Found {bulkValidation.validWallets}, maximum 100,000 allowed. Please split your list.
                 </div>
               )}
 
@@ -470,7 +470,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
             <div>
               <div className="flex justify-between items-center mb-2">
                 <label className="block text-sm font-medium text-gray-700">
-                  Wallet Addresses * (up to 10,000)
+                  Wallet Addresses * (up to 100,000)
                 </label>
                 <button
                   type="button"
@@ -508,7 +508,7 @@ Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
                   )}
                 </div>
                 <div className="text-xs text-gray-400">
-                  Max: 10,000 wallets
+                  Max: 100,000 wallets
                 </div>
               </div>
             </div>
