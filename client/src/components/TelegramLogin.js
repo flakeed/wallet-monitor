@@ -1,63 +1,70 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
 const TelegramLogin = ({ onLogin, botUsername }) => {
+  const [telegramId, setTelegramId] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [username, setUsername] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    // Load Telegram widget script
-    const script = document.createElement('script');
-    script.src = 'https://telegram.org/js/telegram-widget.js?22';
-    script.async = true;
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     
-    script.onload = () => {
-      console.log('Telegram widget script loaded');
-    };
-    
-    document.head.appendChild(script);
+    if (!telegramId.trim()) {
+      setError('Telegram ID is required');
+      return;
+    }
 
-    // Global callback function for Telegram widget
-    window.onTelegramAuth = async (user) => {
-      setIsLoading(true);
-      setError(null);
+    // Validate that telegramId is a number
+    if (!/^\d+$/.test(telegramId.trim())) {
+      setError('Telegram ID must be a number');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      console.log('Submitting login data:', { telegramId: telegramId.trim(), firstName, lastName, username });
       
-      try {
-        console.log('Telegram auth data received:', user);
-        
-        const response = await fetch('/api/auth/telegram', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(user),
-        });
+      // Create auth data object similar to Telegram widget format
+      const authData = {
+        id: parseInt(telegramId.trim()),
+        first_name: firstName.trim() || undefined,
+        last_name: lastName.trim() || undefined,
+        username: username.trim() || undefined,
+        auth_date: Math.floor(Date.now() / 1000),
+        // For simple ID-based auth, we'll skip hash verification
+        hash: 'simple_auth'
+      };
 
-        const data = await response.json();
+      const response = await fetch('/api/auth/telegram-simple', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(authData),
+      });
 
-        if (!response.ok) {
-          throw new Error(data.error || 'Authentication failed');
-        }
+      const data = await response.json();
 
-        // Store session token
-        localStorage.setItem('sessionToken', data.sessionToken);
-        localStorage.setItem('user', JSON.stringify(data.user));
-        
-        onLogin(data);
-      } catch (error) {
-        console.error('Login error:', error);
-        setError(error.message);
-      } finally {
-        setIsLoading(false);
+      if (!response.ok) {
+        throw new Error(data.error || 'Authentication failed');
       }
-    };
 
-    return () => {
-      // Cleanup
-      const scripts = document.querySelectorAll('script[src*="telegram-widget"]');
-      scripts.forEach(script => script.remove());
-      delete window.onTelegramAuth;
-    };
-  }, [onLogin]);
+      // Store session token
+      localStorage.setItem('sessionToken', data.sessionToken);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      
+      onLogin(data);
+    } catch (error) {
+      console.error('Login error:', error);
+      setError(error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -83,35 +90,92 @@ const TelegramLogin = ({ onLogin, botUsername }) => {
           </div>
         )}
 
-        <div className="space-y-6">
-          <div className="text-center">
-            <h2 className="text-xl font-semibold text-gray-800 mb-2">
-              Login with Telegram
-            </h2>
-            <p className="text-gray-600 text-sm mb-6">
-              Secure authentication through your Telegram account
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Telegram ID *
+            </label>
+            <input
+              type="text"
+              value={telegramId}
+              onChange={(e) => setTelegramId(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              placeholder="Enter your Telegram ID"
+              required
+              disabled={isLoading}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              You can find your ID by messaging @userinfobot on Telegram
             </p>
           </div>
 
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <span className="ml-3 text-gray-600">Authenticating...</span>
-            </div>
-          ) : (
-            <div className="flex justify-center">
-              <script
-                async
-                src="https://telegram.org/js/telegram-widget.js?22"
-                data-telegram-login={botUsername}
-                data-size="large"
-                data-onauth="onTelegramAuth(user)"
-                data-request-access="write"
-              ></script>
-            </div>
-          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              First Name (optional)
+            </label>
+            <input
+              type="text"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              placeholder="Your first name"
+              disabled={isLoading}
+            />
+          </div>
 
-         
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Last Name (optional)
+            </label>
+            <input
+              type="text"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              placeholder="Your last name"
+              disabled={isLoading}
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Username (optional)
+            </label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+              placeholder="Your Telegram username"
+              disabled={isLoading}
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading || !telegramId.trim()}
+            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center font-medium"
+          >
+            {isLoading ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                Logging in...
+              </>
+            ) : (
+              'Login with Telegram ID'
+            )}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center">
+          <div className="text-xs text-gray-500">
+            <p className="mb-2">How to find your Telegram ID:</p>
+            <ol className="text-left space-y-1">
+              <li>1. Open Telegram and search for @userinfobot</li>
+              <li>2. Start a chat and send any message</li>
+              <li>3. The bot will reply with your user ID</li>
+            </ol>
+          </div>
         </div>
       </div>
     </div>

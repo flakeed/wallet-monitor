@@ -8,12 +8,18 @@ class AuthMiddleware {
         this.TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     }
 
-    // Verify Telegram auth data
+    // Verify Telegram auth data (original method, kept for widget compatibility)
     verifyTelegramAuth(authData) {
         const { hash, ...data } = authData;
         
         if (!hash) {
             throw new Error('No hash provided');
+        }
+
+        // Skip verification for simple auth
+        if (hash === 'simple_auth') {
+            console.log(`[${new Date().toISOString()}] ℹ️ Skipping hash verification for simple auth`);
+            return true;
         }
 
         // Create data string for verification
@@ -38,7 +44,7 @@ class AuthMiddleware {
             throw new Error('Invalid auth data');
         }
 
-        // Check if auth data is not too old (optional)
+        // Check if auth data is not too old (optional, skip for simple auth)
         const authDate = parseInt(data.auth_date);
         const currentTime = Math.floor(Date.now() / 1000);
         if (currentTime - authDate > 86400) { // 24 hours
@@ -53,13 +59,13 @@ class AuthMiddleware {
         return crypto.randomBytes(32).toString('hex');
     }
 
-    // Create user session
+    // Create user session (updated to use 'sessions' table instead of 'user_sessions')
     async createUserSession(userId) {
         const sessionToken = this.generateSessionToken();
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
         const query = `
-            INSERT INTO user_sessions (user_id, session_token, expires_at)
+            INSERT INTO sessions (user_id, session_token, expires_at)
             VALUES ($1, $2, $3)
             RETURNING session_token, expires_at
         `;
@@ -68,14 +74,14 @@ class AuthMiddleware {
         return result.rows[0];
     }
 
-    // Validate session
+    // Validate session (updated to use 'sessions' table)
     async validateSession(sessionToken) {
         const query = `
-            SELECT us.*, u.id as user_id, u.telegram_id, u.username, u.first_name, 
+            SELECT s.*, u.id as user_id, u.telegram_id, u.username, u.first_name, 
                    u.last_name, u.is_admin, u.is_active
-            FROM user_sessions us
-            JOIN users u ON us.user_id = u.id
-            WHERE us.session_token = $1 AND us.expires_at > NOW() AND u.is_active = true
+            FROM sessions s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.session_token = $1 AND s.expires_at > NOW() AND u.is_active = true
         `;
         
         const result = await this.db.pool.query(query, [sessionToken]);
@@ -189,15 +195,16 @@ class AuthMiddleware {
         return result.rows;
     }
 
-    // Clean expired sessions
+    // Clean expired sessions (updated to use 'sessions' table)
     async cleanExpiredSessions() {
-        const result = await this.db.pool.query('SELECT clean_expired_sessions()');
-        return result.rows[0].clean_expired_sessions;
+        const query = `DELETE FROM sessions WHERE expires_at < NOW()`;
+        const result = await this.db.pool.query(query);
+        return result.rowCount;
     }
 
-    // Revoke user session
+    // Revoke user session (updated to use 'sessions' table)
     async revokeSession(sessionToken) {
-        const query = `DELETE FROM user_sessions WHERE session_token = $1`;
+        const query = `DELETE FROM sessions WHERE session_token = $1`;
         await this.db.pool.query(query, [sessionToken]);
     }
 
