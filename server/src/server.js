@@ -122,24 +122,19 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Simple auth error:`, error.message);
-    res.status(401).json({ error: error.message });
+    res.status(500).json({ error: 'Authentication failed. Please try again.' });
   }
 });
 
-// Update the existing Telegram auth route to keep both methods available
+// Original Telegram widget authentication (fallback)
 app.post('/api/auth/telegram', async (req, res) => {
   try {
     const telegramData = req.body;
     
-    // Check if this is a simple auth request (has 'hash' field set to 'simple_auth')
-    if (telegramData.hash === 'simple_auth') {
-      // Redirect to simple auth handler
-      req.body = telegramData;
-      return app._router.handle(req, res);
+    // Verify Telegram auth data (skip for simple auth)
+    if (telegramData.hash !== 'simple_auth') {
+      auth.verifyTelegramAuth(telegramData);
     }
-    
-    // Original Telegram widget verification
-    auth.verifyTelegramAuth(telegramData);
     
     // Check if user is whitelisted
     const isWhitelisted = await auth.isUserWhitelisted(telegramData.id);
@@ -161,7 +156,7 @@ app.post('/api/auth/telegram', async (req, res) => {
     // Create session
     const session = await auth.createUserSession(user.id);
     
-    console.log(`[${new Date().toISOString()}] ✅ User authenticated via widget: ${user.username || user.first_name} (${user.telegram_id})`);
+    console.log(`[${new Date().toISOString()}] ✅ User authenticated: ${user.username || user.first_name} (${user.telegram_id})`);
     
     res.json({
       success: true,
@@ -183,11 +178,33 @@ app.post('/api/auth/telegram', async (req, res) => {
   }
 });
 
+// Validation route with better error handling
 app.get('/api/auth/validate', auth.authRequired, (req, res) => {
-  res.json({
-    success: true,
-    user: req.user
-  });
+  try {
+    res.json({
+      success: true,
+      user: req.user
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Validation error:`, error.message);
+    res.status(401).json({ error: 'Session validation failed' });
+  }
+});
+
+// Logout with better cleanup
+app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const sessionToken = authHeader.substring(7);
+      await auth.revokeSession(sessionToken);
+    }
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Logout error:`, error.message);
+    // Even if logout fails, return success to clear client state
+    res.json({ success: true, message: 'Logout completed' });
+  }
 });
 
 app.post('/api/auth/logout', auth.authRequired, async (req, res) => {

@@ -167,14 +167,25 @@ const TelegramLogin = ({ onLogin, botUsername }) => {
           </button>
         </form>
 
-        <div className="mt-6 text-center">
-          <div className="text-xs text-gray-500">
-            <p className="mb-2">How to find your Telegram ID:</p>
-            <ol className="text-left space-y-1">
-              <li>1. Open Telegram and search for @userinfobot</li>
-              <li>2. Start a chat and send any message</li>
-              <li>3. The bot will reply with your user ID</li>
-            </ol>
+        <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+          <h3 className="text-sm font-semibold text-blue-800 mb-2">How to find your Telegram ID:</h3>
+          <div className="text-xs text-blue-700 space-y-2">
+            <div className="flex items-start space-x-2">
+              <span className="flex-shrink-0 w-4 h-4 bg-blue-200 rounded-full flex items-center justify-center text-xs font-bold">1</span>
+              <span>Open Telegram and search for <code className="bg-blue-100 px-1 rounded">@userinfobot</code></span>
+            </div>
+            <div className="flex items-start space-x-2">
+              <span className="flex-shrink-0 w-4 h-4 bg-blue-200 rounded-full flex items-center justify-center text-xs font-bold">2</span>
+              <span>Start a chat and send any message (like "hello")</span>
+            </div>
+            <div className="flex items-start space-x-2">
+              <span className="flex-shrink-0 w-4 h-4 bg-blue-200 rounded-full flex items-center justify-center text-xs font-bold">3</span>
+              <span>The bot will reply with your user ID number</span>
+            </div>
+            <div className="mt-3 p-2 bg-blue-100 rounded text-center">
+              <span className="font-medium">Your ID will look like: </span>
+              <code className="bg-white px-2 py-1 rounded">123456789</code>
+            </div>
           </div>
         </div>
       </div>

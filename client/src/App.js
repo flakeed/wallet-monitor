@@ -43,29 +43,35 @@ function App() {
   const checkAuthentication = async () => {
     const sessionToken = localStorage.getItem('sessionToken');
     const savedUser = localStorage.getItem('user');
-
+  
     if (!sessionToken || !savedUser) {
+      console.log('[Auth] No session token or user data found');
       setIsCheckingAuth(false);
       return;
     }
-
+  
     try {
+      console.log('[Auth] Checking existing session...');
       const response = await fetch(`${API_BASE}/auth/validate`, {
         headers: {
           'Authorization': `Bearer ${sessionToken}`
         }
       });
-
+  
       if (response.ok) {
         const userData = JSON.parse(savedUser);
         setUser(userData);
         setIsAuthenticated(true);
+        console.log('[Auth] Session validated successfully');
       } else {
+        console.log('[Auth] Session validation failed:', response.status);
+        // Clear invalid session data
         localStorage.removeItem('sessionToken');
         localStorage.removeItem('user');
       }
     } catch (error) {
-      console.error('Auth check error:', error);
+      console.error('[Auth] Session check error:', error);
+      // Clear potentially corrupted session data
       localStorage.removeItem('sessionToken');
       localStorage.removeItem('user');
     } finally {
