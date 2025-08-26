@@ -800,7 +800,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const { wallets, groupId, optimized } = req.body;
     const userId = req.user.id;
 
-    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
 
     if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
       return res.status(400).json({ 
@@ -826,8 +826,8 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       newCounts: null
     };
 
-    // 1. БЫСТРАЯ ВАЛИДАЦИЯ (без обращения к БД)
-    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
+    // 1. ENHANCED VALIDATION with better error reporting
+    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
     const validationStart = Date.now();
 
     const validWallets = [];
@@ -847,18 +847,18 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
       const address = wallet.address.trim();
 
-      // Проверка формата
+      // Enhanced address validation
       if (address.length < 32 || address.length > 44 || !solanaAddressRegex.test(address)) {
         results.failed++;
         results.errors.push({
           address: address,
           name: wallet.name || null,
-          error: 'Invalid Solana address format'
+          error: `Invalid Solana address format (length: ${address.length}, expected: 32-44 chars)`
         });
         continue;
       }
 
-      // Проверка дубликатов в текущем batch
+      // Check for duplicates in current batch
       if (seenAddresses.has(address)) {
         results.failed++;
         results.errors.push({
@@ -870,16 +870,28 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       }
 
       seenAddresses.add(address);
+      
+      // FIXED: Ensure userId is properly formatted
+      if (!userId) {
+        results.failed++;
+        results.errors.push({
+          address: address,
+          name: wallet.name || null,
+          error: 'User ID is required but missing'
+        });
+        continue;
+      }
+
       validWallets.push({
         address: address,
         name: wallet.name?.trim() || null,
-        userId,
-        groupId: groupId || null
+        userId: userId, // Use the authenticated user's ID
+        groupId: groupId || null // Ensure null instead of undefined
       });
     }
 
     const validationTime = Date.now() - validationStart;
-    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
+    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
 
     if (validWallets.length === 0) {
       return res.json({
@@ -890,19 +902,22 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       });
     }
 
-    // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT С СЧЕТЧИКАМИ
-    // console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
+    // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT WITH BETTER ERROR HANDLING
+    console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
     const dbStart = Date.now();
 
     try {
-      // Используем новый оптимизированный метод с подсчетом
+      // Log first few wallets for debugging
+      console.log(`[${new Date().toISOString()}] 🔍 Sample valid wallets:`, validWallets.slice(0, 3));
+      
+      // Use the fixed database method
       const dbResult = await db.addWalletsBatchOptimizedWithCount(validWallets);
       
       const dbTime = Date.now() - dbStart;
-      // console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
+      console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
 
       results.successful = dbResult.insertedWallets.length;
-      results.failed += (validWallets.length - dbResult.insertedWallets.length); // дубликаты в БД
+      results.failed += (validWallets.length - dbResult.insertedWallets.length); // duplicates in DB
       results.successfulWallets = dbResult.insertedWallets.map(wallet => ({
         address: wallet.address,
         name: wallet.name,
@@ -914,19 +929,33 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
     } catch (dbError) {
       console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized DB error:`, dbError.message);
-      throw new Error(`Database operation failed: ${dbError.message}`);
+      console.error(`[${new Date().toISOString()}] ❌ DB Error details:`, {
+        code: dbError.code,
+        detail: dbError.detail,
+        hint: dbError.hint
+      });
+      
+      // Return more specific error information
+      return res.status(500).json({ 
+        success: false,
+        error: 'Database operation failed',
+        details: {
+          message: dbError.message,
+          code: dbError.code,
+          hint: dbError.hint
+        },
+        duration: Date.now() - startTime
+      });
     }
 
-    // 3. ПАРАЛЛЕЛЬНАЯ WEBSOCKET ПОДПИСКА (неблокирующая)
+    // 3. ASYNC WEBSOCKET SUBSCRIPTION (unchanged but with better error handling)
     if (results.successful > 0) {
-      // console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
+      console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
       
-      // Запускаем подписку асинхронно, не ждем завершения
       setImmediate(async () => {
         try {
           const addressesToSubscribe = results.successfulWallets.map(w => w.address);
           
-          // Подписываемся только если кошельки подходят под активную область
           const relevantAddresses = results.successfulWallets
             .filter(wallet => 
               (!solanaWebSocketService.activeUserId || wallet.userId === solanaWebSocketService.activeUserId) &&
@@ -949,7 +978,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const duration = Date.now() - startTime;
     const walletsPerSecond = Math.round((results.successful / duration) * 1000);
 
-    // console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
+    console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
 
     res.json({
       success: results.successful > 0,
@@ -967,11 +996,16 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   } catch (error) {
     const duration = Date.now() - startTime;
     console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized bulk import failed after ${duration}ms:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Stack trace:`, error.stack);
     
     res.status(500).json({ 
       success: false,
       error: 'Internal server error during ultra-optimized bulk import',
-      details: error.message,
+      details: {
+        message: error.message,
+        type: error.constructor.name,
+        code: error.code
+      },
       duration
     });
   }

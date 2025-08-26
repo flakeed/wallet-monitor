@@ -1050,22 +1050,22 @@ async addWalletsBatchOptimizedWithCount(wallets) {
         try {
             await client.query('BEGIN');
 
-            // Batch insert с подсчетом новых записей
+            // FIXED: Properly handle NULL values and UUID conversion
             const values = [];
             const placeholders = [];
             
             wallets.forEach((wallet, index) => {
                 const offset = index * 4;
-                // ИСПРАВЛЕНО: убран ::uuid кастинг из SQL
                 placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
                 values.push(
                     wallet.address,
                     wallet.name || null,
-                    wallet.groupId || null, // PostgreSQL автоматически обработает UUID
-                    wallet.userId           // PostgreSQL автоматически обработает UUID
+                    wallet.groupId || null, // Let PostgreSQL handle NULL as NULL, not as string
+                    wallet.userId       // Let PostgreSQL handle the UUID conversion
                 );
             });
 
+            // FIXED: Remove explicit UUID casting from the query - let PostgreSQL handle it
             const insertQuery = `
                 INSERT INTO wallets (address, name, group_id, user_id)
                 VALUES ${placeholders.join(', ')}
@@ -1073,33 +1073,38 @@ async addWalletsBatchOptimizedWithCount(wallets) {
                 RETURNING id, address, name, group_id, user_id, created_at
             `;
 
+            console.log(`[${new Date().toISOString()}] 🗄️ Executing optimized batch insert for ${wallets.length} wallets`);
+            // Debug: Log first few parameters to check for issues
+            console.log(`[${new Date().toISOString()}] 🔍 Sample parameters:`, values.slice(0, 8));
+
             const insertResult = await client.query(insertQuery, values);
 
-            // Быстрое получение обновленных счетчиков
+            // FIXED: Simplified count query without complex ROLLUP that can cause UUID issues
             const countQuery = `
-                WITH group_counts AS (
-                    SELECT 
-                        w.group_id,
-                        COUNT(*) as group_count
-                    FROM wallets w
-                    WHERE w.user_id = $1 AND w.is_active = true
-                    GROUP BY w.group_id
-                ),
-                total_count AS (
-                    SELECT COUNT(*) as total_wallets
-                    FROM wallets w
-                    WHERE w.user_id = $1 AND w.is_active = true
-                )
                 SELECT 
-                    tc.total_wallets,
-                    gc.group_id,
-                    COALESCE(gc.group_count, 0) as group_count
-                FROM total_count tc
-                LEFT JOIN group_counts gc ON true
-                ORDER BY gc.group_id NULLS LAST
+                    COUNT(*) as total_wallets
+                FROM wallets 
+                WHERE user_id = $1 AND is_active = true
             `;
             
-            const countResult = await client.query(countQuery, [wallets[0].userId]);
+            const totalResult = await client.query(countQuery, [wallets[0].userId]);
+            const totalWallets = parseInt(totalResult.rows[0]?.total_wallets || 0);
+
+            // Get group counts separately to avoid UUID casting issues
+            const groupCountQuery = `
+                SELECT 
+                    w.group_id,
+                    COUNT(*) as group_count
+                FROM wallets w
+                WHERE w.user_id = $1 AND w.is_active = true AND w.group_id IS NOT NULL
+                GROUP BY w.group_id
+            `;
+            
+            const groupResult = await client.query(groupCountQuery, [wallets[0].userId]);
+            const groupCounts = groupResult.rows.map(row => ({
+                groupId: row.group_id,
+                count: parseInt(row.group_count || 0)
+            }));
 
             await client.query('COMMIT');
 
@@ -1108,18 +1113,6 @@ async addWalletsBatchOptimizedWithCount(wallets) {
             
             console.log(`[${new Date().toISOString()}] ✅ Optimized batch with count completed: ${insertResult.rows.length} inserted in ${insertTime}ms (${walletsPerSecond} wallets/sec)`);
 
-            // Извлекаем общее количество из первой строки
-            const totalWallets = countResult.rows.length > 0 ? parseInt(countResult.rows[0].total_wallets || 0) : 0;
-            
-            // Формируем счетчики групп
-            const groupCounts = countResult.rows
-                .filter(row => row.group_id !== null)
-                .map(row => ({
-                    groupId: row.group_id,
-                    count: parseInt(row.group_count || 0)
-                }));
-
-            // Возвращаем данные вместе с обновленными счетчиками
             return {
                 insertedWallets: insertResult.rows,
                 counts: {
@@ -1131,6 +1124,13 @@ async addWalletsBatchOptimizedWithCount(wallets) {
         } catch (error) {
             await client.query('ROLLBACK');
             console.error(`[${new Date().toISOString()}] ❌ Transaction error:`, error.message);
+            console.error(`[${new Date().toISOString()}] ❌ Error details:`, {
+                code: error.code,
+                detail: error.detail,
+                hint: error.hint,
+                position: error.position,
+                where: error.where
+            });
             throw error;
         } finally {
             client.release();
