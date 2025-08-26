@@ -30,7 +30,7 @@ class SolanaWebSocketService {
         this.messageCount = 0;
         this.isStarted = false;
         this.batchSize = 400;
-        this.maxSubscriptions = 10000;
+        this.maxSubscriptions = 100000;
         this.activeGroupId = null;
         this.activeUserId = null;
     }

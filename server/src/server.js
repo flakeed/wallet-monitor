@@ -475,8 +475,8 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Addresses array is required' });
     }
 
-    if (addresses.length > 10000) {
-      return res.status(400).json({ error: 'Maximum 10,000 addresses allowed for validation' });
+    if (addresses.length > 100000) {
+      return res.status(400).json({ error: 'Maximum 100,000 addresses allowed for validation' });
     }
 
     // console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId}`);

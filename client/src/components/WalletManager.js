@@ -92,8 +92,8 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
       totalWallets: wallets.length,
       validWallets: wallets.length,
       errors: errors.length,
-      canImport: wallets.length > 0 && wallets.length <= 10000,
-      tooMany: wallets.length > 10000,
+      canImport: wallets.length > 0 && wallets.length <= 100000,
+      tooMany: wallets.length > 100000,
       errorMessages: errors.slice(0, 10)
     });
   }, [parseBulkInput]);
@@ -140,10 +140,10 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
       return;
     }
 
-    if (wallets.length > 10000) {
+    if (wallets.length > 100000) {
       setBulkResults({
         type: 'error',
-        message: 'Maximum 10,000 wallets allowed per bulk import.'
+        message: 'Maximum 100,000 wallets allowed per bulk import.'
       });
       return;
     }
