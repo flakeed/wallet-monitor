@@ -798,10 +798,11 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   
   try {
     const { wallets, groupId, optimized } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id; // This should be a valid UUID from auth middleware
 
     console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
 
+    // Enhanced validation
     if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
       return res.status(400).json({ 
         success: false,
@@ -816,6 +817,30 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       });
     }
 
+    // Validate userId format (should come from auth middleware but double-check)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!userId || !uuidRegex.test(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID format'
+      });
+    }
+
+    // Validate groupId if provided
+    let validGroupId = null;
+    if (groupId) {
+      const cleanGroupId = groupId.trim();
+      if (cleanGroupId && cleanGroupId !== 'null' && cleanGroupId !== '') {
+        if (!uuidRegex.test(cleanGroupId)) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid group ID format'
+          });
+        }
+        validGroupId = cleanGroupId;
+      }
+    }
+
     const results = {
       total: wallets.length,
       successful: 0,
@@ -826,7 +851,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       newCounts: null
     };
 
-    // 1. ENHANCED VALIDATION with better error reporting
+    // ENHANCED VALIDATION with better error reporting
     console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
     const validationStart = Date.now();
 
@@ -871,22 +896,12 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
       seenAddresses.add(address);
       
-      // FIXED: Ensure userId is properly formatted
-      if (!userId) {
-        results.failed++;
-        results.errors.push({
-          address: address,
-          name: wallet.name || null,
-          error: 'User ID is required but missing'
-        });
-        continue;
-      }
-
+      // FIXED: Ensure all required fields are properly validated
       validWallets.push({
         address: address,
         name: wallet.name?.trim() || null,
-        userId: userId, // Use the authenticated user's ID
-        groupId: groupId || null // Ensure null instead of undefined
+        userId: userId,           // Already validated UUID
+        groupId: validGroupId     // Already validated UUID or null
       });
     }
 
@@ -902,13 +917,18 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       });
     }
 
-    // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT WITH BETTER ERROR HANDLING
+    // ULTRA-OPTIMIZED DATABASE BATCH INSERT WITH BETTER ERROR HANDLING
     console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
     const dbStart = Date.now();
 
     try {
-      // Log first few wallets for debugging
-      console.log(`[${new Date().toISOString()}] 🔍 Sample valid wallets:`, validWallets.slice(0, 3));
+      // Log sample data for debugging
+      console.log(`[${new Date().toISOString()}] 🔍 Sample valid wallets:`, validWallets.slice(0, 2).map(w => ({
+        address: w.address.substring(0, 8) + '...',
+        name: w.name,
+        userId: w.userId.substring(0, 8) + '...',
+        groupId: w.groupId ? w.groupId.substring(0, 8) + '...' : null
+      })));
       
       // Use the fixed database method
       const dbResult = await db.addWalletsBatchOptimizedWithCount(validWallets);
@@ -928,8 +948,8 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       results.newCounts = dbResult.counts;
 
     } catch (dbError) {
-      console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized DB error:`, dbError.message);
-      console.error(`[${new Date().toISOString()}] ❌ DB Error details:`, {
+      console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized DB error:`, {
+        message: dbError.message,
         code: dbError.code,
         detail: dbError.detail,
         hint: dbError.hint
@@ -942,20 +962,18 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
         details: {
           message: dbError.message,
           code: dbError.code,
-          hint: dbError.hint
+          hint: dbError.hint || 'Check server logs for more details'
         },
         duration: Date.now() - startTime
       });
     }
 
-    // 3. ASYNC WEBSOCKET SUBSCRIPTION (unchanged but with better error handling)
+    // ASYNC WEBSOCKET SUBSCRIPTION (unchanged but with better error handling)
     if (results.successful > 0) {
       console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
       
       setImmediate(async () => {
         try {
-          const addressesToSubscribe = results.successfulWallets.map(w => w.address);
-          
           const relevantAddresses = results.successfulWallets
             .filter(wallet => 
               (!solanaWebSocketService.activeUserId || wallet.userId === solanaWebSocketService.activeUserId) &&
@@ -995,16 +1013,17 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized bulk import failed after ${duration}ms:`, error);
-    console.error(`[${new Date().toISOString()}] ❌ Stack trace:`, error.stack);
+    console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized bulk import failed after ${duration}ms:`, {
+      message: error.message,
+      stack: error.stack?.split('\n').slice(0, 5).join('\n') // Truncated stack trace
+    });
     
     res.status(500).json({ 
       success: false,
       error: 'Internal server error during ultra-optimized bulk import',
       details: {
         message: error.message,
-        type: error.constructor.name,
-        code: error.code
+        type: error.constructor.name
       },
       duration
     });

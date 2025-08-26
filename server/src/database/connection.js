@@ -1039,9 +1039,10 @@ async addWalletsBatchOptimizedWithCount(wallets) {
     console.log(`[${new Date().toISOString()}] 🚀 Starting optimized batch insert with count tracking: ${wallets.length} wallets`);
     const startTime = Date.now();
 
-    const walletsWithUser = wallets.filter(w => w.userId);
+    // Validate that all wallets have userId
+    const walletsWithUser = wallets.filter(w => w.userId && w.userId.trim() !== '');
     if (walletsWithUser.length !== wallets.length) {
-        throw new Error('All wallets must have userId specified');
+        throw new Error('All wallets must have a valid userId specified');
     }
 
     try {
@@ -1050,22 +1051,43 @@ async addWalletsBatchOptimizedWithCount(wallets) {
         try {
             await client.query('BEGIN');
 
-            // FIXED: Properly handle NULL values and UUID conversion
+            // FIXED: Properly handle UUID values and NULL validation
             const values = [];
             const placeholders = [];
             
             wallets.forEach((wallet, index) => {
                 const offset = index * 4;
                 placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
+                
+                // CRITICAL FIX: Validate and clean UUID values before insertion
+                const cleanUserId = wallet.userId?.trim();
+                const cleanGroupId = wallet.groupId?.trim();
+                
+                // Validate UUID format (basic check)
+                const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+                
+                if (!cleanUserId || !uuidRegex.test(cleanUserId)) {
+                    throw new Error(`Invalid userId UUID format: ${cleanUserId}`);
+                }
+                
+                // For groupId, allow null but validate if provided
+                let validGroupId = null;
+                if (cleanGroupId && cleanGroupId !== 'null' && cleanGroupId !== '') {
+                    if (!uuidRegex.test(cleanGroupId)) {
+                        throw new Error(`Invalid groupId UUID format: ${cleanGroupId}`);
+                    }
+                    validGroupId = cleanGroupId;
+                }
+                
                 values.push(
-                    wallet.address,
-                    wallet.name || null,
-                    wallet.groupId || null, // Let PostgreSQL handle NULL as NULL, not as string
-                    wallet.userId       // Let PostgreSQL handle the UUID conversion
+                    wallet.address?.trim(),           // address (string)
+                    wallet.name?.trim() || null,     // name (string or null)
+                    validGroupId,                     // group_id (UUID or null)
+                    cleanUserId                       // user_id (UUID, required)
                 );
             });
 
-            // FIXED: Remove explicit UUID casting from the query - let PostgreSQL handle it
+            // FIXED: Simple insert without explicit UUID casting - let PostgreSQL handle it
             const insertQuery = `
                 INSERT INTO wallets (address, name, group_id, user_id)
                 VALUES ${placeholders.join(', ')}
@@ -1074,33 +1096,32 @@ async addWalletsBatchOptimizedWithCount(wallets) {
             `;
 
             console.log(`[${new Date().toISOString()}] 🗄️ Executing optimized batch insert for ${wallets.length} wallets`);
-            // Debug: Log first few parameters to check for issues
-            console.log(`[${new Date().toISOString()}] 🔍 Sample parameters:`, values.slice(0, 8));
-
+            
             const insertResult = await client.query(insertQuery, values);
 
-            // FIXED: Simplified count query without complex ROLLUP that can cause UUID issues
-            const countQuery = `
-                SELECT 
-                    COUNT(*) as total_wallets
+            // FIXED: Simplified count queries to avoid UUID casting issues
+            const userId = wallets[0].userId.trim();
+            
+            // Get total wallet count for user
+            const totalCountQuery = `
+                SELECT COUNT(*) as total_wallets
                 FROM wallets 
                 WHERE user_id = $1 AND is_active = true
             `;
-            
-            const totalResult = await client.query(countQuery, [wallets[0].userId]);
+            const totalResult = await client.query(totalCountQuery, [userId]);
             const totalWallets = parseInt(totalResult.rows[0]?.total_wallets || 0);
 
-            // Get group counts separately to avoid UUID casting issues
+            // Get group counts separately to avoid ROLLUP UUID issues
             const groupCountQuery = `
                 SELECT 
-                    w.group_id,
+                    group_id,
                     COUNT(*) as group_count
-                FROM wallets w
-                WHERE w.user_id = $1 AND w.is_active = true AND w.group_id IS NOT NULL
-                GROUP BY w.group_id
+                FROM wallets
+                WHERE user_id = $1 AND is_active = true AND group_id IS NOT NULL
+                GROUP BY group_id
             `;
             
-            const groupResult = await client.query(groupCountQuery, [wallets[0].userId]);
+            const groupResult = await client.query(groupCountQuery, [userId]);
             const groupCounts = groupResult.rows.map(row => ({
                 groupId: row.group_id,
                 count: parseInt(row.group_count || 0)
@@ -1123,13 +1144,12 @@ async addWalletsBatchOptimizedWithCount(wallets) {
 
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error(`[${new Date().toISOString()}] ❌ Transaction error:`, error.message);
-            console.error(`[${new Date().toISOString()}] ❌ Error details:`, {
+            console.error(`[${new Date().toISOString()}] ❌ Transaction error:`, {
+                message: error.message,
                 code: error.code,
                 detail: error.detail,
                 hint: error.hint,
-                position: error.position,
-                where: error.where
+                position: error.position
             });
             throw error;
         } finally {
@@ -1315,20 +1335,28 @@ async validateWalletsBatch(addresses, userId) {
 
         if (addresses.length === 0) return { valid: [], duplicates: [], invalid: [] };
 
-        // Быстрая проверка существующих кошельков
+        // CRITICAL FIX: Validate userId before using in query
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const cleanUserId = userId?.trim();
+        
+        if (!cleanUserId || !uuidRegex.test(cleanUserId)) {
+            throw new Error(`Invalid userId UUID format: ${cleanUserId}`);
+        }
+
+        // Fast check for existing wallets with proper UUID handling
         const query = `
             SELECT address 
             FROM wallets 
             WHERE address = ANY($1) AND user_id = $2 AND is_active = true
         `;
         
-        const result = await this.pool.query(query, [addresses, userId]);
+        const result = await this.pool.query(query, [addresses, cleanUserId]);
         const existingAddresses = new Set(result.rows.map(row => row.address));
 
         const duration = Date.now() - startTime;
         console.log(`[${new Date().toISOString()}] ⚡ Wallet validation completed in ${duration}ms: ${existingAddresses.size} duplicates found`);
 
-        // Разделяем на категории
+        // Separate into categories with improved validation
         const valid = [];
         const duplicates = [];
         const invalid = [];
@@ -1336,12 +1364,18 @@ async validateWalletsBatch(addresses, userId) {
         const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]+$/;
 
         addresses.forEach(address => {
-            if (!address || address.length < 32 || address.length > 44 || !solanaAddressRegex.test(address)) {
+            const cleanAddress = address?.trim();
+            
+            // Enhanced Solana address validation
+            if (!cleanAddress || 
+                cleanAddress.length < 32 || 
+                cleanAddress.length > 44 || 
+                !solanaAddressRegex.test(cleanAddress)) {
                 invalid.push(address);
-            } else if (existingAddresses.has(address)) {
-                duplicates.push(address);
+            } else if (existingAddresses.has(cleanAddress)) {
+                duplicates.push(cleanAddress);
             } else {
-                valid.push(address);
+                valid.push(cleanAddress);
             }
         });
 
