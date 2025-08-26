@@ -158,20 +158,19 @@ class Database {
             try {
                 await client.query('BEGIN');
     
-                
-                // Исправленная версия с правильными параметрами
+                // ИСПРАВЛЕННАЯ версия без ::uuid кастинга в параметрах
                 const values = [];
                 const placeholders = [];
                 
                 wallets.forEach((wallet, index) => {
                     const offset = index * 4;
-                    // ИСПРАВЛЕНО: добавлен знак $ перед номерами параметров и ::uuid для UUID полей
-                    placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}::uuid, $${offset + 4}::uuid)`);
+                    // ИСПРАВЛЕНО: убран ::uuid кастинг из placeholders
+                    placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
                     values.push(
                         wallet.address,
                         wallet.name || null,
-                        wallet.groupId || null,
-                        wallet.userId
+                        wallet.groupId || null, // PostgreSQL автоматически распознает UUID
+                        wallet.userId        // PostgreSQL автоматически распознает UUID
                     );
                 });
     
@@ -182,6 +181,7 @@ class Database {
                     RETURNING id, address, name, group_id, user_id, created_at
                 `;
     
+                console.log(`[${new Date().toISOString()}] 🗄️ Executing optimized batch insert for ${wallets.length} wallets`);
     
                 const insertResult = await client.query(insertQuery, values);
     
@@ -190,10 +190,13 @@ class Database {
                 const insertTime = Date.now() - startTime;
                 const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
                 
+                console.log(`[${new Date().toISOString()}] ✅ Optimized batch insert completed: ${insertResult.rows.length} inserted in ${insertTime}ms (${walletsPerSecond} wallets/sec)`);
+    
                 return insertResult.rows;
     
             } catch (error) {
                 await client.query('ROLLBACK');
+                console.error(`[${new Date().toISOString()}] ❌ Database transaction error:`, error.message);
                 throw error;
             } finally {
                 client.release();
@@ -1053,12 +1056,13 @@ async addWalletsBatchOptimizedWithCount(wallets) {
             
             wallets.forEach((wallet, index) => {
                 const offset = index * 4;
-                placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}::uuid, $${offset + 4}::uuid)`);
+                // ИСПРАВЛЕНО: убран ::uuid кастинг из SQL
+                placeholders.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
                 values.push(
                     wallet.address,
                     wallet.name || null,
-                    wallet.groupId || null,
-                    wallet.userId
+                    wallet.groupId || null, // PostgreSQL автоматически обработает UUID
+                    wallet.userId           // PostgreSQL автоматически обработает UUID
                 );
             });
 
@@ -1073,14 +1077,26 @@ async addWalletsBatchOptimizedWithCount(wallets) {
 
             // Быстрое получение обновленных счетчиков
             const countQuery = `
+                WITH group_counts AS (
+                    SELECT 
+                        w.group_id,
+                        COUNT(*) as group_count
+                    FROM wallets w
+                    WHERE w.user_id = $1 AND w.is_active = true
+                    GROUP BY w.group_id
+                ),
+                total_count AS (
+                    SELECT COUNT(*) as total_wallets
+                    FROM wallets w
+                    WHERE w.user_id = $1 AND w.is_active = true
+                )
                 SELECT 
-                    COUNT(*) as total_count,
-                    group_id,
-                    COUNT(*) as group_count
-                FROM wallets 
-                WHERE user_id = $1 AND is_active = true
-                GROUP BY ROLLUP(group_id)
-                ORDER BY group_id NULLS FIRST
+                    tc.total_wallets,
+                    gc.group_id,
+                    COALESCE(gc.group_count, 0) as group_count
+                FROM total_count tc
+                LEFT JOIN group_counts gc ON true
+                ORDER BY gc.group_id NULLS LAST
             `;
             
             const countResult = await client.query(countQuery, [wallets[0].userId]);
@@ -1090,22 +1106,31 @@ async addWalletsBatchOptimizedWithCount(wallets) {
             const insertTime = Date.now() - startTime;
             const walletsPerSecond = Math.round((insertResult.rows.length / insertTime) * 1000);
             
+            console.log(`[${new Date().toISOString()}] ✅ Optimized batch with count completed: ${insertResult.rows.length} inserted in ${insertTime}ms (${walletsPerSecond} wallets/sec)`);
 
+            // Извлекаем общее количество из первой строки
+            const totalWallets = countResult.rows.length > 0 ? parseInt(countResult.rows[0].total_wallets || 0) : 0;
+            
+            // Формируем счетчики групп
+            const groupCounts = countResult.rows
+                .filter(row => row.group_id !== null)
+                .map(row => ({
+                    groupId: row.group_id,
+                    count: parseInt(row.group_count || 0)
+                }));
 
             // Возвращаем данные вместе с обновленными счетчиками
             return {
                 insertedWallets: insertResult.rows,
                 counts: {
-                    totalWallets: countResult.rows[0]?.total_count || 0,
-                    groupCounts: countResult.rows.slice(1).map(row => ({
-                        groupId: row.group_id,
-                        count: parseInt(row.group_count || 0)
-                    }))
+                    totalWallets: totalWallets,
+                    groupCounts: groupCounts
                 }
             };
 
         } catch (error) {
             await client.query('ROLLBACK');
+            console.error(`[${new Date().toISOString()}] ❌ Transaction error:`, error.message);
             throw error;
         } finally {
             client.release();
