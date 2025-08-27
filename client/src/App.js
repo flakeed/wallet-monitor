@@ -1,4 +1,4 @@
-// client/src/App.js - УЛЬТРА-БЫСТРАЯ версия
+// client/src/App.js - Обновленная версия для общей сессии
 
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
@@ -19,6 +19,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [isSharedSession, setIsSharedSession] = useState(false);
   
   // Ultra-optimized state management
   const [walletCount, setWalletCount] = useState(0);
@@ -43,6 +44,7 @@ function App() {
   const checkAuthentication = async () => {
     const sessionToken = localStorage.getItem('sessionToken');
     const savedUser = localStorage.getItem('user');
+    const isShared = localStorage.getItem('isSharedSession') === 'true';
   
     if (!sessionToken || !savedUser) {
       console.log('[Auth] No session token or user data found');
@@ -51,29 +53,49 @@ function App() {
     }
   
     try {
-      console.log('[Auth] Checking existing session...');
-      const response = await fetch(`${API_BASE}/auth/validate`, {
-        headers: {
-          'Authorization': `Bearer ${sessionToken}`
+      console.log('[Auth] Checking existing session...', { isShared });
+      
+      // Для общей сессии передаем дополнительные заголовки
+      const headers = {
+        'Authorization': `Bearer ${sessionToken}`
+      };
+      
+      if (isShared && savedUser) {
+        const userData = JSON.parse(savedUser);
+        if (userData.telegramId) {
+          headers['X-Telegram-ID'] = userData.telegramId.toString();
         }
-      });
+        if (userData.id) {
+          headers['X-User-ID'] = userData.id;
+        }
+      }
+      
+      const response = await fetch(`${API_BASE}/auth/validate`, { headers });
   
       if (response.ok) {
+        const validationData = await response.json();
         const userData = JSON.parse(savedUser);
+        
         setUser(userData);
         setIsAuthenticated(true);
-        console.log('[Auth] Session validated successfully');
+        setIsSharedSession(validationData.isSharedSession || false);
+        console.log('[Auth] Session validated successfully', { 
+          isSharedSession: validationData.isSharedSession,
+          user: userData.username || userData.firstName 
+        });
       } else {
         console.log('[Auth] Session validation failed:', response.status);
         // Clear invalid session data
         localStorage.removeItem('sessionToken');
         localStorage.removeItem('user');
+        localStorage.removeItem('isSharedSession');
       }
     } catch (error) {
       console.error('[Auth] Session check error:', error);
       // Clear potentially corrupted session data
       localStorage.removeItem('sessionToken');
       localStorage.removeItem('user');
+      localStorage.removeItem('isSharedSession');
     } finally {
       setIsCheckingAuth(false);
     }
@@ -82,6 +104,16 @@ function App() {
   const handleLogin = (authData) => {
     setUser(authData.user);
     setIsAuthenticated(true);
+    setIsSharedSession(authData.isSharedSession || false);
+    
+    // Сохраняем информацию об общей сессии
+    if (authData.isSharedSession) {
+      localStorage.setItem('isSharedSession', 'true');
+      console.log('[Auth] Logged in with shared session for user:', authData.user.username || authData.user.firstName);
+    } else {
+      localStorage.setItem('isSharedSession', 'false');
+    }
+    
     setLoading(true);
     ultraFastInit();
   };
@@ -89,25 +121,39 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem('sessionToken');
     localStorage.removeItem('user');
+    localStorage.removeItem('isSharedSession');
     setUser(null);
     setIsAuthenticated(false);
+    setIsSharedSession(false);
     setShowAdminPanel(false);
   };
 
-  // Helper function to get auth headers
+  // Helper function to get auth headers (обновлена для общей сессии)
   const getAuthHeaders = () => {
     const sessionToken = localStorage.getItem('sessionToken');
-    return {
+    const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${sessionToken}`
     };
+    
+    // Добавляем заголовки пользователя для общей сессии
+    if (isSharedSession && user) {
+      if (user.telegramId) {
+        headers['X-Telegram-ID'] = user.telegramId.toString();
+      }
+      if (user.id && user.id !== 'shared-user') {
+        headers['X-User-ID'] = user.id;
+      }
+    }
+    
+    return headers;
   };
 
-  // НОВАЯ УЛЬТРА-БЫСТРАЯ ИНИЦИАЛИЗАЦИЯ
+  // НОВАЯ УЛЬТРА-БЫСТРАЯ ИНИЦИАЛИЗАЦИЯ (обновлена для общей сессии)
   const ultraFastInit = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
-      // console.log(`🚀 ULTRA-FAST initialization: hours=${hours}, type=${type}, groupId=${groupId}`);
+      console.log(`🚀 ULTRA-FAST initialization: hours=${hours}, type=${type}, groupId=${groupId}, sharedSession=${isSharedSession}`);
       const startTime = Date.now();
 
       const headers = getAuthHeaders();
@@ -142,8 +188,7 @@ function App() {
       const clientTime = Date.now() - startTime;
       setInitializationTime(duration);
       
-      // console.log(`✅ ULTRA-FAST init completed: ${duration}ms server + ${clientTime}ms client = ${duration + clientTime}ms total`);
-      // console.log(`📊 Loaded: ${data.wallets.totalCount} wallets, ${data.transactions.length} transactions`);
+      console.log(`✅ ULTRA-FAST init completed: ${duration}ms server + ${clientTime}ms client = ${duration + clientTime}ms total (shared: ${isSharedSession})`);
 
     } catch (err) {
       setError(err.message);
@@ -197,7 +242,7 @@ function App() {
     }
   };
 
-  // SSE connection остается прежним
+  // SSE connection (обновлен для общей сессии)
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -209,13 +254,23 @@ function App() {
     if (selectedGroup) {
       sseUrl.searchParams.append('groupId', selectedGroup);
     }
+    
+    // Для общей сессии добавляем параметры пользователя
+    if (isSharedSession && user) {
+      if (user.telegramId) {
+        sseUrl.searchParams.append('telegramId', user.telegramId.toString());
+      }
+      if (user.id && user.id !== 'shared-user') {
+        sseUrl.searchParams.append('userId', user.id);
+      }
+    }
 
-    console.log('🔌 Connecting to SSE:', sseUrl.toString());
+    console.log('🔌 Connecting to SSE:', sseUrl.toString(), { sharedSession: isSharedSession });
 
     const eventSource = new EventSource(sseUrl.toString());
 
     eventSource.onopen = () => {
-      console.log('✅ SSE connection opened');
+      console.log('✅ SSE connection opened (shared session:', isSharedSession, ')');
       setError(null);
     };
 
@@ -278,7 +333,7 @@ function App() {
       console.log('🔌 Closing SSE connection');
       eventSource.close();
     };
-  }, [timeframe, transactionType, selectedGroup, isAuthenticated, refreshKey]);
+  }, [timeframe, transactionType, selectedGroup, isAuthenticated, refreshKey, isSharedSession, user]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
@@ -315,7 +370,7 @@ function App() {
     const startTime = Date.now();
     
     try {
-      // console.log(`🚀 Starting ULTRA-OPTIMIZED bulk import of ${wallets.length} wallets`);
+      console.log(`🚀 Starting ULTRA-OPTIMIZED bulk import of ${wallets.length} wallets (shared session: ${isSharedSession})`);
 
       if (progressCallback) {
         progressCallback({
@@ -333,7 +388,7 @@ function App() {
         chunks.push(wallets.slice(i, i + ULTRA_CHUNK_SIZE));
       }
 
-      // console.log(`📦 Created ${chunks.length} ultra-optimized chunks`);
+      console.log(`📦 Created ${chunks.length} ultra-optimized chunks`);
 
       let totalResults = {
         total: wallets.length,
@@ -357,7 +412,7 @@ function App() {
         }
 
         try {
-          // console.log(`🚀 Processing ultra-optimized chunk ${i + 1}/${chunks.length} (${chunk.length} wallets)`);
+          console.log(`🚀 Processing ultra-optimized chunk ${i + 1}/${chunks.length} (${chunk.length} wallets)`);
 
           const response = await fetch(`${API_BASE}/wallets/bulk-optimized`, {
             method: 'POST',
@@ -407,7 +462,7 @@ function App() {
             }
           }
 
-          // console.log(`✅ Ultra-optimized chunk ${i + 1} completed: ${result.results.successful} successful`);
+          console.log(`✅ Ultra-optimized chunk ${i + 1} completed: ${result.results.successful} successful`);
 
         } catch (chunkError) {
           console.error(`❌ Ultra-optimized chunk ${i + 1} failed:`, chunkError.message);
@@ -440,7 +495,7 @@ function App() {
       const walletsPerSecond = Math.round((totalResults.successful / duration) * 1000);
       const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
 
-      // console.log(`🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${totalResults.successful}/${totalResults.total} successful (${successRate}%, ${walletsPerSecond} wallets/sec)`);
+      console.log(`🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${totalResults.successful}/${totalResults.total} successful (${successRate}%, ${walletsPerSecond} wallets/sec)`);
 
       return {
         success: totalResults.successful > 0,
@@ -522,11 +577,19 @@ function App() {
     return (
       <div className="min-h-screen bg-gray-50 py-8 px-4">
         <div className="max-w-6xl mx-auto">
-          <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+          <Header 
+            user={user} 
+            onLogout={handleLogout} 
+            onOpenAdmin={() => setShowAdminPanel(true)}
+            isSharedSession={isSharedSession}
+          />
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <div className="flex items-center">
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-3"></div>
               <span className="text-blue-700">Loading wallets...</span>
+              {isSharedSession && (
+                <span className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Shared Session</span>
+              )}
             </div>
           </div>
         </div>
@@ -537,7 +600,12 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
       <div className="max-w-6xl mx-auto">
-        <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+        <Header 
+          user={user} 
+          onLogout={handleLogout} 
+          onOpenAdmin={() => setShowAdminPanel(true)}
+          isSharedSession={isSharedSession}
+        />
         {error && <ErrorMessage error={error} />}
         
         <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
@@ -562,6 +630,11 @@ function App() {
                   {selectedGroupInfo.groupName}: {selectedGroupInfo.walletCount.toLocaleString()} wallets
                 </span>
               )}
+              {isSharedSession && (
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                  Shared Session • {user.firstName || user.username}
+                </span>
+              )}
             </div>
             <div className="flex items-center space-x-3">
               <button
@@ -582,6 +655,7 @@ function App() {
               walletCount={selectedGroupInfo ? selectedGroupInfo.walletCount : walletCount}
               groupName={selectedGroupInfo ? selectedGroupInfo.groupName : null}
               onRemoveAllWallets={removeAllWallets}
+              isSharedSession={isSharedSession}
             />
           </div>
           <div className="lg:col-span-2">
@@ -597,7 +671,11 @@ function App() {
       </div>
 
       {showAdminPanel && user?.isAdmin && (
-        <AdminPanel user={user} onClose={() => setShowAdminPanel(false)} />
+        <AdminPanel 
+          user={user} 
+          onClose={() => setShowAdminPanel(false)}
+          isSharedSession={isSharedSession}
+        />
       )}
     </div>
   );

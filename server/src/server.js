@@ -60,7 +60,62 @@ app.use((req, res, next) => {
   next();
 });
 
-// Authentication routes
+// Middleware для установки пользователя в общей сессии
+const setUserInSharedSession = async (req, res, next) => {
+  if (req.isSharedSession) {
+    // В общей сессии используем заголовки для определения пользователя
+    const telegramId = req.headers['x-telegram-id'];
+    const userId = req.headers['x-user-id'];
+    
+    if (telegramId) {
+      req.userTelegramId = parseInt(telegramId);
+      // Получаем полные данные пользователя
+      try {
+        const user = await auth.getUserByTelegramId(req.userTelegramId);
+        if (user && user.is_active) {
+          req.user = {
+            id: user.id,
+            telegramId: user.telegram_id,
+            username: user.username,
+            firstName: user.first_name,
+            lastName: user.last_name,
+            isAdmin: user.is_admin,
+            isActive: user.is_active
+          };
+        }
+      } catch (error) {
+        console.warn(`[${new Date().toISOString()}] ⚠️ Failed to get user data for telegram ID ${telegramId}:`, error.message);
+      }
+    } else if (userId && userId !== 'shared-user') {
+      try {
+        const user = await auth.getUserById(userId);
+        if (user && user.is_active) {
+          req.user = {
+            id: user.id,
+            telegramId: user.telegram_id,
+            username: user.username,
+            firstName: user.first_name,
+            lastName: user.last_name,
+            isAdmin: user.is_admin,
+            isActive: user.is_active
+          };
+          req.userTelegramId = user.telegram_id;
+        }
+      } catch (error) {
+        console.warn(`[${new Date().toISOString()}] ⚠️ Failed to get user data for user ID ${userId}:`, error.message);
+      }
+    }
+  }
+  next();
+};
+
+// Применяем middleware ко всем API маршрутам
+app.use('/api', setUserInSharedSession);
+
+// ============================================================================
+// AUTHENTICATION ROUTES - Обновлены для общей сессии
+// ============================================================================
+
 app.post('/api/auth/telegram-simple', async (req, res) => {
   try {
     const { id, first_name, last_name, username } = req.body;
@@ -75,7 +130,7 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
       return res.status(400).json({ error: 'Invalid Telegram ID format' });
     }
     
-    console.log(`[${new Date().toISOString()}] 🔐 Simple auth attempt for Telegram ID: ${id}`);
+    console.log(`[${new Date().toISOString()}] 🔐 Shared session auth attempt for Telegram ID: ${id}`);
     
     // Check if user is whitelisted
     const isWhitelisted = await auth.isUserWhitelisted(id);
@@ -101,15 +156,16 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
       });
     }
     
-    // Create session
-    const session = await auth.createUserSession(user.id);
+    // Возвращаем общую сессию вместо создания индивидуальной
+    const sharedSession = auth.getSharedSessionInfo();
     
-    console.log(`[${new Date().toISOString()}] ✅ User authenticated via simple auth: ${user.username || user.first_name} (${user.telegram_id})`);
+    console.log(`[${new Date().toISOString()}] ✅ User authenticated via shared session: ${user.username || user.first_name} (${user.telegram_id})`);
     
     res.json({
       success: true,
-      sessionToken: session.session_token,
-      expiresAt: session.expires_at,
+      sessionToken: sharedSession.token,
+      expiresAt: sharedSession.expiresAt,
+      isSharedSession: true,
       user: {
         id: user.id,
         telegramId: user.telegram_id,
@@ -121,7 +177,7 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Simple auth error:`, error.message);
+    console.error(`[${new Date().toISOString()}] ❌ Shared session auth error:`, error.message);
     res.status(500).json({ error: 'Authentication failed. Please try again.' });
   }
 });
@@ -153,15 +209,16 @@ app.post('/api/auth/telegram', async (req, res) => {
       });
     }
     
-    // Create session
-    const session = await auth.createUserSession(user.id);
+    // Возвращаем общую сессию
+    const sharedSession = auth.getSharedSessionInfo();
     
-    console.log(`[${new Date().toISOString()}] ✅ User authenticated: ${user.username || user.first_name} (${user.telegram_id})`);
+    console.log(`[${new Date().toISOString()}] ✅ User authenticated via shared session (legacy): ${user.username || user.first_name} (${user.telegram_id})`);
     
     res.json({
       success: true,
-      sessionToken: session.session_token,
-      expiresAt: session.expires_at,
+      sessionToken: sharedSession.token,
+      expiresAt: sharedSession.expiresAt,
+      isSharedSession: true,
       user: {
         id: user.id,
         telegramId: user.telegram_id,
@@ -178,26 +235,100 @@ app.post('/api/auth/telegram', async (req, res) => {
   }
 });
 
-// Validation route with better error handling
-app.get('/api/auth/validate', auth.authRequired, (req, res) => {
+// Validation route (обновлен для общей сессии)
+app.get('/api/auth/validate', async (req, res) => {
   try {
-    res.json({
-      success: true,
-      user: req.user
-    });
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'No valid authorization header' });
+    }
+
+    const sessionToken = authHeader.substring(7);
+    const session = await auth.validateSession(sessionToken);
+    
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+
+    // Если это общая сессия, нужны дополнительные данные пользователя
+    if (session.is_shared) {
+      const telegramId = req.headers['x-telegram-id'];
+      const userId = req.headers['x-user-id'];
+      
+      let userData = null;
+      
+      if (telegramId) {
+        userData = await auth.getUserByTelegramId(parseInt(telegramId));
+      } else if (userId && userId !== 'shared-user') {
+        userData = await auth.getUserById(userId);
+      }
+      
+      if (userData && userData.is_active) {
+        res.json({
+          success: true,
+          isSharedSession: true,
+          user: {
+            id: userData.id,
+            telegramId: userData.telegram_id,
+            username: userData.username,
+            firstName: userData.first_name,
+            lastName: userData.last_name,
+            isAdmin: userData.is_admin,
+            isActive: userData.is_active
+          }
+        });
+      } else {
+        res.json({
+          success: true,
+          isSharedSession: true,
+          user: {
+            id: 'shared-user',
+            telegramId: null,
+            username: 'shared',
+            firstName: 'Shared',
+            lastName: 'User',
+            isAdmin: false,
+            isActive: true
+          }
+        });
+      }
+    } else {
+      // Обычная индивидуальная сессия
+      res.json({
+        success: true,
+        isSharedSession: false,
+        user: {
+          id: session.user_id,
+          telegramId: session.telegram_id,
+          username: session.username,
+          firstName: session.first_name,
+          lastName: session.last_name,
+          isAdmin: session.is_admin,
+          isActive: session.is_active
+        }
+      });
+    }
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Validation error:`, error.message);
     res.status(401).json({ error: 'Session validation failed' });
   }
 });
 
-// Logout with better cleanup
-app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
+// Logout (обновлен для общей сессии)
+app.post('/api/auth/logout', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const sessionToken = authHeader.substring(7);
-      await auth.revokeSession(sessionToken);
+      
+      // Если это общая сессия, просто логируем выход конкретного пользователя
+      if (sessionToken === auth.getSharedSessionInfo().token) {
+        const telegramId = req.headers['x-telegram-id'];
+        console.log(`[${new Date().toISOString()}] 👋 User logged out from shared session: ${telegramId || 'unknown'}`);
+      } else {
+        // Обычная индивидуальная сессия
+        await auth.revokeSession(sessionToken);
+      }
     }
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (error) {
@@ -207,19 +338,59 @@ app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
+// ============================================================================
+// ADMIN ROUTES
+// ============================================================================
+
+// Эндпоинт для получения информации об общей сессии (для администраторов)
+app.get('/api/admin/shared-session', auth.authRequired, auth.adminRequired, (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    const sessionToken = authHeader.substring(7);
-    await auth.revokeSession(sessionToken);
-    res.json({ success: true, message: 'Logged out successfully' });
+    const sessionInfo = auth.getSharedSessionInfo();
+    res.json({
+      success: true,
+      sharedSession: {
+        token: sessionInfo.token.substring(0, 20) + '...', // Не показываем полный токен
+        created: sessionInfo.created,
+        expiresAt: sessionInfo.expiresAt,
+        isShared: sessionInfo.isShared
+      },
+      activeUsers: {
+        // Здесь можно добавить логику для подсчета активных пользователей
+        // Например, через Redis или другой механизм отслеживания
+      }
+    });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Logout error:`, error.message);
-    res.status(500).json({ error: 'Failed to logout' });
+    console.error(`[${new Date().toISOString()}] ❌ Error getting shared session info:`, error.message);
+    res.status(500).json({ error: 'Failed to get shared session info' });
   }
 });
 
-// Admin routes
+// Эндпоинт для регенерации общей сессии (только для суперадминов)
+app.post('/api/admin/regenerate-shared-session', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    // Дополнительная проверка - только суперадмин может регенерировать
+    const telegramId = req.headers['x-telegram-id'] || req.user.telegramId;
+    if (telegramId !== 789676557) { // ID суперадмина
+      return res.status(403).json({ error: 'Only super admin can regenerate shared session' });
+    }
+    
+    const newSession = auth.regenerateSharedSession();
+    console.log(`[${new Date().toISOString()}] 🔄 Shared session regenerated by admin ${telegramId}`);
+    
+    res.json({
+      success: true,
+      message: 'Shared session regenerated successfully',
+      newSession: {
+        token: newSession.token,
+        expiresAt: newSession.expiresAt
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error regenerating shared session:`, error.message);
+    res.status(500).json({ error: 'Failed to regenerate shared session' });
+  }
+});
+
 app.get('/api/admin/whitelist', auth.authRequired, auth.adminRequired, async (req, res) => {
   try {
     const whitelist = await auth.getWhitelist();
@@ -347,7 +518,10 @@ app.get('/api/admin/stats', auth.authRequired, auth.adminRequired, async (req, r
   }
 });
 
-// Protected routes - all existing routes now require authentication
+// ============================================================================
+// SSE STREAM - Обновлен для общей сессии
+// ============================================================================
+
 app.get('/api/transactions/stream', async (req, res) => {
   try {
     // Get token from query parameter or Authorization header
@@ -364,9 +538,43 @@ app.get('/api/transactions/stream', async (req, res) => {
     }
 
     const groupId = req.query.groupId || null;
-    const userId = session.user_id;
-    
-    console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
+    let userId = null;
+    let telegramId = null;
+
+    // Определяем пользователя в зависимости от типа сессии
+    if (session.is_shared) {
+      // Для общей сессии получаем данные пользователя из параметров запроса
+      telegramId = req.query.telegramId ? parseInt(req.query.telegramId) : null;
+      const userIdParam = req.query.userId;
+      
+      if (telegramId) {
+        const user = await auth.getUserByTelegramId(telegramId);
+        if (user && user.is_active) {
+          userId = user.id;
+          console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated via shared session for user ${user.username || user.first_name} (${telegramId})`);
+        } else {
+          return res.status(401).json({ error: 'User not found or inactive in shared session' });
+        }
+      } else if (userIdParam && userIdParam !== 'shared-user') {
+        const user = await auth.getUserById(userIdParam);
+        if (user && user.is_active) {
+          userId = user.id;
+          telegramId = user.telegram_id;
+          console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated via shared session for user ${user.username || user.first_name} (ID: ${userId})`);
+        } else {
+          return res.status(401).json({ error: 'User not found or inactive in shared session' });
+        }
+      } else {
+        // Общий пользователь без конкретной идентификации
+        console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated via shared session (anonymous user)`);
+        userId = null; // Будем показывать транзакции всех пользователей
+      }
+    } else {
+      // Обычная индивидуальная сессия
+      userId = session.user_id;
+      telegramId = session.telegram_id;
+      console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated for individual session user ${userId}`);
+    }
     
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -383,7 +591,9 @@ app.get('/api/transactions/stream', async (req, res) => {
         res.status(500).end();
         return;
       }
-      console.log(`[${new Date().toISOString()}] ✅ New SSE client connected for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
+      
+      const sessionType = session.is_shared ? 'shared' : 'individual';
+      console.log(`[${new Date().toISOString()}] ✅ New SSE client connected (${sessionType}) for user ${userId || 'anonymous'}${groupId ? `, group ${groupId}` : ''}`);
       sseClients.add(res);
     });
 
@@ -392,7 +602,6 @@ app.get('/api/transactions/stream', async (req, res) => {
         try {
           const transaction = JSON.parse(message);
           
-          // ВАЖНО: Проверяем принадлежность транзакции пользователю
           // Получаем информацию о кошельке из базы данных
           const wallet = await db.getWalletByAddress(transaction.walletAddress);
           
@@ -400,10 +609,29 @@ app.get('/api/transactions/stream', async (req, res) => {
             // console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${transaction.walletAddress} not found, skipping transaction`);
             return;
           }
-          
-          // Фильтруем по пользователю
-          if (wallet.user_id !== userId) {
-            // console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${wallet.user_id} != ${userId}), skipping`);
+
+          let shouldSendTransaction = false;
+
+          if (session.is_shared) {
+            if (userId) {
+              // Конкретный пользователь в общей сессии
+              if (wallet.user_id === userId) {
+                shouldSendTransaction = true;
+              }
+            } else {
+              // Анонимный пользователь в общей сессии - показываем все транзакции
+              // Или можно ограничить по определенной логике
+              shouldSendTransaction = true;
+            }
+          } else {
+            // Индивидуальная сессия - только транзакции пользователя
+            if (wallet.user_id === userId) {
+              shouldSendTransaction = true;
+            }
+          }
+
+          if (!shouldSendTransaction) {
+            // console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} doesn't match user filter, skipping`);
             return;
           }
           
@@ -413,7 +641,7 @@ app.get('/api/transactions/stream', async (req, res) => {
             return;
           }
           
-          console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}: ${transaction.signature}`);
+          console.log(`[${new Date().toISOString()}] 📡 Sending SSE message (${session.is_shared ? 'shared' : 'individual'}) for user ${userId || 'anonymous'}: ${transaction.signature}`);
           res.write(`data: ${message}\n\n`);
         } catch (error) {
           console.error(`[${new Date().toISOString()}] ❌ Error filtering SSE message:`, error.message);
@@ -422,7 +650,8 @@ app.get('/api/transactions/stream', async (req, res) => {
     });
 
     req.on('close', () => {
-      console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected for user ${userId}`);
+      const sessionType = session.is_shared ? 'shared' : 'individual';
+      console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected (${sessionType}) for user ${userId || 'anonymous'}`);
       subscriber.unsubscribe();
       subscriber.quit();
       sseClients.delete(res);
@@ -443,12 +672,27 @@ app.get('/api/transactions/stream', async (req, res) => {
   }
 });
 
+// ============================================================================
+// PROTECTED API ROUTES - обновлены для общей сессии
+// ============================================================================
+
 app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     
-    // console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count request for user ${userId}, group ${groupId}`);
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
+    
+    console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count request for user ${userId}, group ${groupId}, shared: ${req.isSharedSession}`);
     
     // Используем оптимизированный метод из базы данных
     const countData = await db.getWalletCountFast(userId, groupId);
@@ -469,7 +713,18 @@ app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
 app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
   try {
     const { addresses } = req.body;
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
 
     if (!addresses || !Array.isArray(addresses)) {
       return res.status(400).json({ error: 'Addresses array is required' });
@@ -479,7 +734,7 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 100,000 addresses allowed for validation' });
     }
 
-    // console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId} (shared: ${req.isSharedSession})`);
 
     const validation = await db.validateWalletsBatch(addresses, userId);
     
@@ -499,15 +754,30 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
 app.get('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
-    const includeStats = req.query.includeStats === 'true'; // Опциональная статистика
-    const limit = parseInt(req.query.limit) || 50; // Лимит по умолчанию
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID not found' });
+    }
+
+    const includeStats = req.query.includeStats === 'true';
+    const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
     
-    // console.log(`[${new Date().toISOString()}] 📋 Wallets request: user ${userId}, group ${groupId}, stats: ${includeStats}, limit: ${limit}`);
+    console.log(`[${new Date().toISOString()}] 📋 Wallets request: user ${userId}, group ${groupId}, shared: ${req.isSharedSession}`);
     
     if (includeStats) {
-      // Старая логика со статистикой (только если явно запрошена)
       const wallets = await db.getActiveWallets(groupId, userId);
       const walletsWithStats = await Promise.all(
         wallets.slice(offset, offset + limit).map(async (wallet) => {
@@ -528,7 +798,6 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
       );
       res.json(walletsWithStats);
     } else {
-      // Быстрая загрузка без статистики (только базовая информация)
       let query = `
         SELECT w.id, w.address, w.name, w.group_id, w.created_at,
                g.name as group_name,
@@ -541,11 +810,11 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
       let paramIndex = 2;
       
       if (groupId) {
-        query += ` AND w.group_id = $${paramIndex++}`;
+        query += ` AND w.group_id = ${paramIndex++}`;
         params.push(groupId);
       }
       
-      query += ` ORDER BY w.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+      query += ` ORDER BY w.created_at DESC LIMIT ${paramIndex++} OFFSET ${paramIndex}`;
       params.push(limit, offset);
       
       const result = await db.pool.query(query, params);
@@ -557,7 +826,6 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
         group_id: row.group_id,
         group_name: row.group_name,
         created_at: row.created_at,
-        // Базовая статистика заглушка
         stats: {
           totalTransactions: 0,
           totalSpentSOL: "0.000000",
@@ -583,18 +851,30 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
 app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
   try {
     const address = req.params.address.trim();
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
 
     if (!address || address.length < 32 || address.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
-  }
+    }
+    
     // Check if wallet belongs to user
     const wallet = await db.getWalletByAddress(address);
     if (!wallet || wallet.user_id !== userId) {
       return res.status(404).json({ error: 'Wallet not found or access denied' });
     }
 
-    await solanaWebSocketService.removeWallet(address);
+    await solanaWebSocketService.removeWallet(address, userId);
     res.json({
       success: true,
       message: 'Wallet and all associated data removed successfully',
@@ -612,9 +892,20 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
 app.delete('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     
-    // console.log(`[${new Date().toISOString()}] 🗑️ Ultra-fast removal request: user ${userId}, group ${groupId}`);
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
+    
+    console.log(`[${new Date().toISOString()}] 🗑️ Ultra-fast removal request: user ${userId}, group ${groupId}, shared: ${req.isSharedSession}`);
     
     // Быстрое удаление через WebSocket сервис (он обновит подписки)
     await solanaWebSocketService.removeAllWallets(groupId, userId);
@@ -641,11 +932,22 @@ app.delete('/api/wallets', auth.authRequired, async (req, res) => {
 app.get('/api/init', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     const hours = parseInt(req.query.hours) || 24;
     const transactionType = req.query.type;
     
-    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-FAST app initialization for user ${userId}`);
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
+    
+    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-FAST app initialization for user ${userId} (shared: ${req.isSharedSession})`);
     const startTime = Date.now();
     
     // Параллельная загрузка всех необходимых данных
@@ -659,7 +961,7 @@ app.get('/api/init', auth.authRequired, async (req, res) => {
     const websocketStatus = solanaWebSocketService.getStatus();
     
     const duration = Date.now() - startTime;
-    // console.log(`[${new Date().toISOString()}] ⚡ ULTRA-FAST initialization completed in ${duration}ms`);
+    console.log(`[${new Date().toISOString()}] ⚡ ULTRA-FAST initialization completed in ${duration}ms (shared: ${req.isSharedSession})`);
     
     res.json({
       success: true,
@@ -704,14 +1006,25 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
 
-    // console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions request for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions request for user ${userId}, group ${groupId}, hours ${hours}, type ${type}, shared: ${req.isSharedSession}`);
 
     // Используем оптимизированный метод транзакций
     const transactions = await db.getRecentTransactionsOptimized(hours, limit, type, groupId, userId);
     
-    // console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} optimized transactions for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} optimized transactions for user ${userId}`);
     res.json(transactions);
     
   } catch (error) {
@@ -723,9 +1036,20 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
 app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     
-    // console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
+    
+    console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}, shared: ${req.isSharedSession}`);
     
     // Параллельное получение статуса WebSocket и статистики базы данных
     const [websocketStatus, dbStats] = await Promise.all([
@@ -756,7 +1080,18 @@ app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
 app.post('/api/monitoring/toggle', auth.authRequired, async (req, res) => {
   try {
     const { action, groupId } = req.body;
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
 
     if (action === 'start') {
       await solanaWebSocketService.start(groupId, userId);
@@ -780,7 +1115,7 @@ app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
   // Если chunk size больше 500, разбиваем на меньшие части
   const { wallets } = req.body;
   if (wallets && wallets.length > 500) {
-    // console.log(`[${new Date().toISOString()}] 🔄 Large non-optimized request (${wallets.length} wallets), redirecting to optimized endpoint`);
+    console.log(`[${new Date().toISOString()}] 🔄 Large non-optimized request (${wallets.length} wallets), redirecting to optimized endpoint`);
     req.body.optimized = true;
   }
   
@@ -798,9 +1133,20 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   
   try {
     const { wallets, groupId, optimized } = req.body;
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
 
-    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId} (shared: ${req.isSharedSession})`);
 
     if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
       return res.status(400).json({ 
@@ -827,7 +1173,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     };
 
     // 1. БЫСТРАЯ ВАЛИДАЦИЯ (без обращения к БД)
-    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
+    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
     const validationStart = Date.now();
 
     const validWallets = [];
@@ -879,7 +1225,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     }
 
     const validationTime = Date.now() - validationStart;
-    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
+    console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
 
     if (validWallets.length === 0) {
       return res.json({
@@ -891,7 +1237,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     }
 
     // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT С СЧЕТЧИКАМИ
-    // console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
+    console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
     const dbStart = Date.now();
 
     try {
@@ -899,7 +1245,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       const dbResult = await db.addWalletsBatchOptimizedWithCount(validWallets);
       
       const dbTime = Date.now() - dbStart;
-      // console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
+      console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
 
       results.successful = dbResult.insertedWallets.length;
       results.failed += (validWallets.length - dbResult.insertedWallets.length); // дубликаты в БД
@@ -919,7 +1265,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
     // 3. ПАРАЛЛЕЛЬНАЯ WEBSOCKET ПОДПИСКА (неблокирующая)
     if (results.successful > 0) {
-      // console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
+      console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
       
       // Запускаем подписку асинхронно, не ждем завершения
       setImmediate(async () => {
@@ -949,7 +1295,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const duration = Date.now() - startTime;
     const walletsPerSecond = Math.round((results.successful / duration) * 1000);
 
-    // console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
+    console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec, shared: ${req.isSharedSession})`);
 
     res.json({
       success: results.successful > 0,
@@ -1004,7 +1350,7 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
     }
 
-    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
+    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens (shared: ${req.isSharedSession})`);
     const startTime = Date.now();
     
     const prices = await priceService.getTokenPrices(mints);
@@ -1043,7 +1389,18 @@ app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) =
 
 app.get('/api/groups', auth.authRequired, async (req, res) => {
   try {
-    const userId = req.user.id;
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
+    
     const groups = await db.getGroups(userId);
     res.json(groups);
   } catch (error) {
@@ -1055,7 +1412,18 @@ app.get('/api/groups', auth.authRequired, async (req, res) => {
 app.post('/api/groups', auth.authRequired, async (req, res) => {
   try {
     const { name } = req.body;
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
     
     if (!name || name.trim().length === 0) {
       return res.status(400).json({ error: 'Group name is required' });
@@ -1080,7 +1448,18 @@ app.post('/api/groups', auth.authRequired, async (req, res) => {
 app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
   try {
     const { groupId } = req.body;
-    const userId = req.user.id;
+    
+    // Получаем userId в зависимости от типа сессии
+    let userId;
+    if (req.isSharedSession) {
+      if (req.user && req.user.id && req.user.id !== 'shared-user') {
+        userId = req.user.id;
+      } else {
+        return res.status(400).json({ error: 'User identification required in shared session' });
+      }
+    } else {
+      userId = req.user.id;
+    }
     
     // Verify group belongs to user if groupId is provided
     if (groupId) {
@@ -1101,6 +1480,10 @@ app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
     res.status(500).json({ error: 'Failed to switch group' });
   }
 });
+
+// ============================================================================
+// ERROR HANDLING MIDDLEWARE
+// ============================================================================
 
 // Clean expired sessions periodically
 setInterval(async () => {
@@ -1153,6 +1536,10 @@ app.use((error, req, res, next) => {
   });
 });
 
+// ============================================================================
+// GRACEFUL SHUTDOWN HANDLERS
+// ============================================================================
+
 process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
@@ -1170,6 +1557,10 @@ process.on('SIGTERM', async () => {
   sseClients.forEach((client) => client.end());
   process.exit(0);
 });
+
+// ============================================================================
+// WEBSOCKET SERVICE STARTUP
+// ============================================================================
 
 const startWebSocketService = async () => {
   let retries = 0;
@@ -1196,8 +1587,24 @@ const startWebSocketService = async () => {
   console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
 };
 
+// ============================================================================
+// SERVER STARTUP
+// ============================================================================
+
 setTimeout(startWebSocketService, 2000);
+
+// Log shared session info on startup
+setTimeout(() => {
+  const sessionInfo = auth.getSharedSessionInfo();
+  console.log(`[${new Date().toISOString()}] 🔑 Shared Session Active:`);
+  console.log(`  - Token: ${sessionInfo.token.substring(0, 20)}...`);
+  console.log(`  - Created: ${new Date(sessionInfo.created).toISOString()}`);
+  console.log(`  - Expires: ${new Date(sessionInfo.expiresAt).toISOString()}`);
+  console.log(`  - All authenticated users will use this token`);
+}, 1000);
 
 https.createServer(sslOptions, app).listen(port, '0.0.0.0', () => {
     console.log(`[${new Date().toISOString()}] 🚀 Server running on https://0.0.0.0:${port}`);
+    console.log(`[${new Date().toISOString()}] 🔒 Shared Session Authentication: ENABLED`);
+    console.log(`[${new Date().toISOString()}] 👥 All users will share the same session token`);
 });
