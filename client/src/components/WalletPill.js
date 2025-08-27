@@ -77,34 +77,37 @@ function WalletPill({ wallet, tokenMint }) {
 
     const getDetailedMetrics = () => {
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) return null;
-
+    
         const totalTokensBought = wallet.tokensBought || 0;
         const totalTokensSold = wallet.tokensSold || 0;
         const totalSpentSOL = wallet.solSpent || 0;
         const totalReceivedSOL = wallet.solReceived || 0;
-        const positionSize = currentHoldings * tokenPrice.price; // Placeholder
-        const investmentRatio = totalSpentSOL > 0 ? (positionSize / totalSpentSOL) : 0; // Placeholder
-
-        if (totalTokensBought === 0) return null;
-
+    
+        // Ensure wallet is defined
+        if (!wallet || totalTokensBought === 0) return null;
+    
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         const soldTokens = Math.min(totalTokensSold, totalTokensBought);
-        const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-
+        const avgBuyPriceSOL = totalTokensBought > 0 ? totalSpentSOL / totalTokensBought : 0;
+    
+        // Placeholder values (verify these calculations)
+        const positionSize = currentHoldings * (tokenPrice.price || 0);
+        const investmentRatio = totalSpentSOL > 0 ? (positionSize / totalSpentSOL) : 0;
+    
         let realizedPnLSOL = 0;
         let unrealizedPnLSOL = 0;
-
+    
         if (soldTokens > 0) {
             const soldTokensCostBasisSOL = soldTokens * avgBuyPriceSOL;
             realizedPnLSOL = totalReceivedSOL - soldTokensCostBasisSOL;
         }
-
+    
         if (currentHoldings > 0) {
             const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
             const currentMarketValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
             unrealizedPnLSOL = currentMarketValueSOL - remainingCostBasisSOL;
         }
-
+    
         return {
             totalTokensBought,
             totalTokensSold,
@@ -119,8 +122,8 @@ function WalletPill({ wallet, tokenMint }) {
             realizedPnLUSD: realizedPnLSOL * solPrice,
             unrealizedPnLUSD: unrealizedPnLSOL * solPrice,
             totalPnLUSD: (realizedPnLSOL + unrealizedPnLSOL) * solPrice,
-            soldPercentage: (soldTokens / totalTokensBought) * 100,
-            holdingPercentage: (currentHoldings / totalTokensBought) * 100,
+            soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
+            holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0,
             totalROI: totalSpentSOL > 0 ? ((realizedPnLSOL + unrealizedPnLSOL) / totalSpentSOL) * 100 : 0,
             positionSizeUSD: positionSize,
             investmentUSD: investmentRatio
