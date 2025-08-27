@@ -1,5 +1,5 @@
 import TokenCard from './TokenCard';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 function TokenTracker({ groupId, transactions, timeframe }) {
 const [items, setItems] = useState([]);
