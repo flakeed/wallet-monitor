@@ -952,9 +952,81 @@ app.get('/api/solana/price', auth.authRequired, async (req, res) => {
   }
 });
 
-app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
+app.post('/api/tokens/info', auth.authRequired, async (req, res) => {
   try {
     const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 50) {
+      return res.status(400).json({ error: 'Maximum 50 mints allowed per request' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Token info request for ${mints.length} tokens`);
+    const startTime = Date.now();
+    
+    const tokenInfos = await priceService.getTokenPrices(mints, true); // includeFullInfo = true
+    const duration = Date.now() - startTime;
+    
+    const result = {};
+    tokenInfos.forEach((data, mint) => {
+      result[mint] = data;
+    });
+    
+    console.log(`[${new Date().toISOString()}] ✅ Token info request completed in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      tokens: result,
+      count: tokenInfos.size,
+      duration
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in token info endpoint:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch token information' });
+  }
+});
+
+// NEW: Single token info endpoint
+app.get('/api/tokens/info/:mint', auth.authRequired, async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Valid token mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Single token info request for ${mint}`);
+    const startTime = Date.now();
+    
+    const tokenInfo = await priceService.getTokenInfo(mint);
+    const duration = Date.now() - startTime;
+    
+    if (!tokenInfo) {
+      return res.status(404).json({ 
+        error: 'Token information not found',
+        mint: mint
+      });
+    }
+    
+    console.log(`[${new Date().toISOString()}] ✅ Single token info completed in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      token: tokenInfo,
+      duration
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in single token info endpoint:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch token information' });
+  }
+});
+
+app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
+  try {
+    const { mints, includeFullInfo = false } = req.body;
     
     if (!mints || !Array.isArray(mints)) {
       return res.status(400).json({ error: 'Mints array is required' });
@@ -964,10 +1036,10 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
     }
 
-    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
+    console.log(`[${new Date().toISOString()}] 📊 Batch ${includeFullInfo ? 'info' : 'price'} request for ${mints.length} tokens`);
     const startTime = Date.now();
     
-    const prices = await priceService.getTokenPrices(mints);
+    const prices = await priceService.getTokenPrices(mints, includeFullInfo);
     const duration = Date.now() - startTime;
     
     const result = {};
@@ -975,11 +1047,11 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
       result[mint] = data;
     });
     
-    console.log(`[${new Date().toISOString()}] ✅ Batch price request completed in ${duration}ms`);
+    console.log(`[${new Date().toISOString()}] ✅ Batch ${includeFullInfo ? 'info' : 'price'} request completed in ${duration}ms`);
     
     res.json({
       success: true,
-      prices: result,
+      [includeFullInfo ? 'tokens' : 'prices']: result,
       count: prices.size,
       duration
     });

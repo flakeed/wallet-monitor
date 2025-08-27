@@ -2,9 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 // Global cache shared across all hook instances
 const globalPriceCache = new Map();
+const globalTokenInfoCache = new Map();
 const pendingRequests = new Map();
 
-const CACHE_TTL = 30000; // 30 seconds
+const CACHE_TTL = 30000; // 30 seconds for prices
+const INFO_CACHE_TTL = 300000; // 5 minutes for full token info
 const BATCH_DELAY = 100; // 100ms delay for batching requests
 const MAX_BATCH_SIZE = 50;
 
@@ -20,6 +22,10 @@ const getAuthHeaders = () => {
 // Batch queue for token price requests
 let batchQueue = new Set();
 let batchTimer = null;
+
+// Batch queue for token info requests (separate from price requests)
+let infoBatchQueue = new Set();
+let infoBatchTimer = null;
 
 const processBatch = async () => {
   if (batchQueue.size === 0) return;
@@ -74,6 +80,59 @@ const processBatch = async () => {
   }
 };
 
+const processInfoBatch = async () => {
+  if (infoBatchQueue.size === 0) return;
+  
+  const mints = Array.from(infoBatchQueue);
+  infoBatchQueue.clear();
+  
+  console.log(`[usePrices] Processing info batch request for ${mints.length} tokens`);
+  
+  try {
+    const response = await fetch('/api/tokens/info', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ mints })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.success && data.tokens) {
+      const now = Date.now();
+      
+      // Cache all results
+      Object.entries(data.tokens).forEach(([mint, tokenInfo]) => {
+        globalTokenInfoCache.set(`token-info-${mint}`, {
+          data: tokenInfo,
+          timestamp: now
+        });
+        
+        // Resolve pending requests
+        const pending = pendingRequests.get(`info-${mint}`);
+        if (pending) {
+          pending.forEach(({ resolve }) => resolve(tokenInfo));
+          pendingRequests.delete(`info-${mint}`);
+        }
+      });
+    }
+  } catch (error) {
+    console.error('[usePrices] Info batch request failed:', error);
+    
+    // Reject all pending requests for this batch
+    mints.forEach(mint => {
+      const pending = pendingRequests.get(`info-${mint}`);
+      if (pending) {
+        pending.forEach(({ reject }) => reject(error));
+        pendingRequests.delete(`info-${mint}`);
+      }
+    });
+  }
+};
+
 const queueTokenPrice = (mint) => {
   return new Promise((resolve, reject) => {
     // Add to pending requests
@@ -91,6 +150,27 @@ const queueTokenPrice = (mint) => {
     }
     
     batchTimer = setTimeout(processBatch, BATCH_DELAY);
+  });
+};
+
+const queueTokenInfo = (mint) => {
+  return new Promise((resolve, reject) => {
+    // Add to pending requests
+    const key = `info-${mint}`;
+    if (!pendingRequests.has(key)) {
+      pendingRequests.set(key, []);
+    }
+    pendingRequests.get(key).push({ resolve, reject });
+    
+    // Add to batch queue
+    infoBatchQueue.add(mint);
+    
+    // Set batch timer
+    if (infoBatchTimer) {
+      clearTimeout(infoBatchTimer);
+    }
+    
+    infoBatchTimer = setTimeout(processInfoBatch, BATCH_DELAY);
   });
 };
 
@@ -216,6 +296,60 @@ export const useTokenPrice = (tokenMint) => {
   return { priceData, loading, error, refetch: fetchTokenPrice };
 };
 
+// NEW: Hook for getting full token information including market cap and age
+export const useTokenInfo = (tokenMint) => {
+  const [tokenInfo, setTokenInfo] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const isMountedRef = useRef(true);
+
+  const fetchTokenInfo = useCallback(async () => {
+    if (!tokenMint) return null;
+
+    // Check cache first
+    const cached = globalTokenInfoCache.get(`token-info-${tokenMint}`);
+    if (cached && (Date.now() - cached.timestamp) < INFO_CACHE_TTL) {
+      setTokenInfo(cached.data);
+      return cached.data;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await queueTokenInfo(tokenMint);
+      
+      if (isMountedRef.current) {
+        setTokenInfo(result);
+      }
+      return result;
+    } catch (err) {
+      console.error(`[useTokenInfo] Error for ${tokenMint}:`, err);
+      if (isMountedRef.current) {
+        setError(err.message);
+        setTokenInfo(null);
+      }
+      return null;
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [tokenMint]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    if (tokenMint) {
+      fetchTokenInfo();
+    }
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [tokenMint, fetchTokenInfo]);
+
+  return { tokenInfo, loading, error, refetch: fetchTokenInfo };
+};
+
 // Hook for multiple token prices
 export const useTokenPrices = (tokenMints) => {
   const [prices, setPrices] = useState(new Map());
@@ -297,5 +431,25 @@ export const usePrices = (tokenMint = null) => {
     loading: solLoading || tokenLoading,
     error: solError || tokenError,
     ready: solPrice !== null && (!tokenMint || tokenPrice !== undefined)
+  };
+};
+
+// Enhanced hook that combines price and full token info
+export const useTokenPriceAndInfo = (tokenMint = null) => {
+  const { solPrice, loading: solLoading, error: solError } = useSolPrice();
+  const { tokenInfo, loading: tokenInfoLoading, error: tokenInfoError } = useTokenInfo(tokenMint);
+
+  return {
+    solPrice,
+    tokenInfo,
+    tokenPrice: tokenInfo ? {
+      price: tokenInfo.price,
+      change24h: tokenInfo.priceChange24h,
+      volume24h: tokenInfo.volume24h,
+      liquidity: tokenInfo.liquidity
+    } : null,
+    loading: solLoading || tokenInfoLoading,
+    error: solError || tokenInfoError,
+    ready: solPrice !== null && (!tokenMint || tokenInfo !== undefined)
   };
 };

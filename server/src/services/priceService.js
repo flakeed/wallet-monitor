@@ -150,8 +150,92 @@ class PriceService {
         }
     }
 
-    // Optimized batch token price fetching
-    async getTokenPrices(tokenMints) {
+    // NEW: Get comprehensive token information including market cap and age
+    async getTokenInfo(tokenMint) {
+        if (!tokenMint) return null;
+
+        try {
+            // Check cache first
+            const cacheKey = `token_info:${tokenMint}`;
+            const cached = await this.redis.get(cacheKey);
+            if (cached) {
+                const parsedCache = JSON.parse(cached);
+                if (Date.now() - parsedCache.timestamp < 300000) { // 5 minutes cache
+                    return parsedCache.data;
+                }
+            }
+
+            // Fetch from DexScreener API
+            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`, {
+                timeout: 8000,
+                headers: { 'Accept': 'application/json' }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            let tokenInfo = null;
+            if (data.pairs && data.pairs.length > 0) {
+                // Get the best pair by volume
+                const bestPair = data.pairs.reduce((prev, current) =>
+                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
+                );
+
+                // Calculate token age
+                const pairCreatedAt = bestPair.pairCreatedAt;
+                let ageInfo = null;
+                if (pairCreatedAt) {
+                    const createdDate = new Date(pairCreatedAt);
+                    const now = new Date();
+                    const diffMs = now - createdDate;
+                    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+                    const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                    
+                    ageInfo = {
+                        createdAt: pairCreatedAt,
+                        totalDays: diffDays,
+                        totalHours: Math.floor(diffMs / (1000 * 60 * 60)),
+                        displayText: diffDays > 0 ? `${diffDays}d ${diffHours}h` : `${diffHours}h`,
+                        isNew: diffDays < 1 // Less than 1 day old
+                    };
+                }
+
+                tokenInfo = {
+                    mint: tokenMint,
+                    symbol: bestPair.baseToken?.symbol || 'Unknown',
+                    name: bestPair.baseToken?.name || 'Unknown Token',
+                    price: parseFloat(bestPair.priceUsd || 0),
+                    marketCap: bestPair.marketCap || bestPair.fdv || null,
+                    volume24h: parseFloat(bestPair.volume?.h24 || 0),
+                    volume24hUsd: parseFloat(bestPair.volume?.h24 || 0),
+                    priceChange24h: parseFloat(bestPair.priceChange?.h24 || 0),
+                    liquidity: parseFloat(bestPair.liquidity?.usd || 0),
+                    age: ageInfo,
+                    pairAddress: bestPair.pairAddress,
+                    dexId: bestPair.dexId,
+                    url: bestPair.url
+                };
+            }
+
+            // Cache the result
+            await this.redis.setex(cacheKey, 300, JSON.stringify({
+                data: tokenInfo,
+                timestamp: Date.now()
+            }));
+
+            return tokenInfo;
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching token info for ${tokenMint}:`, error.message);
+            return null;
+        }
+    }
+
+    // Enhanced version of getTokenPrices that includes full token info
+    async getTokenPrices(tokenMints, includeFullInfo = false) {
         if (!tokenMints || tokenMints.length === 0) {
             return new Map();
         }
@@ -162,55 +246,72 @@ class PriceService {
 
         // Check cache first
         for (const mint of tokenMints) {
-            const cached = this.tokenPriceCache.get(mint);
-            if (cached && (now - cached.timestamp) < 60000) { // 1 minute cache
-                results.set(mint, cached.data);
-            } else {
-                uncachedMints.push(mint);
+            const cacheKey = includeFullInfo ? `token_info:${mint}` : `token_price:${mint}`;
+            const cached = includeFullInfo ? 
+                await this.redis.get(cacheKey) : 
+                this.tokenPriceCache.get(mint);
+
+            if (cached) {
+                if (includeFullInfo) {
+                    const parsedCache = JSON.parse(cached);
+                    if (now - parsedCache.timestamp < 300000) { // 5 minutes cache
+                        results.set(mint, parsedCache.data);
+                        continue;
+                    }
+                } else if (cached && (now - cached.timestamp) < 60000) { // 1 minute cache
+                    results.set(mint, cached.data);
+                    continue;
+                }
             }
+            uncachedMints.push(mint);
         }
 
-        // Fetch uncached prices in batches
+        // Fetch uncached prices/info in batches
         if (uncachedMints.length > 0) {
-            const BATCH_SIZE = 10;
+            const BATCH_SIZE = includeFullInfo ? 5 : 10; // Smaller batches for full info
             for (let i = 0; i < uncachedMints.length; i += BATCH_SIZE) {
                 const batch = uncachedMints.slice(i, i + BATCH_SIZE);
                 
                 const batchPromises = batch.map(async (mint) => {
                     try {
-                        const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
-                            timeout: 5000,
-                            headers: { 'Accept': 'application/json' }
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}`);
-                        }
-                        
-                        const data = await response.json();
-                        
-                        let priceData = null;
-                        if (data.pairs && data.pairs.length > 0) {
-                            const bestPair = data.pairs.reduce((prev, current) =>
-                                (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                            );
-                            priceData = {
-                                price: parseFloat(bestPair.priceUsd || 0),
-                                change24h: parseFloat(bestPair.priceChange?.h24 || 0),
-                                volume24h: parseFloat(bestPair.volume?.h24 || 0),
-                                liquidity: parseFloat(bestPair.liquidity?.usd || 0)
-                            };
-                        }
+                        if (includeFullInfo) {
+                            const tokenInfo = await this.getTokenInfo(mint);
+                            return { mint, data: tokenInfo };
+                        } else {
+                            const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+                                timeout: 5000,
+                                headers: { 'Accept': 'application/json' }
+                            });
+                            
+                            if (!response.ok) {
+                                throw new Error(`HTTP ${response.status}`);
+                            }
+                            
+                            const data = await response.json();
+                            
+                            let priceData = null;
+                            if (data.pairs && data.pairs.length > 0) {
+                                const bestPair = data.pairs.reduce((prev, current) =>
+                                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
+                                );
+                                priceData = {
+                                    price: parseFloat(bestPair.priceUsd || 0),
+                                    change24h: parseFloat(bestPair.priceChange?.h24 || 0),
+                                    volume24h: parseFloat(bestPair.volume?.h24 || 0),
+                                    liquidity: parseFloat(bestPair.liquidity?.usd || 0)
+                                };
+                            }
 
-                        // Cache the result
-                        this.tokenPriceCache.set(mint, {
-                            data: priceData,
-                            timestamp: now
-                        });
+                            // Cache the result
+                            this.tokenPriceCache.set(mint, {
+                                data: priceData,
+                                timestamp: now
+                            });
 
-                        return { mint, data: priceData };
+                            return { mint, data: priceData };
+                        }
                     } catch (error) {
-                        console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${mint}:`, error.message);
+                        console.error(`[${new Date().toISOString()}] ❌ Error fetching ${includeFullInfo ? 'info' : 'price'} for ${mint}:`, error.message);
                         return { mint, data: null };
                     }
                 });
@@ -222,7 +323,7 @@ class PriceService {
 
                 // Small delay between batches to avoid rate limiting
                 if (i + BATCH_SIZE < uncachedMints.length) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await new Promise(resolve => setTimeout(resolve, includeFullInfo ? 200 : 100));
                 }
             }
         }

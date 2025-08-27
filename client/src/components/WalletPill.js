@@ -1,9 +1,9 @@
-import { usePrices } from '../hooks/usePrices';
+import { useTokenPriceAndInfo } from '../hooks/usePrices';
 import { useState, useEffect, useMemo } from 'react';
 
 function WalletPill({ wallet, tokenMint }) {
     const [totalPnL, setTotalPnL] = useState(null);
-    const { solPrice, tokenPrice, loading, error, ready } = usePrices(tokenMint);
+    const { solPrice, tokenInfo, tokenPrice, loading, error, ready } = useTokenPriceAndInfo(tokenMint);
     
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
 
@@ -120,11 +120,20 @@ function WalletPill({ wallet, tokenMint }) {
             totalPnLUSD: (realizedPnLSOL + unrealizedPnLSOL) * solPrice,
             soldPercentage: (soldTokens / totalTokensBought) * 100,
             holdingPercentage: (currentHoldings / totalTokensBought) * 100,
-            totalROI: totalSpentSOL > 0 ? ((realizedPnLSOL + unrealizedPnLSOL) / totalSpentSOL) * 100 : 0
+            totalROI: totalSpentSOL > 0 ? ((realizedPnLSOL + unrealizedPnLSOL) / totalSpentSOL) * 100 : 0,
+            currentHoldingValueUSD: currentHoldings * tokenPrice.price
         };
     };
 
     const metrics = getDetailedMetrics();
+
+    // Format numbers for display
+    const formatNumber = (num, decimals = 2) => {
+        if (num === null || num === undefined) return '0';
+        if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
+        if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
+        return num.toFixed(decimals);
+    };
 
     return (
         <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
@@ -164,12 +173,48 @@ function WalletPill({ wallet, tokenMint }) {
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
                     {error && <span className="text-red-500" title={error}>⚠</span>}
                 </div>
-                {/* Дополнительная информация при наличии детальных метрик */}
+                {/* Enhanced token info display */}
                 {metrics && (
-                    <div className="text-[9px] text-gray-400 mt-1" title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%)`}>
-                        Holdings: {metrics.currentHoldings > 1000 ? (metrics.currentHoldings/1000).toFixed(1) + 'K' : metrics.currentHoldings.toFixed(0)} 
+                    <div className="text-[9px] text-gray-400 mt-1 space-y-0.5">
+                        <div className="flex justify-between">
+                            <span>Holdings: {formatNumber(metrics.currentHoldings, 0)}</span>
+                            <span className="text-blue-600">
+                                ${formatNumber(metrics.currentHoldingValueUSD)}
+                            </span>
+                        </div>
+                        {tokenInfo && (
+                            <div className="flex justify-between items-center">
+                                <span>Price: ${tokenInfo.price.toFixed(tokenInfo.price < 0.01 ? 6 : 4)}</span>
+                                {tokenInfo.priceChange24h !== undefined && (
+                                    <span className={tokenInfo.priceChange24h >= 0 ? 'text-green-500' : 'text-red-500'}>
+                                        {tokenInfo.priceChange24h >= 0 ? '+' : ''}{tokenInfo.priceChange24h.toFixed(2)}%
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        {/* Token metadata indicators */}
+                        {tokenInfo && (
+                            <div className="flex items-center space-x-2 text-[8px]">
+                                {tokenInfo.age && (
+                                    <span className={tokenInfo.age.isNew ? 'text-green-600 font-semibold' : 'text-gray-500'}>
+                                        {tokenInfo.age.displayText}
+                                    </span>
+                                )}
+                                {tokenInfo.marketCap && (
+                                    <span className="text-purple-600">
+                                        MC: ${formatNumber(tokenInfo.marketCap)}
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
-                    
+                )}
+                {!metrics && (
+                    <div className="text-[9px] text-gray-400 mt-1">
+                        spent {(wallet.solSpent || 0).toFixed(4)} SOL 
+                        <br />
+                        recv {(wallet.solReceived || 0).toFixed(4)} SOL
+                    </div>
                 )}
             </div>
             <div className="text-right ml-2">
@@ -180,13 +225,19 @@ function WalletPill({ wallet, tokenMint }) {
                     {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
                 </div>
                 {metrics ? (
-                    <div className="text-[9px] text-gray-400">
+                    <div className="text-[9px] text-gray-400 space-y-0.5">
                         <div className={metrics.realizedPnLSOL !== 0 ? (metrics.realizedPnLSOL > 0 ? 'text-green-500' : 'text-red-500') : ''}>
                             Real: {metrics.realizedPnLSOL >= 0 ? '+' : ''}{metrics.realizedPnLSOL.toFixed(4)} SOL
                         </div>
                         <div className={metrics.unrealizedPnLSOL !== 0 ? (metrics.unrealizedPnLSOL > 0 ? 'text-green-500' : 'text-red-500') : ''}>
                             Unreal: {metrics.unrealizedPnLSOL >= 0 ? '+' : ''}{metrics.unrealizedPnLSOL.toFixed(4)} SOL
                         </div>
+                        {/* Show ROI if significant */}
+                        {Math.abs(metrics.totalROI) > 5 && (
+                            <div className={metrics.totalROI > 0 ? 'text-green-500 font-semibold' : 'text-red-500 font-semibold'}>
+                                ROI: {metrics.totalROI >= 0 ? '+' : ''}{metrics.totalROI.toFixed(1)}%
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div className="text-[9px] text-gray-400">

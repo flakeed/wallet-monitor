@@ -1,17 +1,17 @@
-// client/src/components/TokenCard.js - Исправленный расчет PnL
+// client/src/components/TokenCard.js - Enhanced with market cap and token age
 import React, { useState, useEffect, useMemo } from 'react';
 import WalletPill from './WalletPill';
-import { usePrices } from '../hooks/usePrices';
+import { useTokenPriceAndInfo } from '../hooks/usePrices';
 
 function TokenCard({ token, onOpenChart }) {
     const [showAllWallets, setShowAllWallets] = useState(false);
-    const { solPrice, tokenPrice: priceData, loading: loadingPrice } = usePrices(token.mint);
+    const { solPrice, tokenInfo, tokenPrice, loading: loadingPrice } = useTokenPriceAndInfo(token.mint);
 
     const WALLETS_DISPLAY_LIMIT = 6;
 
     // Improved PnL calculation with accurate accounting
     const groupPnL = useMemo(() => {
-        if (!priceData || !priceData.price || !solPrice) return null;
+        if (!tokenPrice || !tokenPrice.price || !solPrice) return null;
     
         let totalTokensBought = 0;
         let totalTokensSold = 0;
@@ -50,7 +50,7 @@ function TokenCard({ token, onOpenChart }) {
             // Себестоимость оставшихся токенов
             const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
             // Текущая рыночная стоимость оставшихся токенов
-            const currentMarketValueSOL = (currentHoldings * priceData.price) / solPrice;
+            const currentMarketValueSOL = (currentHoldings * tokenPrice.price) / solPrice;
             // Нереализованный PnL = текущая стоимость - себестоимость
             unrealizedPnLSOL = currentMarketValueSOL - remainingCostBasisSOL;
         }
@@ -65,8 +65,8 @@ function TokenCard({ token, onOpenChart }) {
         // Дополнительные метрики для анализа
         const totalInvestedSOL = totalSpentSOL;
         const totalInvestedUSD = totalInvestedSOL * solPrice;
-        const currentTokenValueUSD = currentHoldings * priceData.price;
-        const totalReturnSOL = totalReceivedSOL + ((currentHoldings * priceData.price) / solPrice);
+        const currentTokenValueUSD = currentHoldings * tokenPrice.price;
+        const totalReturnSOL = totalReceivedSOL + ((currentHoldings * tokenPrice.price) / solPrice);
         const totalReturnUSD = totalReturnSOL * solPrice;
         
         // ROI расчеты
@@ -107,14 +107,14 @@ function TokenCard({ token, onOpenChart }) {
             totalROI,
             
             // Текущие цены
-            currentPriceUSD: priceData.price,
+            currentPriceUSD: tokenPrice.price,
             solPrice,
             
             // Проценты
             soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
             holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0
         };
-    }, [priceData, solPrice, token.wallets]);
+    }, [tokenPrice, solPrice, token.wallets]);
 
     // Memoize wallet display calculations
     const walletCounts = useMemo(() => {
@@ -144,6 +144,7 @@ function TokenCard({ token, onOpenChart }) {
 
     const formatNumber = (num, decimals = 2) => {
         if (num === null || num === undefined) return '0';
+        if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
         if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
         if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
         return num.toFixed(decimals);
@@ -151,7 +152,34 @@ function TokenCard({ token, onOpenChart }) {
 
     const formatCurrency = (num) => {
         if (num === null || num === undefined) return '$0';
-        return `${formatNumber(num)}`;
+        return `$${formatNumber(num)}`;
+    };
+
+    const formatMarketCap = (marketCap) => {
+        if (!marketCap || marketCap <= 0) return 'Unknown';
+        return formatCurrency(marketCap);
+    };
+
+    const formatTokenAge = (age) => {
+        if (!age) return 'Unknown';
+        return age.displayText;
+    };
+
+    const getAgeColor = (age) => {
+        if (!age) return 'text-gray-500';
+        if (age.isNew) return 'text-green-600 font-semibold';
+        if (age.totalDays < 7) return 'text-blue-600';
+        if (age.totalDays < 30) return 'text-yellow-600';
+        return 'text-gray-600';
+    };
+
+    const getMarketCapColor = (marketCap) => {
+        if (!marketCap || marketCap <= 0) return 'text-gray-500';
+        if (marketCap >= 1000000000) return 'text-purple-600 font-bold'; // 1B+
+        if (marketCap >= 100000000) return 'text-blue-600 font-semibold';  // 100M+
+        if (marketCap >= 10000000) return 'text-green-600';   // 10M+
+        if (marketCap >= 1000000) return 'text-yellow-600';   // 1M+
+        return 'text-red-500'; // Under 1M
     };
 
     const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
@@ -169,11 +197,39 @@ function TokenCard({ token, onOpenChart }) {
     return (
         <div className="border rounded-lg p-4 bg-gray-50">
             <div className="flex items-center justify-between mb-3">
-                <div className="min-w-0">
-                    <div className="flex items-center space-x-2">
+                <div className="min-w-0 flex-1">
+                    <div className="flex items-center space-x-2 mb-1">
                         <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
-                        <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
+                        <span className="text-gray-600 truncate text-sm">{token.name || 'Unknown Token'}</span>
+                        {tokenInfo?.age?.isNew && (
+                            <span className="text-xs px-1 py-0.5 bg-green-100 text-green-800 rounded font-medium">NEW</span>
+                        )}
                     </div>
+                    
+                    {/* Token metadata info */}
+                    <div className="flex items-center space-x-3 text-xs text-gray-500 mb-2">
+                        <div className="flex items-center space-x-1">
+                            <span>💰</span>
+                            <span className={getMarketCapColor(tokenInfo?.marketCap)}>
+                                {formatMarketCap(tokenInfo?.marketCap)}
+                            </span>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                            <span>🕒</span>
+                            <span className={getAgeColor(tokenInfo?.age)}>
+                                {formatTokenAge(tokenInfo?.age)}
+                            </span>
+                        </div>
+                        {tokenInfo?.volume24h && tokenInfo.volume24h > 0 && (
+                            <div className="flex items-center space-x-1">
+                                <span>📊</span>
+                                <span className="text-blue-600">
+                                    {formatCurrency(tokenInfo.volume24h)} 24h
+                                </span>
+                            </div>
+                        )}
+                    </div>
+
                     <div className="flex items-center space-x-1">
                         <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
                         <button
@@ -201,7 +257,19 @@ function TokenCard({ token, onOpenChart }) {
                             ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
                             : '0 SOL'}
                     </div>
-                    <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+                    <div className="text-xs text-gray-500">
+                        {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+                    </div>
+                    {tokenInfo?.price && (
+                        <div className="text-xs text-gray-600 mt-1">
+                            Price: ${tokenInfo.price.toFixed(tokenInfo.price < 0.01 ? 6 : 4)}
+                            {tokenInfo.priceChange24h !== undefined && (
+                                <span className={tokenInfo.priceChange24h >= 0 ? 'text-green-600 ml-1' : 'text-red-600 ml-1'}>
+                                    {tokenInfo.priceChange24h >= 0 ? '+' : ''}{tokenInfo.priceChange24h.toFixed(2)}%
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -227,7 +295,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.realizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.realizedPnLUSD)}$
+                                        {formatCurrency(groupPnL.realizedPnLUSD)}
                                     </div>
                                 </div>
                             </div>
@@ -238,7 +306,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.unrealizedPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.unrealizedPnLUSD)}$
+                                        {formatCurrency(groupPnL.unrealizedPnLUSD)}
                                     </div>
                                 </div>
                             </div>
@@ -249,7 +317,7 @@ function TokenCard({ token, onOpenChart }) {
                                         {groupPnL.totalPnLSOL >= 0 ? '+' : ''}{groupPnL.totalPnLSOL.toFixed(4)} SOL
                                     </div>
                                     <div className={`text-xs ${groupPnL.totalPnLUSD >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {formatCurrency(groupPnL.totalPnLUSD)}$
+                                        {formatCurrency(groupPnL.totalPnLUSD)}
                                     </div>
                                 </div>
                             </div>
