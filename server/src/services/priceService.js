@@ -1,14 +1,17 @@
 const Redis = require('ioredis');
+const { Connection, PublicKey } = require('@solana/web3.js');
 
 class PriceService {
     constructor() {
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
+        this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', 'confirmed');
         this.solPriceCache = {
             price: 150,
             lastUpdated: 0,
             cacheTimeout: 30000 // 30 seconds
         };
         this.tokenPriceCache = new Map();
+        this.tokenAgeCache = new Map();
         this.maxCacheSize = 1000;
         
         // Start background price updates
@@ -150,7 +153,87 @@ class PriceService {
         }
     }
 
-    // Optimized batch token price fetching
+    // NEW: Get token deployment age from Solana blockchain
+    async getTokenAge(mintAddress) {
+        const cached = this.tokenAgeCache.get(mintAddress);
+        if (cached && (Date.now() - cached.timestamp) < 3600000) { // 1 hour cache
+            return cached.data;
+        }
+
+        try {
+            const mintPubkey = new PublicKey(mintAddress);
+            
+            // Get the first transaction of the mint (deployment)
+            const signatures = await this.connection.getSignaturesForAddress(
+                mintPubkey,
+                { limit: 1000 },
+                'confirmed'
+            );
+
+            if (signatures.length === 0) {
+                return { deployedAt: null, age: null, ageInHours: null, ageInDays: null };
+            }
+
+            // Get the oldest signature (deployment transaction)
+            const deploymentSig = signatures[signatures.length - 1];
+            
+            if (deploymentSig.blockTime) {
+                const deployedAt = new Date(deploymentSig.blockTime * 1000);
+                const now = new Date();
+                const ageInMs = now - deployedAt;
+                const ageInHours = Math.floor(ageInMs / (1000 * 60 * 60));
+                const ageInDays = Math.floor(ageInHours / 24);
+
+                const ageData = {
+                    deployedAt: deployedAt.toISOString(),
+                    age: ageInMs,
+                    ageInHours,
+                    ageInDays,
+                    ageFormatted: this.formatTokenAge(ageInHours)
+                };
+
+                // Cache the result
+                this.tokenAgeCache.set(mintAddress, {
+                    data: ageData,
+                    timestamp: Date.now()
+                });
+
+                return ageData;
+            }
+
+            return { deployedAt: null, age: null, ageInHours: null, ageInDays: null };
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Error fetching token age for ${mintAddress}:`, error.message);
+            return { deployedAt: null, age: null, ageInHours: null, ageInDays: null, error: error.message };
+        }
+    }
+
+    // NEW: Format token age in human readable format
+    formatTokenAge(ageInHours) {
+        if (ageInHours < 1) {
+            return 'Less than 1 hour';
+        } else if (ageInHours < 24) {
+            return `${ageInHours}h`;
+        } else if (ageInHours < 24 * 7) {
+            const days = Math.floor(ageInHours / 24);
+            const hours = ageInHours % 24;
+            return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+        } else if (ageInHours < 24 * 30) {
+            const weeks = Math.floor(ageInHours / (24 * 7));
+            const days = Math.floor((ageInHours % (24 * 7)) / 24);
+            return days > 0 ? `${weeks}w ${days}d` : `${weeks}w`;
+        } else if (ageInHours < 24 * 365) {
+            const months = Math.floor(ageInHours / (24 * 30));
+            const days = Math.floor((ageInHours % (24 * 30)) / 24);
+            return days > 0 ? `${months}mo ${Math.floor(days / 7)}w` : `${months}mo`;
+        } else {
+            const years = Math.floor(ageInHours / (24 * 365));
+            const months = Math.floor((ageInHours % (24 * 365)) / (24 * 30));
+            return months > 0 ? `${years}y ${months}mo` : `${years}y`;
+        }
+    }
+
+    // ENHANCED: Optimized batch token price fetching with age and market cap
     async getTokenPrices(tokenMints) {
         if (!tokenMints || tokenMints.length === 0) {
             return new Map();
@@ -172,14 +255,15 @@ class PriceService {
 
         // Fetch uncached prices in batches
         if (uncachedMints.length > 0) {
-            const BATCH_SIZE = 10;
+            const BATCH_SIZE = 8; // Reduced batch size for more comprehensive data
             for (let i = 0; i < uncachedMints.length; i += BATCH_SIZE) {
                 const batch = uncachedMints.slice(i, i + BATCH_SIZE);
                 
                 const batchPromises = batch.map(async (mint) => {
                     try {
+                        // Fetch price data from DexScreener
                         const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
-                            timeout: 5000,
+                            timeout: 8000,
                             headers: { 'Accept': 'application/json' }
                         });
                         
@@ -194,11 +278,31 @@ class PriceService {
                             const bestPair = data.pairs.reduce((prev, current) =>
                                 (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
                             );
+                            
+                            // Get token age
+                            const ageData = await this.getTokenAge(mint);
+                            
                             priceData = {
                                 price: parseFloat(bestPair.priceUsd || 0),
                                 change24h: parseFloat(bestPair.priceChange?.h24 || 0),
                                 volume24h: parseFloat(bestPair.volume?.h24 || 0),
-                                liquidity: parseFloat(bestPair.liquidity?.usd || 0)
+                                liquidity: parseFloat(bestPair.liquidity?.usd || 0),
+                                marketCap: parseFloat(bestPair.fdv || bestPair.marketCap || 0), // Fully Diluted Valuation or Market Cap
+                                // Token age information
+                                deployedAt: ageData.deployedAt,
+                                ageInHours: ageData.ageInHours,
+                                ageInDays: ageData.ageInDays,
+                                ageFormatted: ageData.ageFormatted,
+                                // Additional useful data
+                                symbol: bestPair.baseToken?.symbol || 'Unknown',
+                                name: bestPair.baseToken?.name || 'Unknown Token',
+                                pairAddress: bestPair.pairAddress,
+                                dexId: bestPair.dexId,
+                                // Risk indicators
+                                isNew: ageData.ageInHours ? ageData.ageInHours < 24 : false,
+                                isVeryNew: ageData.ageInHours ? ageData.ageInHours < 1 : false,
+                                liquidityRisk: parseFloat(bestPair.liquidity?.usd || 0) < 10000 ? 'HIGH' : 
+                                             parseFloat(bestPair.liquidity?.usd || 0) < 50000 ? 'MEDIUM' : 'LOW'
                             };
                         }
 
@@ -210,7 +314,7 @@ class PriceService {
 
                         return { mint, data: priceData };
                     } catch (error) {
-                        console.error(`[${new Date().toISOString()}] ❌ Error fetching price for ${mint}:`, error.message);
+                        console.error(`[${new Date().toISOString()}] ❌ Error fetching enhanced price data for ${mint}:`, error.message);
                         return { mint, data: null };
                     }
                 });
@@ -222,7 +326,7 @@ class PriceService {
 
                 // Small delay between batches to avoid rate limiting
                 if (i + BATCH_SIZE < uncachedMints.length) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await new Promise(resolve => setTimeout(resolve, 200));
                 }
             }
         }
@@ -249,11 +353,13 @@ class PriceService {
 
         // Rebuild cache
         this.tokenPriceCache.clear();
+        this.tokenAgeCache.clear(); // Also clean age cache
+        
         validEntries.forEach(([key, value]) => {
             this.tokenPriceCache.set(key, value);
         });
 
-        console.log(`[${new Date().toISOString()}] 🧹 Cleaned token price cache: ${validEntries.length} entries remaining`);
+        console.log(`[${new Date().toISOString()}] 🧹 Cleaned token caches: ${validEntries.length} entries remaining`);
     }
 
     // Get price service statistics
@@ -265,16 +371,18 @@ class PriceService {
                 age: Date.now() - this.solPriceCache.lastUpdated
             },
             tokenCache: {
-                size: this.tokenPriceCache.size,
+                priceSize: this.tokenPriceCache.size,
+                ageSize: this.tokenAgeCache.size,
                 maxSize: this.maxCacheSize,
-                utilization: Math.round((this.tokenPriceCache.size / this.maxCacheSize) * 100)
+                priceUtilization: Math.round((this.tokenPriceCache.size / this.maxCacheSize) * 100),
+                ageUtilization: Math.round((this.tokenAgeCache.size / this.maxCacheSize) * 100)
             }
         };
     }
 
     async close() {
         await this.redis.quit();
-        console.log(`[${new Date().toISOString()}] ✅ Price service closed`);
+        console.log(`[${new Date().toISOString()}] ✅ Enhanced price service closed`);
     }
 }
 

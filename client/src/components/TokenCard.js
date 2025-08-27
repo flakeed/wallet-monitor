@@ -1,4 +1,4 @@
-// client/src/components/TokenCard.js - Исправленный расчет PnL
+// client/src/components/TokenCard.js - Enhanced version with token age and market cap
 import React, { useState, useEffect, useMemo } from 'react';
 import WalletPill from './WalletPill';
 import { usePrices } from '../hooks/usePrices';
@@ -9,7 +9,7 @@ function TokenCard({ token, onOpenChart }) {
 
     const WALLETS_DISPLAY_LIMIT = 6;
 
-    // Improved PnL calculation with accurate accounting
+    // Enhanced PnL calculation with accurate accounting
     const groupPnL = useMemo(() => {
         if (!priceData || !priceData.price || !solPrice) return null;
     
@@ -144,6 +144,7 @@ function TokenCard({ token, onOpenChart }) {
 
     const formatNumber = (num, decimals = 2) => {
         if (num === null || num === undefined) return '0';
+        if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
         if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
         if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
         return num.toFixed(decimals);
@@ -152,6 +153,39 @@ function TokenCard({ token, onOpenChart }) {
     const formatCurrency = (num) => {
         if (num === null || num === undefined) return '$0';
         return `${formatNumber(num)}`;
+    };
+
+    // Format token age with appropriate colors
+    const getAgeDisplay = () => {
+        if (!priceData || !priceData.ageFormatted) return null;
+        
+        let ageColor = 'text-gray-600';
+        
+        if (priceData.ageInHours < 1) {
+            ageColor = 'text-red-600';
+        } else if (priceData.ageInHours < 24) {
+            ageColor = 'text-orange-600'; 
+        } else if (priceData.ageInDays < 7) {
+            ageColor = 'text-yellow-600';
+        } else if (priceData.ageInDays < 30) {
+            ageColor = 'text-blue-600';
+        } else {
+            ageColor = 'text-green-600';
+        }
+        
+        return { ageColor };
+    };
+
+    // NEW: Get liquidity risk color
+    const getLiquidityRiskColor = () => {
+        if (!priceData || !priceData.liquidityRisk) return 'text-gray-600';
+        
+        switch (priceData.liquidityRisk) {
+            case 'HIGH': return 'text-red-600';
+            case 'MEDIUM': return 'text-yellow-600';
+            case 'LOW': return 'text-green-600';
+            default: return 'text-gray-600';
+        }
     };
 
     const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
@@ -166,13 +200,24 @@ function TokenCard({ token, onOpenChart }) {
         setShowAllWallets(!showAllWallets);
     };
 
+    const ageDisplay = getAgeDisplay();
+
     return (
         <div className="border rounded-lg p-4 bg-gray-50">
+            {/* Enhanced Header with Age and Market Cap */}
             <div className="flex items-center justify-between mb-3">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                     <div className="flex items-center space-x-2">
-                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">{token.symbol || 'Unknown'}</span>
+                        <span className="text-sm px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold">
+                            {token.symbol || 'Unknown'}
+                        </span>
                         <span className="text-gray-600 truncate">{token.name || 'Unknown Token'}</span>
+                        {/* Age indicator */}
+                        {ageDisplay && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${ageDisplay.ageColor} bg-gray-100`}>
+                                {priceData.ageFormatted}
+                            </span>
+                        )}
                     </div>
                     <div className="flex items-center space-x-1">
                         <div className="text-xs text-gray-500 font-mono truncate">{token.mint}</div>
@@ -191,6 +236,21 @@ function TokenCard({ token, onOpenChart }) {
                             </svg>
                         </button>
                     </div>
+                    {/* Market Cap and Liquidity */}
+                    {priceData && (priceData.marketCap || priceData.liquidity) && (
+                        <div className="flex items-center space-x-2 text-xs text-gray-500 mt-1">
+                            {priceData.marketCap && (
+                                <span className="bg-blue-50 px-2 py-0.5 rounded">
+                                    MC: ${formatNumber(priceData.marketCap)}
+                                </span>
+                            )}
+                            {priceData.liquidity && (
+                                <span className="bg-gray-50 px-2 py-0.5 rounded text-gray-600">
+                                    Liq: ${formatNumber(priceData.liquidity)}
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="text-right">
                     <div className={`text-base font-bold ${netColor} flex items-center`}>
@@ -201,12 +261,57 @@ function TokenCard({ token, onOpenChart }) {
                             ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
                             : '0 SOL'}
                     </div>
-                    <div className="text-xs text-gray-500">{token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells</div>
+                    <div className="text-xs text-gray-500">
+                        {token.summary.uniqueWallets} wallets · {token.summary.totalBuys} buys · {token.summary.totalSells} sells
+                    </div>
+                    {/* Current price display */}
+                    {priceData && priceData.price && (
+                        <div className="text-xs text-gray-600 mt-1">
+                            ${priceData.price.toFixed(priceData.price >= 1 ? 4 : 8)}
+                            {priceData.change24h !== undefined && (
+                                <span className={`ml-1 ${priceData.change24h >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {priceData.change24h >= 0 ? '+' : ''}{priceData.change24h.toFixed(2)}%
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
+            {/* Enhanced PnL Section with token info */}
             {groupPnL && (
                 <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    {/* Token Age and Market Data */}
+                    {priceData && (priceData.deployedAt || priceData.volume24h) && (
+                        <div className="mb-2 pb-2 border-b border-blue-200">
+                            <div className="flex items-center justify-between text-xs">
+                                {priceData.deployedAt && (
+                                    <div className={`flex items-center ${ageDisplay?.ageColor || 'text-gray-600'}`}>
+                                        <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        <span>Age: {priceData.ageFormatted}</span>
+                                    </div>
+                                )}
+                                {priceData.marketCap && (
+                                    <div className="flex items-center text-blue-600">
+                                        <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                                                  d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                                        </svg>
+                                        <span>MC: ${formatNumber(priceData.marketCap)}</span>
+                                    </div>
+                                )}
+                            </div>
+                            {priceData.volume24h && (
+                                <div className="text-xs text-gray-500 mt-1">
+                                    24h Volume: ${formatNumber(priceData.volume24h)}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-3 text-xs">
                         <div className="space-y-1">
                             <div className="flex justify-between">
@@ -218,6 +323,15 @@ function TokenCard({ token, onOpenChart }) {
                                     </span>
                                 </span>
                             </div>
+                            {/* Holdings value in USD */}
+                            {priceData && priceData.price && (
+                                <div className="flex justify-between">
+                                    <span className="text-gray-600">Holdings Value:</span>
+                                    <span className="font-medium text-blue-600">
+                                        ${formatNumber(groupPnL.currentHoldings * priceData.price)}
+                                    </span>
+                                </div>
+                            )}
                         </div>
                         <div className="space-y-1">
                             <div className="flex justify-between">
@@ -256,7 +370,7 @@ function TokenCard({ token, onOpenChart }) {
                         </div>
                     </div>
 
-                    {/* Дополнительная информация для понимания расчетов */}
+                    {/* Enhanced additional information */}
                     <div className="mt-2 pt-2 border-t border-blue-200">
                         <div className="text-xs text-gray-500 space-y-1">
                             <div className="flex justify-between">
@@ -266,6 +380,13 @@ function TokenCard({ token, onOpenChart }) {
                             <div className="flex justify-between">
                                 <span>Spent: {groupPnL.totalSpentSOL.toFixed(4)} SOL</span>
                                 <span>Received: {groupPnL.totalReceivedSOL.toFixed(4)} SOL</span>
+                            </div>
+                            {/* ROI indicator */}
+                            <div className="flex justify-between">
+                                <span>Total ROI:</span>
+                                <span className={`font-medium ${groupPnL.totalROI >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {groupPnL.totalROI >= 0 ? '+' : ''}{groupPnL.totalROI.toFixed(1)}%
+                                </span>
                             </div>
                         </div>
                     </div>

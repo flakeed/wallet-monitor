@@ -4,10 +4,10 @@ import { useState, useEffect, useMemo } from 'react';
 function WalletPill({ wallet, tokenMint }) {
     const [totalPnL, setTotalPnL] = useState(null);
     const { solPrice, tokenPrice, loading, error, ready } = usePrices(tokenMint);
-    
+
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
 
-    // Improved PnL calculation with accurate accounting for individual wallet
+    // Enhanced PnL calculation with accurate accounting for individual wallet
     const calculatedPnL = useMemo(() => {
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) {
             return wallet.pnlSol || 0;
@@ -25,10 +25,10 @@ function WalletPill({ wallet, tokenMint }) {
 
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         const soldTokens = Math.min(totalTokensSold, totalTokensBought);
-        
+
         // Средняя цена покупки в SOL за токен
         const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-        
+
         let realizedPnLSOL = 0;
         let unrealizedPnLSOL = 0;
 
@@ -75,7 +75,6 @@ function WalletPill({ wallet, tokenMint }) {
         navigator.clipboard.writeText(wallet.address);
     };
 
-    // Additional metrics for tooltip or detailed view
     const getDetailedMetrics = () => {
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) return null;
 
@@ -83,13 +82,15 @@ function WalletPill({ wallet, tokenMint }) {
         const totalTokensSold = wallet.tokensSold || 0;
         const totalSpentSOL = wallet.solSpent || 0;
         const totalReceivedSOL = wallet.solReceived || 0;
+        const positionSize = currentHoldings * tokenPrice.price; // Placeholder
+        const investmentRatio = totalSpentSOL > 0 ? (positionSize / totalSpentSOL) : 0; // Placeholder
 
         if (totalTokensBought === 0) return null;
 
         const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
         const soldTokens = Math.min(totalTokensSold, totalTokensBought);
         const avgBuyPriceSOL = totalSpentSOL / totalTokensBought;
-        
+
         let realizedPnLSOL = 0;
         let unrealizedPnLSOL = 0;
 
@@ -120,17 +121,21 @@ function WalletPill({ wallet, tokenMint }) {
             totalPnLUSD: (realizedPnLSOL + unrealizedPnLSOL) * solPrice,
             soldPercentage: (soldTokens / totalTokensBought) * 100,
             holdingPercentage: (currentHoldings / totalTokensBought) * 100,
-            totalROI: totalSpentSOL > 0 ? ((realizedPnLSOL + unrealizedPnLSOL) / totalSpentSOL) * 100 : 0
+            totalROI: totalSpentSOL > 0 ? ((realizedPnLSOL + unrealizedPnLSOL) / totalSpentSOL) * 100 : 0,
+            positionSizeUSD: positionSize,
+            investmentUSD: investmentRatio
         };
     };
 
     const metrics = getDetailedMetrics();
+    const ageFormatted = tokenPrice?.ageFormatted || 'N/A';
 
     return (
         <div className="flex items-center justify-between border rounded-md px-2 py-1 bg-white">
-            <div className="truncate max-w-xs">
+            <div className="truncate max-w-xs flex-1">
                 <div className="flex items-center space-x-2">
                     <div className="text-xs font-medium text-gray-900 truncate">{label}</div>
+
                     <button
                         onClick={copyToClipboard}
                         className="text-gray-400 hover:text-blue-600 p-0.5 rounded"
@@ -163,13 +168,24 @@ function WalletPill({ wallet, tokenMint }) {
                 <div className="flex items-center justify-between text-[10px] text-gray-500">
                     <span>{wallet.txBuys} buys · {wallet.txSells} sells</span>
                     {error && <span className="text-red-500" title={error}>⚠</span>}
+                    {/* Token age indicator */}
+                    {tokenPrice && tokenPrice.ageFormatted && (
+                        <span className={`text-[9px] ${tokenPrice.ageInHours < 1 ? 'text-red-600' :
+                            tokenPrice.ageInHours < 24 ? 'text-orange-600' : 'text-gray-400'
+                            }`}>
+                            {ageFormatted}
+                        </span>
+                    )}
                 </div>
-                {/* Дополнительная информация при наличии детальных метрик */}
                 {metrics && (
-                    <div className="text-[9px] text-gray-400 mt-1" title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%)`}>
-                        Holdings: {metrics.currentHoldings > 1000 ? (metrics.currentHoldings/1000).toFixed(1) + 'K' : metrics.currentHoldings.toFixed(0)} 
+                    <div className="text-[9px] text-gray-400 mt-1 flex items-center justify-between">
+                        <span title={`Holdings: ${metrics.currentHoldings.toFixed(0)} tokens (${metrics.holdingPercentage.toFixed(1)}%)`}>
+                            Holdings: {metrics.currentHoldings > 1000 ? (metrics.currentHoldings / 1000).toFixed(1) + 'K' : metrics.currentHoldings.toFixed(0)}
+                        </span>
+                        <span className="text-blue-500">
+                            ${metrics.positionSizeUSD < 1 ? metrics.positionSizeUSD.toFixed(4) : metrics.positionSizeUSD.toFixed(0)}
+                        </span>
                     </div>
-                    
                 )}
             </div>
             <div className="text-right ml-2">
@@ -187,10 +203,13 @@ function WalletPill({ wallet, tokenMint }) {
                         <div className={metrics.unrealizedPnLSOL !== 0 ? (metrics.unrealizedPnLSOL > 0 ? 'text-green-500' : 'text-red-500') : ''}>
                             Unreal: {metrics.unrealizedPnLSOL >= 0 ? '+' : ''}{metrics.unrealizedPnLSOL.toFixed(4)} SOL
                         </div>
+                        <div className={`text-[8px] mt-0.5 ${metrics.totalROI >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            ROI: {metrics.totalROI >= 0 ? '+' : ''}{metrics.totalROI.toFixed(1)}%
+                        </div>
                     </div>
                 ) : (
                     <div className="text-[9px] text-gray-400">
-                        spent {(wallet.solSpent || 0).toFixed(4)} SOL 
+                        spent {(wallet.solSpent || 0).toFixed(4)} SOL
                         <br />
                         recv {(wallet.solReceived || 0).toFixed(4)} SOL
                     </div>

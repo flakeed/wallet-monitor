@@ -999,6 +999,258 @@ app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) =
   }
 });
 
+app.get('/api/tokens/:mintAddress/metadata', auth.authRequired, async (req, res) => {
+  try {
+    const { mintAddress } = req.params;
+    
+    if (!mintAddress || mintAddress.length < 32) {
+      return res.status(400).json({ error: 'Invalid mint address' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Enhanced metadata request for token ${mintAddress}`);
+    
+    // Get enhanced price data (includes age and market cap)
+    const tokenPrices = await priceService.getTokenPrices([mintAddress]);
+    const tokenData = tokenPrices.get(mintAddress);
+
+    if (!tokenData) {
+      return res.status(404).json({ error: 'Token data not found' });
+    }
+
+    res.json({
+      success: true,
+      mint: mintAddress,
+      data: {
+        price: tokenData.price,
+        change24h: tokenData.change24h,
+        volume24h: tokenData.volume24h,
+        liquidity: tokenData.liquidity,
+        marketCap: tokenData.marketCap,
+        // Token age information
+        deployedAt: tokenData.deployedAt,
+        ageInHours: tokenData.ageInHours,
+        ageInDays: tokenData.ageInDays,
+        ageFormatted: tokenData.ageFormatted,
+        // Additional metadata
+        symbol: tokenData.symbol,
+        name: tokenData.name,
+        pairAddress: tokenData.pairAddress,
+        dexId: tokenData.dexId
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching enhanced token metadata:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch token metadata' });
+  }
+});
+
+app.post('/api/tokens/enhanced-metadata', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 50) {
+      return res.status(400).json({ error: 'Maximum 50 mints allowed per request' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Enhanced batch metadata request for ${mints.length} tokens`);
+    const startTime = Date.now();
+    
+    // Get enhanced price data with age and market cap
+    const enhancedData = await priceService.getTokenPrices(mints);
+    const duration = Date.now() - startTime;
+    
+    const result = {};
+    enhancedData.forEach((data, mint) => {
+      result[mint] = {
+        price: data?.price || 0,
+        change24h: data?.change24h || 0,
+        volume24h: data?.volume24h || 0,
+        liquidity: data?.liquidity || 0,
+        marketCap: data?.marketCap || 0,
+        // Token age information
+        deployedAt: data?.deployedAt,
+        ageInHours: data?.ageInHours,
+        ageInDays: data?.ageInDays,
+        ageFormatted: data?.ageFormatted,
+        // Additional metadata
+        symbol: data?.symbol,
+        name: data?.name,
+        pairAddress: data?.pairAddress,
+        dexId: data?.dexId,
+        // Data quality indicators
+        hasAgeData: Boolean(data?.deployedAt),
+        hasMarketData: Boolean(data?.price && data?.price > 0)
+      };
+    });
+    
+    console.log(`[${new Date().toISOString()}] ✅ Enhanced batch metadata completed in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      data: result,
+      count: enhancedData.size,
+      duration,
+      summary: {
+        withAgeData: Object.values(result).filter(t => t.hasAgeData).length,
+        withMarketData: Object.values(result).filter(t => t.hasMarketData).length
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in enhanced batch metadata:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch enhanced token metadata' });
+  }
+});
+
+// Endpoint to get deployment transaction details
+app.get('/api/tokens/:mintAddress/deployment', auth.authRequired, async (req, res) => {
+  try {
+    const { mintAddress } = req.params;
+    
+    if (!mintAddress || mintAddress.length < 32) {
+      return res.status(400).json({ error: 'Invalid mint address' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🔍 Deployment info request for ${mintAddress}`);
+    
+    const connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', 'confirmed');
+    const mintPubkey = new PublicKey(mintAddress);
+    
+    // Get all signatures for the mint address
+    const signatures = await connection.getSignaturesForAddress(
+      mintPubkey,
+      { limit: 1000 },
+      'confirmed'
+    );
+
+    if (signatures.length === 0) {
+      return res.status(404).json({ error: 'No transactions found for this token' });
+    }
+
+    // Find the deployment transaction (oldest one)
+    const deploymentSig = signatures[signatures.length - 1];
+    
+    // Get deployment transaction details
+    const deploymentTx = await connection.getParsedTransaction(deploymentSig.signature, {
+      maxSupportedTransactionVersion: 0
+    });
+
+    const deploymentInfo = {
+      signature: deploymentSig.signature,
+      blockTime: deploymentSig.blockTime,
+      deployedAt: deploymentSig.blockTime ? new Date(deploymentSig.blockTime * 1000).toISOString() : null,
+      slot: deploymentSig.slot,
+      confirmationStatus: deploymentSig.confirmationStatus,
+      // Calculate age
+      ageInMs: deploymentSig.blockTime ? Date.now() - (deploymentSig.blockTime * 1000) : null,
+      ageInHours: deploymentSig.blockTime ? Math.floor((Date.now() - (deploymentSig.blockTime * 1000)) / (1000 * 60 * 60)) : null,
+      ageInDays: deploymentSig.blockTime ? Math.floor((Date.now() - (deploymentSig.blockTime * 1000)) / (1000 * 60 * 60 * 24)) : null,
+      // Transaction details if available
+      fee: deploymentTx?.meta?.fee,
+      success: !deploymentTx?.meta?.err,
+      totalSignatures: signatures.length
+    };
+
+    res.json({
+      success: true,
+      mint: mintAddress,
+      deployment: deploymentInfo,
+      totalTransactions: signatures.length
+    });
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching deployment info:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch token deployment information' });
+  }
+});
+
+// Enhanced price service stats endpoint
+app.get('/api/tokens/stats', auth.authRequired, auth.adminRequired, (req, res) => {
+  try {
+    const stats = priceService.getStats();
+    
+    // Add additional metrics
+    const enhancedStats = {
+      ...stats,
+      server: {
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage(),
+        timestamp: Date.now()
+      },
+      features: {
+        tokenAgeTracking: true,
+        marketCapData: true,
+        realTimeUpdates: true
+      }
+    };
+
+    res.json(enhancedStats);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting enhanced price stats:`, error.message);
+    res.status(500).json({ error: 'Failed to get enhanced price service stats' });
+  }
+});
+
+// Simple token info endpoint without risk assessment
+app.post('/api/tokens/info', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints) || mints.length === 0) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 20) {
+      return res.status(400).json({ error: 'Maximum 20 tokens allowed per request' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Token info request for ${mints.length} tokens`);
+    
+    const tokenData = await priceService.getTokenPrices(mints);
+    const tokenInfo = {};
+
+    for (const [mint, data] of tokenData.entries()) {
+      if (!data) {
+        tokenInfo[mint] = {
+          available: false,
+          reason: 'No data available'
+        };
+        continue;
+      }
+
+      tokenInfo[mint] = {
+        available: true,
+        price: data.price,
+        marketCap: data.marketCap,
+        volume24h: data.volume24h,
+        liquidity: data.liquidity,
+        change24h: data.change24h,
+        // Age information
+        ageInHours: data.ageInHours,
+        ageInDays: data.ageInDays,
+        ageFormatted: data.ageFormatted,
+        deployedAt: data.deployedAt,
+        // Basic metadata
+        symbol: data.symbol,
+        name: data.name
+      };
+    }
+
+    res.json({
+      success: true,
+      tokens: tokenInfo,
+      count: tokenData.size
+    });
+
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in token info:`, error.message);
+    res.status(500).json({ error: 'Failed to get token information' });
+  }
+});
+
 // ОБНОВЛЕНО: Глобальные группы - без владения пользователями
 app.get('/api/groups', auth.authRequired, async (req, res) => {
   try {

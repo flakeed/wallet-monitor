@@ -17,7 +17,7 @@ const getAuthHeaders = () => {
   };
 };
 
-// Batch queue for token price requests
+// Enhanced batch queue for token price requests with metadata
 let batchQueue = new Set();
 let batchTimer = null;
 
@@ -27,10 +27,11 @@ const processBatch = async () => {
   const mints = Array.from(batchQueue);
   batchQueue.clear();
   
-  console.log(`[usePrices] Processing batch request for ${mints.length} tokens`);
+  console.log(`[usePrices] Processing enhanced batch request for ${mints.length} tokens`);
   
   try {
-    const response = await fetch('/api/tokens/prices', {
+    // Use the enhanced metadata endpoint
+    const response = await fetch('/api/tokens/enhanced-metadata', {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ mints })
@@ -40,13 +41,42 @@ const processBatch = async () => {
       throw new Error(`HTTP ${response.status}`);
     }
     
-    const data = await response.json();
+    const responseData = await response.json();
     
-    if (data.success && data.prices) {
+    if (responseData.success && responseData.data) {
       const now = Date.now();
       
-      // Cache all results
-      Object.entries(data.prices).forEach(([mint, priceData]) => {
+      // Cache all results with enhanced data
+      Object.entries(responseData.data).forEach(([mint, enhancedData]) => {
+        const priceData = {
+          // Core price data
+          price: enhancedData.price,
+          change24h: enhancedData.change24h,
+          volume24h: enhancedData.volume24h,
+          liquidity: enhancedData.liquidity,
+          marketCap: enhancedData.marketCap,
+          
+          // Token age data
+          deployedAt: enhancedData.deployedAt,
+          ageInHours: enhancedData.ageInHours,
+          ageInDays: enhancedData.ageInDays,
+          ageFormatted: enhancedData.ageFormatted,
+          
+          // Additional metadata
+          symbol: enhancedData.symbol,
+          name: enhancedData.name,
+          pairAddress: enhancedData.pairAddress,
+          dexId: enhancedData.dexId,
+          
+          // Data quality flags
+          hasAgeData: enhancedData.hasAgeData,
+          hasMarketData: enhancedData.hasMarketData,
+          
+          // Cache metadata
+          lastUpdated: now,
+          source: 'enhanced_api'
+        };
+        
         globalPriceCache.set(`token-${mint}`, {
           data: priceData,
           timestamp: now
@@ -59,9 +89,15 @@ const processBatch = async () => {
           pendingRequests.delete(mint);
         }
       });
+
+      // Log summary of enhanced data
+      const summary = responseData.summary;
+      if (summary) {
+        console.log(`[usePrices] Enhanced batch summary: ${summary.withAgeData}/${mints.length} with age data, ${summary.newTokens} new tokens, ${summary.highLiquidityRisk} high-risk liquidity`);
+      }
     }
   } catch (error) {
-    console.error('[usePrices] Batch request failed:', error);
+    console.error('[usePrices] Enhanced batch request failed:', error);
     
     // Reject all pending requests for this batch
     mints.forEach(mint => {
@@ -216,11 +252,12 @@ export const useTokenPrice = (tokenMint) => {
   return { priceData, loading, error, refetch: fetchTokenPrice };
 };
 
-// Hook for multiple token prices
+// Enhanced hook for multiple token prices with metadata
 export const useTokenPrices = (tokenMints) => {
   const [prices, setPrices] = useState(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [metadata, setMetadata] = useState(null);
   const isMountedRef = useRef(true);
 
   const fetchTokenPrices = useCallback(async () => {
@@ -255,12 +292,38 @@ export const useTokenPrices = (tokenMints) => {
         const results = await Promise.all(promises);
         
         const newPrices = new Map();
+        const enhancedMetadata = {
+          withAgeData: 0,
+          withMarketData: 0,
+          averageAge: 0
+        };
+
+        let totalAgeHours = 0;
+        let tokensWithAge = 0;
+
         uncachedMints.forEach((mint, index) => {
-          newPrices.set(mint, results[index]);
+          const data = results[index];
+          newPrices.set(mint, data);
+          
+          if (data) {
+            if (data.hasAgeData) {
+              enhancedMetadata.withAgeData++;
+              if (data.ageInHours) {
+                totalAgeHours += data.ageInHours;
+                tokensWithAge++;
+              }
+            }
+            if (data.hasMarketData) enhancedMetadata.withMarketData++;
+          }
         });
+
+        if (tokensWithAge > 0) {
+          enhancedMetadata.averageAge = Math.round(totalAgeHours / tokensWithAge);
+        }
 
         if (isMountedRef.current) {
           setPrices(prev => new Map([...prev, ...newPrices]));
+          setMetadata(enhancedMetadata);
         }
       } catch (err) {
         console.error('[useTokenPrices] Error:', err);
@@ -283,10 +346,10 @@ export const useTokenPrices = (tokenMints) => {
     };
   }, [fetchTokenPrices]);
 
-  return { prices, loading, error, refetch: fetchTokenPrices };
+  return { prices, loading, error, metadata, refetch: fetchTokenPrices };
 };
 
-// Combined hook for both SOL and token price
+// Enhanced combined hook for both SOL and token price with metadata
 export const usePrices = (tokenMint = null) => {
   const { solPrice, loading: solLoading, error: solError } = useSolPrice();
   const { priceData: tokenPrice, loading: tokenLoading, error: tokenError } = useTokenPrice(tokenMint);
