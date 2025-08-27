@@ -1,12 +1,11 @@
+-- Updated schema for shared system (remove user isolation)
+
 SET work_mem = '256MB';
-
 SET maintenance_work_mem = '1GB';
-
 SET shared_buffers = '512MB';
-
 SET autocommit = off;
 
--- Creating users table for storing user information
+-- Users table remains but only for authentication
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     telegram_id BIGINT UNIQUE NOT NULL,
@@ -20,7 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     last_login TIMESTAMP WITH TIME ZONE
 );
 
--- Creating sessions table for user authentication sessions
+-- Sessions table remains the same
 CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -29,7 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating whitelist table for user access control
+-- Whitelist remains the same
 CREATE TABLE IF NOT EXISTS whitelist (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     telegram_id BIGINT UNIQUE NOT NULL,
@@ -38,29 +37,28 @@ CREATE TABLE IF NOT EXISTS whitelist (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating groups table for wallet organization
+-- UPDATED: Groups table - remove user_id, make global
 CREATE TABLE IF NOT EXISTS groups (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) UNIQUE NOT NULL,  -- Global unique names
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- Track who created it
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_group_name_per_user UNIQUE (user_id, name)
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- UPDATED: Wallets table - remove user_id, make global
 CREATE TABLE IF NOT EXISTS wallets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    address VARCHAR(44) NOT NULL,
+    address VARCHAR(44) UNIQUE NOT NULL,  -- Global unique addresses
     name VARCHAR(255),
     group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    added_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- Track who added it
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT unique_wallet_address_per_user UNIQUE (address, user_id)
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating transactions table for wallet transaction records
+-- Transactions table remains mostly the same
 CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     wallet_id UUID REFERENCES wallets(id) ON DELETE CASCADE,
@@ -74,7 +72,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating tokens table for token metadata
+-- Tokens table remains the same
 CREATE TABLE IF NOT EXISTS tokens (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     mint VARCHAR(44) UNIQUE NOT NULL,
@@ -85,7 +83,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating token_operations table for token-specific transaction details
+-- Token operations table remains the same
 CREATE TABLE IF NOT EXISTS token_operations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     transaction_id UUID REFERENCES transactions(id) ON DELETE CASCADE,
@@ -95,7 +93,7 @@ CREATE TABLE IF NOT EXISTS token_operations (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating wallet_stats table for pre-computed wallet statistics
+-- Wallet stats table remains mostly the same
 CREATE TABLE IF NOT EXISTS wallet_stats (
     wallet_id UUID PRIMARY KEY REFERENCES wallets(id) ON DELETE CASCADE,
     total_spent_sol NUMERIC(20,9) DEFAULT 0,
@@ -109,7 +107,7 @@ CREATE TABLE IF NOT EXISTS wallet_stats (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating monitoring_stats table for system monitoring metrics
+-- Monitoring stats table remains the same
 CREATE TABLE IF NOT EXISTS monitoring_stats (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     processed_signatures BIGINT DEFAULT 0,
@@ -119,10 +117,10 @@ CREATE TABLE IF NOT EXISTS monitoring_stats (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Creating indexes for improved query performance
+-- Updated indexes for global access
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);
-CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
 CREATE INDEX IF NOT EXISTS idx_wallets_group_id ON wallets(group_id);
+CREATE INDEX IF NOT EXISTS idx_wallets_added_by ON wallets(added_by);
 CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_block_time ON transactions(block_time);
 CREATE INDEX IF NOT EXISTS idx_token_operations_transaction_id ON token_operations(transaction_id);
@@ -130,10 +128,24 @@ CREATE INDEX IF NOT EXISTS idx_token_operations_token_id ON token_operations(tok
 CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_whitelist_telegram_id ON whitelist(telegram_id);
-CREATE INDEX IF NOT EXISTS idx_groups_user_id ON groups(user_id);
+CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
 
-ALTER TABLE wallets
-ADD COLUMN IF NOT EXISTS group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
+-- Migration script to remove user-specific constraints
+DO $$ 
+BEGIN
+    -- Drop old constraints if they exist
+    ALTER TABLE wallets DROP CONSTRAINT IF EXISTS unique_wallet_address_per_user;
+    ALTER TABLE groups DROP CONSTRAINT IF EXISTS unique_group_name_per_user;
+    
+    -- Remove user_id columns if they still exist
+    ALTER TABLE wallets DROP COLUMN IF EXISTS user_id;
+    ALTER TABLE groups DROP COLUMN IF EXISTS user_id;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Migration constraint or column may not exist: %', SQLERRM;
+END $$;
+
+-- Insert default admin user
 INSERT INTO users (telegram_id, username, first_name, is_admin, is_active)
 VALUES (789676557, 'admin', 'Admin', true, true)
 ON CONFLICT (telegram_id) DO UPDATE SET

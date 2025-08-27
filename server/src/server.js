@@ -9,7 +9,6 @@ const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
 const PriceService = require('./services/priceService');
 
-// Добавить после создания других сервисов
 const priceService = new PriceService();
 const app = express();
 const port = process.env.PORT || 5001;
@@ -60,24 +59,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Authentication routes
+// Authentication routes - остаются прежними для входа пользователей
 app.post('/api/auth/telegram-simple', async (req, res) => {
   try {
     const { id, first_name, last_name, username } = req.body;
     
-    // Validate required fields
     if (!id) {
       return res.status(400).json({ error: 'Telegram ID is required' });
     }
     
-    // Validate ID is a number
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: 'Invalid Telegram ID format' });
     }
     
     console.log(`[${new Date().toISOString()}] 🔐 Simple auth attempt for Telegram ID: ${id}`);
     
-    // Check if user is whitelisted
     const isWhitelisted = await auth.isUserWhitelisted(id);
     if (!isWhitelisted) {
       return res.status(403).json({ 
@@ -85,7 +81,6 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
       });
     }
     
-    // Create or update user with provided information
     const userData = {
       id,
       username: username || null,
@@ -101,7 +96,6 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
       });
     }
     
-    // Create session
     const session = await auth.createUserSession(user.id);
     
     console.log(`[${new Date().toISOString()}] ✅ User authenticated via simple auth: ${user.username || user.first_name} (${user.telegram_id})`);
@@ -126,17 +120,14 @@ app.post('/api/auth/telegram-simple', async (req, res) => {
   }
 });
 
-// Original Telegram widget authentication (fallback)
 app.post('/api/auth/telegram', async (req, res) => {
   try {
     const telegramData = req.body;
     
-    // Verify Telegram auth data (skip for simple auth)
     if (telegramData.hash !== 'simple_auth') {
       auth.verifyTelegramAuth(telegramData);
     }
     
-    // Check if user is whitelisted
     const isWhitelisted = await auth.isUserWhitelisted(telegramData.id);
     if (!isWhitelisted) {
       return res.status(403).json({ 
@@ -144,7 +135,6 @@ app.post('/api/auth/telegram', async (req, res) => {
       });
     }
     
-    // Create or update user
     const user = await auth.createOrUpdateUser(telegramData);
     
     if (!user.is_active) {
@@ -153,7 +143,6 @@ app.post('/api/auth/telegram', async (req, res) => {
       });
     }
     
-    // Create session
     const session = await auth.createUserSession(user.id);
     
     console.log(`[${new Date().toISOString()}] ✅ User authenticated: ${user.username || user.first_name} (${user.telegram_id})`);
@@ -178,7 +167,6 @@ app.post('/api/auth/telegram', async (req, res) => {
   }
 });
 
-// Validation route with better error handling
 app.get('/api/auth/validate', auth.authRequired, (req, res) => {
   try {
     res.json({
@@ -191,7 +179,6 @@ app.get('/api/auth/validate', auth.authRequired, (req, res) => {
   }
 });
 
-// Logout with better cleanup
 app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -202,24 +189,11 @@ app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Logout error:`, error.message);
-    // Even if logout fails, return success to clear client state
     res.json({ success: true, message: 'Logout completed' });
   }
 });
 
-app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    const sessionToken = authHeader.substring(7);
-    await auth.revokeSession(sessionToken);
-    res.json({ success: true, message: 'Logged out successfully' });
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Logout error:`, error.message);
-    res.status(500).json({ error: 'Failed to logout' });
-  }
-});
-
-// Admin routes
+// Admin routes - остаются прежними
 app.get('/api/admin/whitelist', auth.authRequired, auth.adminRequired, async (req, res) => {
   try {
     const whitelist = await auth.getWhitelist();
@@ -302,7 +276,6 @@ app.patch('/api/admin/users/:userId/admin', auth.authRequired, auth.adminRequire
     const { userId } = req.params;
     const { isAdmin } = req.body;
     
-    // Prevent removing admin from yourself
     if (userId === req.user.id && !isAdmin) {
       return res.status(400).json({ error: 'You cannot remove admin privileges from yourself' });
     }
@@ -347,26 +320,23 @@ app.get('/api/admin/stats', auth.authRequired, auth.adminRequired, async (req, r
   }
 });
 
-// Protected routes - all existing routes now require authentication
+// ОБНОВЛЕНО: SSE без фильтрации по пользователям - все пользователи видят все транзакции
 app.get('/api/transactions/stream', async (req, res) => {
   try {
-    // Get token from query parameter or Authorization header
     const token = req.query.token || (req.headers.authorization && req.headers.authorization.substring(7));
     
     if (!token) {
       return res.status(401).json({ error: 'No authentication token provided' });
     }
 
-    // Validate the session token
     const session = await auth.validateSession(token);
     if (!session) {
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
     const groupId = req.query.groupId || null;
-    const userId = session.user_id;
     
-    console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
+    console.log(`[${new Date().toISOString()}] ✅ SSE client authenticated: ${session.user_id}${groupId ? `, group ${groupId}` : ' (global)'}`);
     
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -383,7 +353,7 @@ app.get('/api/transactions/stream', async (req, res) => {
         res.status(500).end();
         return;
       }
-      console.log(`[${new Date().toISOString()}] ✅ New SSE client connected for user ${userId}${groupId ? `, group ${groupId}` : ''}`);
+      console.log(`[${new Date().toISOString()}] ✅ New SSE client connected globally${groupId ? ` for group ${groupId}` : ''}`);
       sseClients.add(res);
     });
 
@@ -392,28 +362,12 @@ app.get('/api/transactions/stream', async (req, res) => {
         try {
           const transaction = JSON.parse(message);
           
-          // ВАЖНО: Проверяем принадлежность транзакции пользователю
-          // Получаем информацию о кошельке из базы данных
-          const wallet = await db.getWalletByAddress(transaction.walletAddress);
-          
-          if (!wallet) {
-            // console.log(`[${new Date().toISOString()}] ⏭️ Wallet ${transaction.walletAddress} not found, skipping transaction`);
+          // Фильтруем только по группе если указана
+          if (groupId && transaction.groupId !== groupId) {
             return;
           }
           
-          // Фильтруем по пользователю
-          if (wallet.user_id !== userId) {
-            // console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different user (${wallet.user_id} != ${userId}), skipping`);
-            return;
-          }
-          
-          // Фильтруем по группе если указана
-          if (groupId !== null && wallet.group_id !== groupId) {
-            // console.log(`[${new Date().toISOString()}] ⏭️ Transaction for wallet ${transaction.walletAddress} belongs to different group (${wallet.group_id} != ${groupId}), skipping`);
-            return;
-          }
-          
-          console.log(`[${new Date().toISOString()}] 📡 Sending SSE message for user ${userId}: ${transaction.signature}`);
+          console.log(`[${new Date().toISOString()}] 📡 Broadcasting SSE message globally: ${transaction.signature}`);
           res.write(`data: ${message}\n\n`);
         } catch (error) {
           console.error(`[${new Date().toISOString()}] ❌ Error filtering SSE message:`, error.message);
@@ -422,7 +376,7 @@ app.get('/api/transactions/stream', async (req, res) => {
     });
 
     req.on('close', () => {
-      console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected for user ${userId}`);
+      console.log(`[${new Date().toISOString()}] 🔌 SSE client disconnected`);
       subscriber.unsubscribe();
       subscriber.quit();
       sseClients.delete(res);
@@ -443,15 +397,14 @@ app.get('/api/transactions/stream', async (req, res) => {
   }
 });
 
+// ОБНОВЛЕНО: Глобальные эндпоинты кошельков - без фильтрации по пользователям
 app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     
-    // console.log(`[${new Date().toISOString()}] ⚡ Fast wallet count request for user ${userId}, group ${groupId}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Global wallet count request${groupId ? ` for group ${groupId}` : ''}`);
     
-    // Используем оптимизированный метод из базы данных
-    const countData = await db.getWalletCountFast(userId, groupId);
+    const countData = await db.getWalletCountFast(groupId);
     
     res.json({
       success: true,
@@ -469,7 +422,6 @@ app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
 app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
   try {
     const { addresses } = req.body;
-    const userId = req.user.id;
 
     if (!addresses || !Array.isArray(addresses)) {
       return res.status(400).json({ error: 'Addresses array is required' });
@@ -479,15 +431,51 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 100,000 addresses allowed for validation' });
     }
 
-    // console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses globally`);
 
-    const validation = await db.validateWalletsBatch(addresses, userId);
+    // ОБНОВЛЕНО: Валидация без пользователя - проверяем глобальные дубликаты
+    const existingQuery = `
+      SELECT address 
+      FROM wallets 
+      WHERE address = ANY($1) AND is_active = true
+    `;
+    
+    const result = await db.pool.query(existingQuery, [addresses]);
+    const existingAddresses = new Set(result.rows.map(row => row.address));
+
+    const valid = [];
+    const duplicates = [];
+    const invalid = [];
+
+    const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]+$/;
+
+    addresses.forEach(address => {
+      if (!address || address.length < 32 || address.length > 44 || !solanaAddressRegex.test(address)) {
+        invalid.push(address);
+      } else if (existingAddresses.has(address)) {
+        duplicates.push(address);
+      } else {
+        valid.push(address);
+      }
+    });
+
+    const validation = {
+      valid,
+      duplicates,
+      invalid,
+      summary: {
+        total: addresses.length,
+        validCount: valid.length,
+        duplicateCount: duplicates.length,
+        invalidCount: invalid.length
+      }
+    };
     
     res.json({
       success: true,
       validation,
       canProceed: validation.valid.length > 0,
-      message: `Validation complete: ${validation.valid.length} valid, ${validation.duplicates.length} duplicates, ${validation.invalid.length} invalid`
+      message: `Global validation complete: ${validation.valid.length} valid, ${validation.duplicates.length} duplicates, ${validation.invalid.length} invalid`
     });
 
   } catch (error) {
@@ -499,16 +487,14 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
 app.get('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
-    const includeStats = req.query.includeStats === 'true'; // Опциональная статистика
-    const limit = parseInt(req.query.limit) || 50; // Лимит по умолчанию
+    const includeStats = req.query.includeStats === 'true';
+    const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
     
-    // console.log(`[${new Date().toISOString()}] 📋 Wallets request: user ${userId}, group ${groupId}, stats: ${includeStats}, limit: ${limit}`);
+    console.log(`[${new Date().toISOString()}] 📋 Global wallets request${groupId ? ` for group ${groupId}` : ''}, stats: ${includeStats}, limit: ${limit}`);
     
     if (includeStats) {
-      // Старая логика со статистикой (только если явно запрошена)
-      const wallets = await db.getActiveWallets(groupId, userId);
+      const wallets = await db.getActiveWallets(groupId);
       const walletsWithStats = await Promise.all(
         wallets.slice(offset, offset + limit).map(async (wallet) => {
           const stats = await db.getWalletStats(wallet.id);
@@ -528,25 +514,26 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
       );
       res.json(walletsWithStats);
     } else {
-      // Быстрая загрузка без статистики (только базовая информация)
       let query = `
         SELECT w.id, w.address, w.name, w.group_id, w.created_at,
-               g.name as group_name,
+               g.name as group_name, u.username as added_by_username,
                COUNT(*) OVER() as total_count
         FROM wallets w
         LEFT JOIN groups g ON w.group_id = g.id
-        WHERE w.is_active = TRUE AND w.user_id = $1
+        LEFT JOIN users u ON w.added_by = u.id
+        WHERE w.is_active = TRUE
       `;
-      const params = [userId];
-      let paramIndex = 2;
+      const params = [];
       
       if (groupId) {
-        query += ` AND w.group_id = $${paramIndex++}`;
+        query += ` AND w.group_id = $1`;
         params.push(groupId);
+        query += ` ORDER BY w.created_at DESC LIMIT $2 OFFSET $3`;
+        params.push(limit, offset);
+      } else {
+        query += ` ORDER BY w.created_at DESC LIMIT $1 OFFSET $2`;
+        params.push(limit, offset);
       }
-      
-      query += ` ORDER BY w.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
-      params.push(limit, offset);
       
       const result = await db.pool.query(query, params);
       
@@ -556,8 +543,8 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
         name: row.name,
         group_id: row.group_id,
         group_name: row.group_name,
+        added_by_username: row.added_by_username,
         created_at: row.created_at,
-        // Базовая статистика заглушка
         stats: {
           totalTransactions: 0,
           totalSpentSOL: "0.000000",
@@ -583,15 +570,15 @@ app.get('/api/wallets', auth.authRequired, async (req, res) => {
 app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
   try {
     const address = req.params.address.trim();
-    const userId = req.user.id;
 
     if (!address || address.length < 32 || address.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
-  }
-    // Check if wallet belongs to user
+    }
+
+    // ОБНОВЛЕНО: Проверяем существование кошелька глобально (без пользователя)
     const wallet = await db.getWalletByAddress(address);
-    if (!wallet || wallet.user_id !== userId) {
-      return res.status(404).json({ error: 'Wallet not found or access denied' });
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
     }
 
     await solanaWebSocketService.removeWallet(address);
@@ -612,19 +599,17 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
 app.delete('/api/wallets', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     
-    // console.log(`[${new Date().toISOString()}] 🗑️ Ultra-fast removal request: user ${userId}, group ${groupId}`);
+    console.log(`[${new Date().toISOString()}] 🗑️ Global removal request${groupId ? ` for group ${groupId}` : ''}`);
     
-    // Быстрое удаление через WebSocket сервис (он обновит подписки)
-    await solanaWebSocketService.removeAllWallets(groupId, userId);
+    // ОБНОВЛЕНО: Удаляем кошельки глобально (без фильтрации по пользователю)
+    await solanaWebSocketService.removeAllWallets(groupId);
     
-    // Получаем новые счетчики
-    const newCounts = await db.getWalletCountFast(userId, groupId);
+    const newCounts = await db.getWalletCountFast(groupId);
     
     res.json({
       success: true,
-      message: `Successfully removed wallets and WebSocket subscriptions${groupId ? ` for group ${groupId}` : ''}`,
+      message: `Successfully removed wallets and WebSocket subscriptions${groupId ? ` for group ${groupId}` : ' globally'}`,
       newCounts: {
         totalWallets: newCounts.totalWallets,
         groups: newCounts.groups,
@@ -633,33 +618,33 @@ app.delete('/api/wallets', auth.authRequired, async (req, res) => {
     });
     
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in ultra-fast wallet removal:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error in global wallet removal:`, error);
     res.status(500).json({ error: 'Failed to remove wallets' });
   }
 });
 
+// ОБНОВЛЕНО: Глобальный эндпоинт инициализации
 app.get('/api/init', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     const hours = parseInt(req.query.hours) || 24;
     const transactionType = req.query.type;
     
-    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-FAST app initialization for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] 🚀 Global app initialization${groupId ? ` for group ${groupId}` : ''}`);
     const startTime = Date.now();
     
-    // Параллельная загрузка всех необходимых данных
+    // ОБНОВЛЕНО: Загрузка данных глобально (без userId)
     const [walletCounts, transactions, monitoringStatus, groups] = await Promise.all([
-      db.getWalletCountFast(userId, groupId),
-      db.getRecentTransactionsOptimized(hours, 400, transactionType, groupId, userId),
-      db.getMonitoringStatusFast(groupId, userId),
-      db.getGroups(userId)
+      db.getWalletCountFast(groupId),
+      db.getRecentTransactionsOptimized(hours, 400, transactionType, groupId),
+      db.getMonitoringStatusFast(groupId),
+      db.getGroups()
     ]);
     
     const websocketStatus = solanaWebSocketService.getStatus();
     
     const duration = Date.now() - startTime;
-    // console.log(`[${new Date().toISOString()}] ⚡ ULTRA-FAST initialization completed in ${duration}ms`);
+    console.log(`[${new Date().toISOString()}] ⚡ Global initialization completed in ${duration}ms`);
     
     res.json({
       success: true,
@@ -687,13 +672,13 @@ app.get('/api/init', auth.authRequired, async (req, res) => {
         groups,
         performance: {
           loadTime: duration,
-          optimizationLevel: 'ULTRA-FAST'
+          optimizationLevel: 'GLOBAL'
         }
       }
     });
     
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in ultra-fast initialization:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error in global initialization:`, error);
     res.status(500).json({ error: 'Failed to initialize application data' });
   }
 });
@@ -704,18 +689,17 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
     const limit = parseInt(req.query.limit) || 400;
     const type = req.query.type;
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
 
-    // console.log(`[${new Date().toISOString()}] ⚡ Optimized transactions request for user ${userId}, group ${groupId}, hours ${hours}, type ${type}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Global transactions request${groupId ? ` for group ${groupId}` : ''}, hours ${hours}, type ${type}`);
 
-    // Используем оптимизированный метод транзакций
-    const transactions = await db.getRecentTransactionsOptimized(hours, limit, type, groupId, userId);
+    // ОБНОВЛЕНО: Получаем транзакции глобально (без userId)
+    const transactions = await db.getRecentTransactionsOptimized(hours, limit, type, groupId);
     
-    // console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} optimized transactions for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} global transactions${groupId ? ` for group ${groupId}` : ''}`);
     res.json(transactions);
     
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error fetching optimized transactions:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching global transactions:`, error);
     res.status(500).json({ error: 'Failed to fetch transactions' });
   }
 });
@@ -723,14 +707,13 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
 app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
-    const userId = req.user.id;
     
-    // console.log(`[${new Date().toISOString()}] ⚡ Fast monitoring status for user ${userId}, group ${groupId}`);
+    console.log(`[${new Date().toISOString()}] ⚡ Global monitoring status${groupId ? ` for group ${groupId}` : ''}`);
     
-    // Параллельное получение статуса WebSocket и статистики базы данных
+    // ОБНОВЛЕНО: Статус мониторинга глобально (без userId)
     const [websocketStatus, dbStats] = await Promise.all([
       Promise.resolve(solanaWebSocketService.getStatus()),
-      db.getMonitoringStatusFast(groupId, userId)
+      db.getMonitoringStatusFast(groupId)
     ]);
     
     res.json({
@@ -748,59 +731,40 @@ app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
     });
     
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error getting optimized monitoring status:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error getting global monitoring status:`, error);
     res.status(500).json({ error: 'Failed to get monitoring status' });
   }
 });
 
+// ОБНОВЛЕНО: Глобальное переключение мониторинга - без ограничения пользователя
 app.post('/api/monitoring/toggle', auth.authRequired, async (req, res) => {
   try {
     const { action, groupId } = req.body;
-    const userId = req.user.id;
 
     if (action === 'start') {
-      await solanaWebSocketService.start(groupId, userId);
-      res.json({ success: true, message: `WebSocket monitoring started${groupId ? ` for group ${groupId}` : ''}` });
+      await solanaWebSocketService.start(groupId); // Убрали параметр userId
+      res.json({ success: true, message: `Global WebSocket monitoring started${groupId ? ` for group ${groupId}` : ''}` });
     } else if (action === 'stop') {
       await solanaWebSocketService.stop();
-      res.json({ success: true, message: 'WebSocket monitoring stopped' });
+      res.json({ success: true, message: 'Global WebSocket monitoring stopped' });
     } else {
       res.status(400).json({ error: 'Invalid action. Use "start" or "stop"' });
     }
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error toggling monitoring:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Error toggling global monitoring:`, error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/wallets/bulk', auth.authRequired, async (req, res) => {
-  // Перенаправляем на оптимизированный эндпоинт
-  req.body.optimized = false; // Флаг что это не оптимизированный запрос
-  
-  // Если chunk size больше 500, разбиваем на меньшие части
-  const { wallets } = req.body;
-  if (wallets && wallets.length > 500) {
-    // console.log(`[${new Date().toISOString()}] 🔄 Large non-optimized request (${wallets.length} wallets), redirecting to optimized endpoint`);
-    req.body.optimized = true;
-  }
-  
-  // Вызываем тот же обработчик
-  return app._router.handle(req, res, (err) => {
-    if (err) {
-      console.error('Error in bulk handler redirect:', err);
-      res.status(500).json({ success: false, error: 'Internal server error' });
-    }
-  });
-});
-
+// ОБНОВЛЕНО: Глобальный массовый импорт кошельков
 app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   const startTime = Date.now();
   
   try {
-    const { wallets, groupId, optimized } = req.body;
-    const userId = req.user.id;
+    const { wallets, groupId } = req.body;
+    const addedBy = req.user.id; // Отслеживаем кто добавил
 
-    // console.log(`[${new Date().toISOString()}] 🚀 ULTRA-OPTIMIZED bulk import: ${wallets?.length || 0} wallets for user ${userId}`);
+    console.log(`[${new Date().toISOString()}] 🚀 Global bulk import: ${wallets?.length || 0} wallets by user ${req.user.username || req.user.id}`);
 
     if (!wallets || !Array.isArray(wallets) || wallets.length === 0) {
       return res.status(400).json({ 
@@ -812,7 +776,7 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     if (wallets.length > 1000) {
       return res.status(400).json({ 
         success: false,
-        error: 'Maximum 1,000 wallets allowed per ultra-optimized batch' 
+        error: 'Maximum 1,000 wallets allowed per batch' 
       });
     }
 
@@ -826,8 +790,8 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       newCounts: null
     };
 
-    // 1. БЫСТРАЯ ВАЛИДАЦИЯ (без обращения к БД)
-    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast local validation...`);
+    // Быстрая локальная валидация
+    console.log(`[${new Date().toISOString()}] ⚡ Global validation...`);
     const validationStart = Date.now();
 
     const validWallets = [];
@@ -847,7 +811,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 
       const address = wallet.address.trim();
 
-      // Проверка формата
       if (address.length < 32 || address.length > 44 || !solanaAddressRegex.test(address)) {
         results.failed++;
         results.errors.push({
@@ -858,7 +821,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
         continue;
       }
 
-      // Проверка дубликатов в текущем batch
       if (seenAddresses.has(address)) {
         results.failed++;
         results.errors.push({
@@ -873,13 +835,13 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       validWallets.push({
         address: address,
         name: wallet.name?.trim() || null,
-        userId,
+        addedBy,
         groupId: groupId || null
       });
     }
 
     const validationTime = Date.now() - validationStart;
-    // console.log(`[${new Date().toISOString()}] ⚡ Ultra-fast validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
+    console.log(`[${new Date().toISOString()}] ⚡ Global validation completed in ${validationTime}ms: ${validWallets.length}/${wallets.length} valid`);
 
     if (validWallets.length === 0) {
       return res.json({
@@ -890,58 +852,56 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       });
     }
 
-    // 2. ULTRA-OPTIMIZED DATABASE BATCH INSERT С СЧЕТЧИКАМИ
-    // console.log(`[${new Date().toISOString()}] 🗄️ Ultra-optimized database operation...`);
+    // Глобальная база данных batch insert
+    console.log(`[${new Date().toISOString()}] 🗄️ Global database operation...`);
     const dbStart = Date.now();
 
     try {
-      // Используем новый оптимизированный метод с подсчетом
-      const dbResult = await db.addWalletsBatchOptimizedWithCount(validWallets);
+      const insertedWallets = await db.addWalletsBatchOptimized(validWallets);
       
       const dbTime = Date.now() - dbStart;
-      // console.log(`[${new Date().toISOString()}] ⚡ Ultra-optimized DB completed in ${dbTime}ms: ${dbResult.insertedWallets.length} wallets`);
+      console.log(`[${new Date().toISOString()}] ⚡ Global DB completed in ${dbTime}ms: ${insertedWallets.length} wallets`);
 
-      results.successful = dbResult.insertedWallets.length;
-      results.failed += (validWallets.length - dbResult.insertedWallets.length); // дубликаты в БД
-      results.successfulWallets = dbResult.insertedWallets.map(wallet => ({
+      results.successful = insertedWallets.length;
+      results.failed += (validWallets.length - insertedWallets.length);
+      results.successfulWallets = insertedWallets.map(wallet => ({
         address: wallet.address,
         name: wallet.name,
         id: wallet.id,
         groupId: wallet.group_id,
-        userId: wallet.user_id
+        addedBy: wallet.added_by
       }));
-      results.newCounts = dbResult.counts;
+
+      // Обновляем счетчики
+      const newCounts = await db.getWalletCountFast(groupId);
+      results.newCounts = newCounts;
 
     } catch (dbError) {
-      console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized DB error:`, dbError.message);
+      console.error(`[${new Date().toISOString()}] ❌ Global DB error:`, dbError.message);
       throw new Error(`Database operation failed: ${dbError.message}`);
     }
 
-    // 3. ПАРАЛЛЕЛЬНАЯ WEBSOCKET ПОДПИСКА (неблокирующая)
+    // Неблокирующая подписка WebSocket
     if (results.successful > 0) {
-      // console.log(`[${new Date().toISOString()}] 🔗 Starting non-blocking WebSocket subscriptions...`);
+      console.log(`[${new Date().toISOString()}] 🔗 Starting global WebSocket subscriptions...`);
       
-      // Запускаем подписку асинхронно, не ждем завершения
       setImmediate(async () => {
         try {
           const addressesToSubscribe = results.successfulWallets.map(w => w.address);
           
-          // Подписываемся только если кошельки подходят под активную область
+          // Подписываемся если релевантно для активного мониторинга
           const relevantAddresses = results.successfulWallets
-            .filter(wallet => 
-              (!solanaWebSocketService.activeUserId || wallet.userId === solanaWebSocketService.activeUserId) &&
-              (!solanaWebSocketService.activeGroupId || wallet.groupId === solanaWebSocketService.activeGroupId)
-            )
+            .filter(wallet => !solanaWebSocketService.activeGroupId || wallet.groupId === solanaWebSocketService.activeGroupId)
             .map(w => w.address);
 
           if (relevantAddresses.length > 0 && solanaWebSocketService.ws && solanaWebSocketService.ws.readyState === 1) {
             await solanaWebSocketService.subscribeToWalletsBatch(relevantAddresses, 200);
-            console.log(`[${new Date().toISOString()}] ✅ Async WebSocket subscriptions completed: ${relevantAddresses.length} wallets`);
+            console.log(`[${new Date().toISOString()}] ✅ Global WebSocket subscriptions completed: ${relevantAddresses.length} wallets`);
           } else {
             console.log(`[${new Date().toISOString()}] ⏭️ Skipping WebSocket subscriptions: ${relevantAddresses.length} relevant, WS ready: ${solanaWebSocketService.ws?.readyState === 1}`);
           }
         } catch (wsError) {
-          console.warn(`[${new Date().toISOString()}] ⚠️ Async WebSocket subscription failed:`, wsError.message);
+          console.warn(`[${new Date().toISOString()}] ⚠️ Global WebSocket subscription failed:`, wsError.message);
         }
       });
     }
@@ -949,34 +909,35 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
     const duration = Date.now() - startTime;
     const walletsPerSecond = Math.round((results.successful / duration) * 1000);
 
-    // console.log(`[${new Date().toISOString()}] 🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
+    console.log(`[${new Date().toISOString()}] 🎉 Global bulk import completed in ${duration}ms: ${results.successful}/${results.total} successful (${walletsPerSecond} wallets/sec)`);
 
     res.json({
       success: results.successful > 0,
-      message: `Import: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
+      message: `Global import: ${results.successful} successful, ${results.failed} failed out of ${results.total} total`,
       results,
       duration,
       performance: {
         walletsPerSecond,
         totalTime: duration,
         averageTimePerWallet: Math.round(duration / results.total),
-        optimizationLevel: 'ULTRA'
+        optimizationLevel: 'GLOBAL'
       }
     });
 
   } catch (error) {
     const duration = Date.now() - startTime;
-    console.error(`[${new Date().toISOString()}] ❌ Ultra-optimized bulk import failed after ${duration}ms:`, error);
+    console.error(`[${new Date().toISOString()}] ❌ Global bulk import failed after ${duration}ms:`, error);
     
     res.status(500).json({ 
       success: false,
-      error: 'Internal server error during ultra-optimized bulk import',
+      error: 'Internal server error during global bulk import',
       details: error.message,
       duration
     });
   }
 });
 
+// Эндпоинты цен остаются прежними
 app.get('/api/solana/price', auth.authRequired, async (req, res) => {
   try {
     const priceData = await priceService.getSolPrice();
@@ -986,12 +947,11 @@ app.get('/api/solana/price', auth.authRequired, async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Failed to fetch SOL price',
-      price: 150 // Fallback price
+      price: 150
     });
   }
 });
 
-// Новый эндпоинт для получения цен токенов в batch
 app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
   try {
     const { mints } = req.body;
@@ -1010,7 +970,6 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
     const prices = await priceService.getTokenPrices(mints);
     const duration = Date.now() - startTime;
     
-    // Convert Map to object for JSON response
     const result = {};
     prices.forEach((data, mint) => {
       result[mint] = data;
@@ -1030,7 +989,6 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
   }
 });
 
-// Эндпоинт для статистики сервиса цен
 app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) => {
   try {
     const stats = priceService.getStats();
@@ -1041,10 +999,10 @@ app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) =
   }
 });
 
+// ОБНОВЛЕНО: Глобальные группы - без владения пользователями
 app.get('/api/groups', auth.authRequired, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const groups = await db.getGroups(userId);
+    const groups = await db.getGroups();
     res.json(groups);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error fetching groups:`, error);
@@ -1055,46 +1013,46 @@ app.get('/api/groups', auth.authRequired, async (req, res) => {
 app.post('/api/groups', auth.authRequired, async (req, res) => {
   try {
     const { name } = req.body;
-    const userId = req.user.id;
+    const createdBy = req.user.id;
     
     if (!name || name.trim().length === 0) {
       return res.status(400).json({ error: 'Group name is required' });
     }
     
-    const group = await db.addGroup(name.trim(), userId);
+    const group = await db.addGroup(name.trim(), createdBy);
     res.json({
       success: true,
       group,
-      message: 'Group created successfully',
+      message: 'Global group created successfully',
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error creating group:`, error);
     if (error.message.includes('already exists')) {
-      res.status(409).json({ error: 'Group name already exists' });
+      res.status(409).json({ error: 'Group name already exists globally' });
     } else {
       res.status(500).json({ error: 'Failed to create group' });
     }
   }
 });
 
+// ОБНОВЛЕНО: Глобальное переключение групп - без ограничения пользователя
 app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
   try {
     const { groupId } = req.body;
-    const userId = req.user.id;
     
-    // Verify group belongs to user if groupId is provided
+    // Проверяем существование группы если указан groupId
     if (groupId) {
-      const query = `SELECT id FROM groups WHERE id = $1 AND user_id = $2`;
-      const result = await db.pool.query(query, [groupId, userId]);
+      const query = `SELECT id FROM groups WHERE id = $1`;
+      const result = await db.pool.query(query, [groupId]);
       if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'Group not found or access denied' });
+        return res.status(404).json({ error: 'Group not found' });
       }
     }
     
-    await solanaWebSocketService.switchGroup(groupId, userId);
+    await solanaWebSocketService.switchGroup(groupId); // Убрали параметр userId
     res.json({
       success: true,
-      message: `Switched to group ${groupId || 'all'}`,
+      message: `Switched to global group ${groupId || 'all'}`,
     });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error switching group:`, error);
@@ -1102,7 +1060,7 @@ app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
   }
 });
 
-// Clean expired sessions periodically
+// Периодическая очистка истекших сессий
 setInterval(async () => {
   try {
     const cleaned = await auth.cleanExpiredSessions();
@@ -1112,7 +1070,7 @@ setInterval(async () => {
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error cleaning sessions:`, error);
   }
-}, 60 * 60 * 1000); // Every hour
+}, 60 * 60 * 1000);
 
 app.use((error, req, res, next) => {
   console.error(`[${new Date().toISOString()}] ❌ Server Error:`, error);
@@ -1178,13 +1136,13 @@ const startWebSocketService = async () => {
 
   while (retries < maxRetries) {
     try {
-      await solanaWebSocketService.start();
-      console.log(`[${new Date().toISOString()}] 🚀 Solana WebSocket service started successfully`);
+      await solanaWebSocketService.start(); // Убрали параметр userId
+      console.log(`[${new Date().toISOString()}] 🚀 Global Solana WebSocket service started successfully`);
       return;
     } catch (error) {
       retries++;
       console.error(
-        `[${new Date().toISOString()}] ❌ Failed to start Solana WebSocket service (attempt ${retries}/${maxRetries}):`,
+        `[${new Date().toISOString()}] ❌ Failed to start global WebSocket service (attempt ${retries}/${maxRetries}):`,
         error.message
       );
       if (retries < maxRetries) {
@@ -1193,11 +1151,12 @@ const startWebSocketService = async () => {
       }
     }
   }
-  console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. WebSocket service failed to start.`);
+  console.error(`[${new Date().toISOString()}] 🛑 Max retries reached. Global WebSocket service failed to start.`);
 };
 
 setTimeout(startWebSocketService, 2000);
 
 https.createServer(sslOptions, app).listen(port, '0.0.0.0', () => {
-    console.log(`[${new Date().toISOString()}] 🚀 Server running on https://0.0.0.0:${port}`);
+    console.log(`[${new Date().toISOString()}] 🚀 Global wallet monitoring server running on https://0.0.0.0:${port}`);
+    console.log(`[${new Date().toISOString()}] 🌍 System mode: GLOBAL - All users share wallets, groups, and monitoring`);
 });
