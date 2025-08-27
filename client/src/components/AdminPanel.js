@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const AdminPanel = ({ user, onClose }) => {
+const AdminPanel = ({ user, onClose, isSharedSession }) => {
   const [activeTab, setActiveTab] = useState('whitelist');
   const [whitelist, setWhitelist] = useState([]);
   const [users, setUsers] = useState([]);
@@ -10,23 +10,38 @@ const AdminPanel = ({ user, onClose }) => {
   const [newUserNotes, setNewUserNotes] = useState('');
   const [error, setError] = useState('');
 
+  console.log('🔑 AdminPanel initialized with user:', user, 'isSharedSession:', isSharedSession);
+
   // Get API base URL from environment or use default
   const getApiBase = () => {
-    // In production, this should be configured properly
     if (window.location.hostname === 'localhost') {
       return 'http://localhost:5001/api';
     }
-    // Try the main API endpoint first
     return process.env.REACT_APP_API_BASE || '/api';
   };
 
-  // Helper function to get auth headers
+  // Helper function to get auth headers with proper user identification
   const getAuthHeaders = () => {
     const sessionToken = localStorage.getItem('sessionToken');
-    return {
+    const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${sessionToken}`
     };
+    
+    // ВАЖНО: В общей сессии передаем данные пользователя через заголовки
+    if (isSharedSession && user) {
+      if (user.telegramId) {
+        headers['X-Telegram-ID'] = user.telegramId.toString();
+        console.log('🔑 Adding X-Telegram-ID header:', user.telegramId);
+      }
+      if (user.id && user.id !== 'shared-user') {
+        headers['X-User-ID'] = user.id;
+        console.log('🔑 Adding X-User-ID header:', user.id);
+      }
+    }
+    
+    console.log('📋 Admin request headers:', headers);
+    return headers;
   };
 
   // Enhanced fetch with better error handling
@@ -34,13 +49,19 @@ const AdminPanel = ({ user, onClose }) => {
     try {
       setError(''); // Clear previous errors
       
+      const headers = getAuthHeaders();
+      console.log(`🌐 Making admin request to: ${url}`);
+      console.log('📋 Request headers:', headers);
+      
       const response = await fetch(url, {
         ...options,
         headers: {
-          ...getAuthHeaders(),
+          ...headers,
           ...options.headers
         }
       });
+
+      console.log(`📡 Response status: ${response.status}`);
 
       if (!response.ok) {
         if (response.status === 401) {
@@ -57,6 +78,7 @@ const AdminPanel = ({ user, onClose }) => {
 
       return response;
     } catch (error) {
+      console.error('🚨 Admin request error:', error);
       if (error.name === 'TypeError' && error.message.includes('fetch')) {
         // Network errors
         console.error('Network error details:', error);
@@ -79,11 +101,13 @@ const AdminPanel = ({ user, onClose }) => {
   const fetchWhitelist = async () => {
     setLoading(true);
     try {
+      console.log('📋 Fetching whitelist...');
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/whitelist`);
       const data = await response.json();
+      console.log('✅ Whitelist data:', data);
       setWhitelist(data);
     } catch (error) {
-      console.error('Error fetching whitelist:', error);
+      console.error('❌ Error fetching whitelist:', error);
       setError(error.message);
     } finally {
       setLoading(false);
@@ -93,11 +117,13 @@ const AdminPanel = ({ user, onClose }) => {
   const fetchUsers = async () => {
     setLoading(true);
     try {
+      console.log('👥 Fetching users...');
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/users`);
       const data = await response.json();
+      console.log('✅ Users data:', data);
       setUsers(data);
     } catch (error) {
-      console.error('Error fetching users:', error);
+      console.error('❌ Error fetching users:', error);
       setError(error.message);
     } finally {
       setLoading(false);
@@ -107,11 +133,13 @@ const AdminPanel = ({ user, onClose }) => {
   const fetchStats = async () => {
     setLoading(true);
     try {
+      console.log('📊 Fetching stats...');
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/stats`);
       const data = await response.json();
+      console.log('✅ Stats data:', data);
       setStats(data);
     } catch (error) {
-      console.error('Error fetching stats:', error);
+      console.error('❌ Error fetching stats:', error);
       setError(error.message);
     } finally {
       setLoading(false);
@@ -125,6 +153,7 @@ const AdminPanel = ({ user, onClose }) => {
     }
 
     try {
+      console.log('➕ Adding to whitelist:', newTelegramId);
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/whitelist`, {
         method: 'POST',
         body: JSON.stringify({
@@ -138,9 +167,10 @@ const AdminPanel = ({ user, onClose }) => {
         setNewUserNotes('');
         fetchWhitelist();
         setError(''); // Clear any previous errors
+        console.log('✅ Successfully added to whitelist');
       }
     } catch (error) {
-      console.error('Error adding to whitelist:', error);
+      console.error('❌ Error adding to whitelist:', error);
       setError(error.message);
     }
   };
@@ -149,21 +179,24 @@ const AdminPanel = ({ user, onClose }) => {
     if (!confirm(`Remove user ${telegramId} from whitelist?`)) return;
 
     try {
+      console.log('➖ Removing from whitelist:', telegramId);
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/whitelist/${telegramId}`, {
         method: 'DELETE'
       });
 
       if (response.ok) {
         fetchWhitelist();
+        console.log('✅ Successfully removed from whitelist');
       }
     } catch (error) {
-      console.error('Error removing from whitelist:', error);
+      console.error('❌ Error removing from whitelist:', error);
       setError(error.message);
     }
   };
 
   const toggleUserStatus = async (userId, currentStatus) => {
     try {
+      console.log('🔄 Toggling user status:', userId, !currentStatus);
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/users/${userId}/status`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -173,9 +206,10 @@ const AdminPanel = ({ user, onClose }) => {
 
       if (response.ok) {
         fetchUsers();
+        console.log('✅ User status updated');
       }
     } catch (error) {
-      console.error('Error updating user status:', error);
+      console.error('❌ Error updating user status:', error);
       setError(error.message);
     }
   };
@@ -184,6 +218,7 @@ const AdminPanel = ({ user, onClose }) => {
     if (!confirm('Change admin status for this user?')) return;
 
     try {
+      console.log('🔄 Toggling admin status:', userId, !currentStatus);
       const response = await fetchWithErrorHandling(`${getApiBase()}/admin/users/${userId}/admin`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -193,9 +228,10 @@ const AdminPanel = ({ user, onClose }) => {
 
       if (response.ok) {
         fetchUsers();
+        console.log('✅ Admin status updated');
       }
     } catch (error) {
-      console.error('Error updating admin status:', error);
+      console.error('❌ Error updating admin status:', error);
       setError(error.message);
     }
   };
@@ -214,6 +250,17 @@ const AdminPanel = ({ user, onClose }) => {
             </svg>
           </button>
         </div>
+
+        {/* Debug info for troubleshooting */}
+        {isSharedSession && (
+          <div className="px-6 pt-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+              <div className="text-xs text-blue-800">
+                <strong>Debug Info:</strong> Shared Session | User ID: {user?.id} | Telegram ID: {user?.telegramId} | Admin: {user?.isAdmin ? 'Yes' : 'No'}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Error Display */}
         {error && (

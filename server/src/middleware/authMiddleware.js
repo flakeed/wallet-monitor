@@ -150,22 +150,22 @@ class AuthMiddleware {
             if (!authHeader || !authHeader.startsWith('Bearer ')) {
                 return res.status(401).json({ error: 'No valid authorization header' });
             }
-
+    
             const sessionToken = authHeader.substring(7);
             const session = await this.validateSession(sessionToken);
             
             if (!session) {
                 return res.status(401).json({ error: 'Invalid or expired session' });
             }
-
+    
             // Для общей сессии получаем данные пользователя из параметров запроса или заголовков
             if (session.is_shared) {
-                // Пытаемся получить пользователя из специального заголовка
                 const userIdHeader = req.headers['x-user-id'];
                 const telegramIdHeader = req.headers['x-telegram-id'];
                 
-                if (userIdHeader) {
-                    // Получаем данные пользователя по ID
+                console.log(`[${new Date().toISOString()}] 🔍 Shared session auth - telegramId: ${telegramIdHeader}, userId: ${userIdHeader}`);
+                
+                if (userIdHeader && userIdHeader !== 'shared-user') {
                     const user = await this.getUserById(userIdHeader);
                     if (user && user.is_active) {
                         req.user = {
@@ -178,11 +178,11 @@ class AuthMiddleware {
                             isActive: user.is_active
                         };
                         req.isSharedSession = true;
+                        console.log(`[${new Date().toISOString()}] ✅ Shared session user loaded: ${user.username || user.first_name} (admin: ${user.is_admin})`);
                     } else {
                         return res.status(401).json({ error: 'Invalid user data in shared session' });
                     }
                 } else if (telegramIdHeader) {
-                    // Получаем данные пользователя по Telegram ID
                     const user = await this.getUserByTelegramId(parseInt(telegramIdHeader));
                     if (user && user.is_active) {
                         req.user = {
@@ -195,6 +195,7 @@ class AuthMiddleware {
                             isActive: user.is_active
                         };
                         req.isSharedSession = true;
+                        console.log(`[${new Date().toISOString()}] ✅ Shared session user loaded by telegram ID: ${user.username || user.first_name} (admin: ${user.is_admin})`);
                     } else {
                         return res.status(401).json({ error: 'Invalid user data in shared session' });
                     }
@@ -210,6 +211,7 @@ class AuthMiddleware {
                         isActive: true
                     };
                     req.isSharedSession = true;
+                    console.log(`[${new Date().toISOString()}] ✅ Default shared session user`);
                 }
             } else {
                 // Обычная индивидуальная сессия
@@ -223,25 +225,43 @@ class AuthMiddleware {
                     isActive: session.is_active
                 };
                 req.isSharedSession = false;
+                console.log(`[${new Date().toISOString()}] ✅ Individual session user: ${session.username || session.first_name} (admin: ${session.is_admin})`);
             }
-
+    
             next();
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ❌ Auth middleware error:`, error.message);
             res.status(401).json({ error: 'Authentication failed' });
         }
     };
-
     // Admin required middleware (обновлен для общей сессии)
     adminRequired = async (req, res, next) => {
-        if (req.isSharedSession) {
-            // В общей сессии проверяем админа по заголовку
-            const telegramId = req.headers['x-telegram-id'];
-            if (telegramId) {
-                const user = await this.getUserByTelegramId(parseInt(telegramId));
-                if (!user || !user.is_admin) {
+        try {
+            console.log(`[${new Date().toISOString()}] 🔑 Admin access check - shared session: ${req.isSharedSession}`);
+            
+            if (req.isSharedSession) {
+                // В общей сессии проверяем админа по заголовку
+                const telegramId = req.headers['x-telegram-id'];
+                const userId = req.headers['x-user-id'];
+                
+                console.log(`[${new Date().toISOString()}] 🔍 Checking admin access - telegramId: ${telegramId}, userId: ${userId}`);
+                
+                let user = null;
+                
+                if (telegramId) {
+                    user = await this.getUserByTelegramId(parseInt(telegramId));
+                    console.log(`[${new Date().toISOString()}] 👤 User by telegram ID: ${user ? `${user.username || user.first_name} (admin: ${user.is_admin})` : 'not found'}`);
+                } else if (userId && userId !== 'shared-user') {
+                    user = await this.getUserById(userId);
+                    console.log(`[${new Date().toISOString()}] 👤 User by user ID: ${user ? `${user.username || user.first_name} (admin: ${user.is_admin})` : 'not found'}`);
+                }
+                
+                // Если пользователь не найден или не админ
+                if (!user || !user.is_admin || !user.is_active) {
+                    console.log(`[${new Date().toISOString()}] ❌ Admin access denied - user: ${user ? 'found' : 'not found'}, admin: ${user?.is_admin}, active: ${user?.is_active}`);
                     return res.status(403).json({ error: 'Admin access required' });
                 }
+                
                 // Обновляем данные пользователя для админских операций
                 req.user = {
                     id: user.id,
@@ -252,13 +272,22 @@ class AuthMiddleware {
                     isAdmin: user.is_admin,
                     isActive: user.is_active
                 };
+                
+                console.log(`[${new Date().toISOString()}] ✅ Admin access granted for ${user.username || user.first_name} (${user.telegram_id})`);
             } else {
-                return res.status(403).json({ error: 'Admin identification required in shared session' });
+                // Обычная индивидуальная сессия
+                if (!req.user || !req.user.isAdmin) {
+                    console.log(`[${new Date().toISOString()}] ❌ Admin access denied - individual session, user admin: ${req.user?.isAdmin}`);
+                    return res.status(403).json({ error: 'Admin access required' });
+                }
+                console.log(`[${new Date().toISOString()}] ✅ Admin access granted for individual session user ${req.user.id}`);
             }
-        } else if (!req.user || !req.user.isAdmin) {
-            return res.status(403).json({ error: 'Admin access required' });
+            
+            next();
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ❌ Admin middleware error:`, error.message);
+            res.status(500).json({ error: 'Authentication error' });
         }
-        next();
     };
 
     // Получение пользователя по ID

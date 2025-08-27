@@ -1,4 +1,5 @@
-// client/src/components/Header.js - Обновлен для общей сессии
+// client/src/components/Header.js - ИСПРАВЛЕНИЕ для передачи Telegram ID
+
 import React, { useState } from 'react';
 
 function Header({ user, onLogout, onOpenAdmin, isSharedSession }) {
@@ -11,6 +12,13 @@ function Header({ user, onLogout, onOpenAdmin, isSharedSession }) {
 
   const handleAdminClick = () => {
     setShowUserMenu(false);
+    console.log('🔑 Opening admin panel for user:', user);
+    console.log('📋 User details:', {
+      id: user.id,
+      telegramId: user.telegramId,
+      isAdmin: user.isAdmin,
+      isSharedSession
+    });
     onOpenAdmin();
   };
 
@@ -132,6 +140,7 @@ function Header({ user, onLogout, onOpenAdmin, isSharedSession }) {
                         <div>
                           <div className="font-medium">Shared Session</div>
                           <div className="text-xs">All users share the same session token</div>
+                          <div className="text-xs mt-1">Your ID: {user.telegramId}</div>
                         </div>
                       </div>
                     </div>
@@ -173,7 +182,7 @@ function Header({ user, onLogout, onOpenAdmin, isSharedSession }) {
             <span className="text-sm text-green-800">
               <span className="font-medium">Shared Session Active</span>
               <span className="mx-2">•</span>
-              <span>Logged in as {user.firstName || user.username}</span>
+              <span>Logged in as {user.firstName || user.username} (ID: {user.telegramId})</span>
             </span>
           </div>
         </div>
