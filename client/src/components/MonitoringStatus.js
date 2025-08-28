@@ -1,47 +1,43 @@
+// client/src/components/MonitoringStatus.js - Ultra-compact monitoring status
+
 import React from 'react';
 
 function MonitoringStatus({ status, onToggle }) {
   const { isMonitoring, processedSignatures } = status;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
+    <div className="bg-gray-900 border-b border-gray-700 px-4 py-2">
       <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
+        {/* Status indicator */}
+        <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2">
-            <div className={`w-3 h-3 rounded-full ${isMonitoring ? 'bg-green-500 animate-pulse' : 'bg-red-500'
-              }`}></div>
-            <span className="text-lg font-semibold text-gray-900">
-              Monitoring Status: {isMonitoring ? 'Active' : 'Inactive'}
+            <div className={`w-2 h-2 rounded-full ${isMonitoring ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+            <span className="text-white text-sm font-medium">
+              {isMonitoring ? 'Monitoring Active' : 'Monitoring Inactive'}
             </span>
           </div>
-
-
+          <div className="text-gray-400 text-xs hidden sm:block">
+            {isMonitoring ? '🔍 Tracking wallet activities' : '⏸️ Click Start to begin monitoring'}
+          </div>
         </div>
 
-        <div className="flex space-x-2">
+        {/* Controls */}
+        <div className="flex items-center space-x-2">
           <button
             onClick={() => onToggle('start')}
             disabled={isMonitoring}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
           >
             Start
           </button>
           <button
             onClick={() => onToggle('stop')}
             disabled={!isMonitoring}
-            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm rounded transition-colors"
           >
             Stop
           </button>
         </div>
-      </div>
-
-      <div className="mt-4 text-sm text-gray-600">
-        {isMonitoring ? (
-          <p>🔍 Actively monitoring all tracked wallets for new token purchases.</p>
-        ) : (
-          <p>⏸️ Monitoring is paused. Click "Start" to begin tracking wallet activities.</p>
-        )}
       </div>
     </div>
   );

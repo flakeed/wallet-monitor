@@ -1,10 +1,9 @@
-// client/src/App.js - УЛЬТРА-БЫСТРАЯ версия
+// client/src/App.js - Trading-style compact interface
 
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
 import WalletManager from './components/WalletManager';
 import MonitoringStatus from './components/MonitoringStatus';
-import WalletList from './components/WalletList';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
@@ -20,7 +19,7 @@ function App() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   
-  // Ultra-optimized state management
+  // State management
   const [walletCount, setWalletCount] = useState(0);
   const [transactions, setTransactions] = useState([]);
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
@@ -29,11 +28,9 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [timeframe, setTimeframe] = useState('24');
   const [transactionType, setTransactionType] = useState('all');
-  const [view, setView] = useState('tokens');
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedGroupInfo, setSelectedGroupInfo] = useState(null);
-  const [initializationTime, setInitializationTime] = useState(null);
 
   // Check authentication on app load
   useEffect(() => {
@@ -45,13 +42,11 @@ function App() {
     const savedUser = localStorage.getItem('user');
   
     if (!sessionToken || !savedUser) {
-      console.log('[Auth] No session token or user data found');
       setIsCheckingAuth(false);
       return;
     }
   
     try {
-      console.log('[Auth] Checking existing session...');
       const response = await fetch(`${API_BASE}/auth/validate`, {
         headers: {
           'Authorization': `Bearer ${sessionToken}`
@@ -62,16 +57,12 @@ function App() {
         const userData = JSON.parse(savedUser);
         setUser(userData);
         setIsAuthenticated(true);
-        console.log('[Auth] Session validated successfully');
       } else {
-        console.log('[Auth] Session validation failed:', response.status);
-        // Clear invalid session data
         localStorage.removeItem('sessionToken');
         localStorage.removeItem('user');
       }
     } catch (error) {
-      console.error('[Auth] Session check error:', error);
-      // Clear potentially corrupted session data
+      console.error('Session check error:', error);
       localStorage.removeItem('sessionToken');
       localStorage.removeItem('user');
     } finally {
@@ -103,16 +94,14 @@ function App() {
     };
   };
 
-  // НОВАЯ УЛЬТРА-БЫСТРАЯ ИНИЦИАЛИЗАЦИЯ
+  // Ultra-fast initialization
   const ultraFastInit = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
-      // console.log(`🚀 ULTRA-FAST initialization: hours=${hours}, type=${type}, groupId=${groupId}`);
       const startTime = Date.now();
 
       const headers = getAuthHeaders();
       
-      // ОДИН ЗАПРОС для получения всех данных
       const initUrl = `${API_BASE}/init?hours=${hours}${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
       const response = await fetch(initUrl, { headers });
 
@@ -120,15 +109,15 @@ function App() {
         throw new Error('Failed to initialize application data');
       }
 
-      const { data, duration } = await response.json();
+      const { data } = await response.json();
       
-      // Мгновенно устанавливаем все данные
+      // Set all data instantly
       setTransactions(data.transactions);
       setMonitoringStatus(data.monitoring);
       setGroups(data.groups);
       setWalletCount(data.wallets.totalCount);
       
-      // Устанавливаем информацию о выбранной группе
+      // Set selected group info
       if (groupId && data.wallets.selectedGroup) {
         setSelectedGroupInfo({
           groupId: data.wallets.selectedGroup.groupId,
@@ -138,12 +127,6 @@ function App() {
       } else {
         setSelectedGroupInfo(null);
       }
-
-      const clientTime = Date.now() - startTime;
-      setInitializationTime(duration);
-      
-      // console.log(`✅ ULTRA-FAST init completed: ${duration}ms server + ${clientTime}ms client = ${duration + clientTime}ms total`);
-      // console.log(`📊 Loaded: ${data.wallets.totalCount} wallets, ${data.transactions.length} transactions`);
 
     } catch (err) {
       setError(err.message);
@@ -167,7 +150,7 @@ function App() {
 
       const data = await response.json();
       
-      // Быстро обновляем счетчики из ответа сервера
+      // Update counters from server response
       if (data.newCounts) {
         setWalletCount(data.newCounts.totalWallets);
         if (selectedGroup && data.newCounts.selectedGroup) {
@@ -180,7 +163,6 @@ function App() {
           setSelectedGroupInfo(null);
         }
       } else {
-        // Fallback - устанавливаем в 0
         setWalletCount(0);
         if (selectedGroupInfo) {
           setSelectedGroupInfo({
@@ -197,7 +179,7 @@ function App() {
     }
   };
 
-  // SSE connection остается прежним
+  // SSE connection for real-time updates
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -210,19 +192,15 @@ function App() {
       sseUrl.searchParams.append('groupId', selectedGroup);
     }
 
-    console.log('🔌 Connecting to SSE:', sseUrl.toString());
-
     const eventSource = new EventSource(sseUrl.toString());
 
     eventSource.onopen = () => {
-      console.log('✅ SSE connection opened');
       setError(null);
     };
 
     eventSource.onmessage = (event) => {
       try {
         const newTransaction = JSON.parse(event.data);
-        console.log('New transaction received via SSE:', newTransaction);
 
         const now = new Date();
         const txTime = new Date(newTransaction.timestamp);
@@ -269,13 +247,11 @@ function App() {
       eventSource.close();
       
       setTimeout(() => {
-        console.log('Attempting to reconnect to SSE...');
         setRefreshKey(prev => prev + 1);
       }, 5000);
     };
 
     return () => {
-      console.log('🔌 Closing SSE connection');
       eventSource.close();
     };
   }, [timeframe, transactionType, selectedGroup, isAuthenticated, refreshKey]);
@@ -315,8 +291,6 @@ function App() {
     const startTime = Date.now();
     
     try {
-      // console.log(`🚀 Starting ULTRA-OPTIMIZED bulk import of ${wallets.length} wallets`);
-
       if (progressCallback) {
         progressCallback({
           current: 0,
@@ -326,14 +300,11 @@ function App() {
         });
       }
 
-      // Разбиваем на chunks по 1000 кошельков для ультра-оптимизированного эндпоинта
       const ULTRA_CHUNK_SIZE = 1000;
       const chunks = [];
       for (let i = 0; i < wallets.length; i += ULTRA_CHUNK_SIZE) {
         chunks.push(wallets.slice(i, i + ULTRA_CHUNK_SIZE));
       }
-
-      // console.log(`📦 Created ${chunks.length} ultra-optimized chunks`);
 
       let totalResults = {
         total: wallets.length,
@@ -343,7 +314,7 @@ function App() {
         successfulWallets: []
       };
 
-      // Последовательная обработка chunks для стабильности
+      // Process chunks sequentially
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         
@@ -357,8 +328,6 @@ function App() {
         }
 
         try {
-          // console.log(`🚀 Processing ultra-optimized chunk ${i + 1}/${chunks.length} (${chunk.length} wallets)`);
-
           const response = await fetch(`${API_BASE}/wallets/bulk-optimized`, {
             method: 'POST',
             headers: getAuthHeaders(),
@@ -379,7 +348,7 @@ function App() {
             throw new Error(result.error || 'Unknown server error');
           }
 
-          // Агрегируем результаты
+          // Aggregate results
           totalResults.successful += result.results.successful || 0;
           totalResults.failed += result.results.failed || 0;
 
@@ -391,11 +360,11 @@ function App() {
             totalResults.successfulWallets.push(...result.results.successfulWallets);
           }
 
-          // МГНОВЕННО обновляем счетчик кошельков из ответа сервера
+          // Update wallet count instantly from server response
           if (result.results.newCounts && result.results.successful > 0) {
             setWalletCount(result.results.newCounts.totalWallets);
             
-            // Обновляем информацию о группе
+            // Update group info
             if (selectedGroupInfo && (!groupId || groupId === selectedGroupInfo.groupId)) {
               const newGroupCount = result.results.newCounts.groupCounts?.find(gc => gc.groupId === selectedGroupInfo.groupId)?.count;
               if (newGroupCount !== undefined) {
@@ -407,12 +376,9 @@ function App() {
             }
           }
 
-          // console.log(`✅ Ultra-optimized chunk ${i + 1} completed: ${result.results.successful} successful`);
-
         } catch (chunkError) {
-          console.error(`❌ Ultra-optimized chunk ${i + 1} failed:`, chunkError.message);
+          console.error(`Chunk ${i + 1} failed:`, chunkError.message);
           
-          // Помечаем весь chunk как failed
           totalResults.failed += chunk.length;
           totalResults.errors.push({
             address: `chunk_${i + 1}`,
@@ -421,7 +387,7 @@ function App() {
           });
         }
 
-        // Короткая пауза между chunks
+        // Short pause between chunks
         if (i < chunks.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -440,8 +406,6 @@ function App() {
       const walletsPerSecond = Math.round((totalResults.successful / duration) * 1000);
       const successRate = ((totalResults.successful / totalResults.total) * 100).toFixed(1);
 
-      // console.log(`🎉 ULTRA-OPTIMIZED bulk import completed in ${duration}ms: ${totalResults.successful}/${totalResults.total} successful (${successRate}%, ${walletsPerSecond} wallets/sec)`);
-
       return {
         success: totalResults.successful > 0,
         message: `Import: ${totalResults.successful} successful, ${totalResults.failed} failed (${successRate}% success rate)`,
@@ -449,8 +413,8 @@ function App() {
       };
 
     } catch (error) {
-      console.error('❌ Ultra-optimized bulk import failed:', error);
-      throw new Error(`Ultra-optimized bulk import failed: ${error.message}`);
+      console.error('Bulk import failed:', error);
+      throw new Error(`Bulk import failed: ${error.message}`);
     }
   };
 
@@ -504,11 +468,8 @@ function App() {
   // Show loading while checking authentication
   if (isCheckingAuth) {
     return (
-      <div className="min-h-screen bg-gray-50 py-8 px-4">
-        <div className="max-w-6xl mx-auto">
-          <Header />
-          <LoadingSpinner />
-        </div>
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <LoadingSpinner />
       </div>
     );
   }
@@ -520,14 +481,12 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 py-8 px-4">
-        <div className="max-w-6xl mx-auto">
-          <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <div className="flex items-center">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-3"></div>
-              <span className="text-blue-700">Loading wallets...</span>
-            </div>
+      <div className="h-screen bg-gray-900 flex flex-col">
+        <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex items-center space-x-3">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
+            <span className="text-white">Loading wallets...</span>
           </div>
         </div>
       </div>
@@ -535,67 +494,39 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <div className="max-w-6xl mx-auto">
-        <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
-        {error && <ErrorMessage error={error} />}
-        
-        <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
-        
-        <div className="bg-white rounded-lg shadow-sm border p-4 mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <select
-                value={selectedGroup || ''}
-                onChange={(e) => handleGroupChange(e.target.value)}
-                className="text-sm border border-gray-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">All Groups ({walletCount.toLocaleString()} wallets)</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.wallet_count.toLocaleString()} wallets)
-                  </option>
-                ))}
-              </select>
-              {selectedGroupInfo && (
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                  {selectedGroupInfo.groupName}: {selectedGroupInfo.walletCount.toLocaleString()} wallets
-                </span>
-              )}
-            </div>
-            <div className="flex items-center space-x-3">
-              <button
-                className={`text-sm px-3 py-1 rounded ${view === 'tokens' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
-                onClick={() => setView('tokens')}
-              >
-                Token Tracker
-              </button>
-            </div>
-          </div>
-        </div>
-        
-        <WalletManager onAddWalletsBulk={handleAddWalletsBulk} onCreateGroup={createGroup} groups={groups} />
-        
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-1">
-            <WalletList
-              walletCount={selectedGroupInfo ? selectedGroupInfo.walletCount : walletCount}
-              groupName={selectedGroupInfo ? selectedGroupInfo.groupName : null}
-              onRemoveAllWallets={removeAllWallets}
-            />
-          </div>
-          <div className="lg:col-span-2">
-            {view === 'tokens' && (
-              <TokenTracker 
-                groupId={selectedGroup} 
-                transactions={transactions} 
-                timeframe={timeframe} 
-              />
-            )}
-          </div>
-        </div>
+    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+      {/* Header */}
+      <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+      
+      {/* Error */}
+      {error && <ErrorMessage error={error} />}
+      
+      {/* Monitoring Status */}
+      <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
+      
+      {/* Wallet Manager (Collapsible) */}
+      <WalletManager 
+        onAddWalletsBulk={handleAddWalletsBulk} 
+        onCreateGroup={createGroup} 
+        groups={groups} 
+      />
+      
+      {/* Token Tracker - Full height */}
+      <div className="flex-1 overflow-hidden">
+        <TokenTracker 
+          groupId={selectedGroup} 
+          transactions={transactions} 
+          timeframe={timeframe}
+          onTimeframeChange={handleTimeframeChange}
+          groups={groups}
+          selectedGroup={selectedGroup}
+          onGroupChange={handleGroupChange}
+          walletCount={walletCount}
+          selectedGroupInfo={selectedGroupInfo}
+        />
       </div>
 
+      {/* Admin Panel Modal */}
       {showAdminPanel && user?.isAdmin && (
         <AdminPanel user={user} onClose={() => setShowAdminPanel(false)} />
       )}

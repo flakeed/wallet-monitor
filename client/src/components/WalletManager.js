@@ -1,11 +1,13 @@
+// client/src/components/WalletManager.js - Collapsible compact wallet manager
+
 import React, { useState, useCallback, useEffect } from 'react';
 
 function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [groupId, setGroupId] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
-  const [activeTab, setActiveTab] = useState('bulk');
   const [bulkText, setBulkText] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkResults, setBulkResults] = useState(null);
@@ -15,9 +17,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     current: 0, 
     total: 0, 
     batch: 0, 
-    phase: 'preparing',
-    speed: 0,
-    timeRemaining: 0
+    phase: 'preparing'
   });
 
   const handleCreateGroup = async (e) => {
@@ -64,8 +64,9 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
       }
 
       if (address.length < 32 || address.length > 44 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(address)) {
-        return res.status(400).json({ error: 'Invalid Solana wallet address format' });
-    }
+        errors.push(`Line ${lineNum}: Invalid address format`);
+        continue;
+      }
 
       if (seenAddresses.has(address)) {
         errors.push(`Line ${lineNum}: Duplicate address - ${address.substring(0, 20)}...`);
@@ -133,18 +134,12 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     }
 
     if (wallets.length === 0) {
-      setBulkResults({
-        type: 'error',
-        message: 'No valid wallet addresses found.'
-      });
+      setBulkResults({ type: 'error', message: 'No valid wallet addresses found.' });
       return;
     }
 
     if (wallets.length > 100000) {
-      setBulkResults({
-        type: 'error',
-        message: 'Maximum 100,000 wallets allowed per bulk import.'
-      });
+      setBulkResults({ type: 'error', message: 'Maximum 100,000 wallets allowed per bulk import.' });
       return;
     }
 
@@ -157,17 +152,13 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
       current: 0, 
       total: wallets.length, 
       batch: 0, 
-      phase: 'starting',
-      speed: 0,
-      timeRemaining: 0
+      phase: 'starting'
     });
 
     try {
-      // console.log(`Starting optimized bulk import of ${wallets.length} wallets...`);
-
       const result = await onAddWalletsBulk(wallets, groupId || null, (progress) => {
         const elapsed = (Date.now() - startTime) / 1000;
-        const speed = progress.current / elapsed; // wallets per second
+        const speed = progress.current / elapsed;
         const remaining = progress.total - progress.current;
         const timeRemaining = remaining > 0 ? remaining / speed : 0;
 
@@ -211,9 +202,7 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
         current: 0, 
         total: 0, 
         batch: 0, 
-        phase: 'completed',
-        speed: 0,
-        timeRemaining: 0
+        phase: 'completed'
       });
     }
   };
@@ -222,14 +211,6 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
     setBulkText('');
     setBulkResults(null);
     setBulkValidation(null);
-  };
-
-  // Функция для форматирования времени
-  const formatTime = (seconds) => {
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${minutes}m ${secs}s`;
   };
 
   useEffect(() => {
@@ -241,321 +222,209 @@ function WalletManager({ onAddWalletsBulk, onCreateGroup, groups }) {
   }, []);
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
-      <h2 className="text-xl font-semibold text-gray-900 mb-4">Add Wallets for Monitoring</h2>
-
-      <div className="mb-6">
-        <h3 className="text-lg font-medium text-gray-800 mb-2">Create New Group</h3>
-        <form onSubmit={handleCreateGroup} className="flex space-x-2">
-          <input
-            type="text"
-            value={newGroupName}
-            onChange={(e) => setNewGroupName(e.target.value)}
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="Enter new group name..."
-            disabled={loading}
-          />
-          <button
-            type="submit"
-            disabled={loading || !newGroupName.trim()}
-            className="bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            Create Group
-          </button>
-        </form>
-      </div>
-
-      <div className="flex space-x-1 mb-6 bg-gray-100 p-1 rounded-lg">
+    <div className="bg-gray-800 border-b border-gray-700">
+      {/* Collapsible Header */}
+      <div className="px-4 py-2">
         <button
-          onClick={() => setActiveTab('bulk')}
-          className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${activeTab === 'bulk'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-600 hover:text-gray-900'
-            }`}
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center justify-between w-full text-left"
         >
-          Bulk Import (up to 100,000)
+          <div className="flex items-center space-x-2">
+            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            <span className="text-white font-medium">Add Wallets</span>
+            {bulkValidation && bulkValidation.validWallets > 0 && (
+              <span className="bg-blue-600 text-white text-xs px-2 py-1 rounded">
+                {bulkValidation.validWallets} ready
+              </span>
+            )}
+          </div>
+          <svg 
+            className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} 
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
         </button>
       </div>
 
-      {activeTab === 'bulk' && (
-        <>
-          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="flex justify-between items-start mb-3">
-              <h4 className="text-sm font-medium text-blue-900">Bulk Import (up to 100,000 wallets):</h4>
-            </div>
-            <div className="text-sm text-blue-800 space-y-1">
-              <p className="font-medium">• Example:</p>
-              <div className="mt-2 bg-blue-100 p-2 rounded font-mono text-xs">
-                # Trading wallets for strategy A<br />
-                9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Main Trading Wallet<br />
-                53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC<br />
-                Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Backup Wallet
-              </div>
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div className="border-t border-gray-700 p-4 space-y-4">
+          {/* Create Group */}
+          <div>
+            <h4 className="text-white text-sm font-medium mb-2">Create New Group</h4>
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                value={newGroupName}
+                onChange={(e) => setNewGroupName(e.target.value)}
+                className="flex-1 bg-gray-700 border border-gray-600 text-white text-sm rounded px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Enter group name..."
+                disabled={loading}
+              />
+              <button
+                type="button"
+                onClick={handleCreateGroup}
+                disabled={loading || !newGroupName.trim()}
+                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm px-4 py-2 rounded transition-colors"
+              >
+                Create
+              </button>
             </div>
           </div>
 
-          {bulkValidation && (
-            <div className={`mb-4 p-4 rounded-lg border ${bulkValidation.canImport
-                ? 'bg-green-50 border-green-200'
-                : bulkValidation.tooMany
-                  ? 'bg-red-50 border-red-200'
-                  : 'bg-yellow-50 border-yellow-200'
+          {/* Bulk Import */}
+          <div>
+            <h4 className="text-white text-sm font-medium mb-2">Bulk Import</h4>
+            
+            {/* Validation Results */}
+            {bulkValidation && (
+              <div className={`mb-3 p-3 rounded border ${
+                bulkValidation.canImport
+                  ? 'bg-green-900/20 border-green-700'
+                  : bulkValidation.tooMany
+                    ? 'bg-red-900/20 border-red-700'
+                    : 'bg-yellow-900/20 border-yellow-700'
               }`}>
-              <div className="flex items-center justify-between mb-3">
-                <h4 className={`text-sm font-medium ${bulkValidation.canImport
-                    ? 'text-green-900'
-                    : bulkValidation.tooMany
-                      ? 'text-red-900'
-                      : 'text-yellow-900'
+                <div className="flex items-center justify-between mb-2">
+                  <span className={`text-sm font-medium ${
+                    bulkValidation.canImport ? 'text-green-400' : bulkValidation.tooMany ? 'text-red-400' : 'text-yellow-400'
                   }`}>
-                  Validation Results
-                </h4>
-                {bulkValidation.canImport && (
-                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">Ready for import</span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3">
-                <div className="text-center">
-                  <div className="font-semibold text-lg text-gray-700">{bulkValidation.totalLines}</div>
-                  <div className="text-gray-600">Total Lines</div>
-                </div>
-                <div className="text-center">
-                  <div className="font-semibold text-lg text-green-600">{bulkValidation.validWallets}</div>
-                  <div className="text-gray-600">Valid Wallets</div>
-                </div>
-                <div className="text-center">
-                  <div className="font-semibold text-lg text-red-600">{bulkValidation.errors}</div>
-                  <div className="text-gray-600">Errors</div>
-                </div>
-                <div className="text-center">
-                  <div className="font-semibold text-lg text-blue-600">~{Math.ceil(bulkValidation.validWallets / 1000 * 3)}s</div>
-                  <div className="text-gray-600">Est. Time</div>
-                </div>
-              </div>
-
-              {bulkValidation.tooMany && (
-                <div className="text-red-700 font-medium">
-                  ⚠️ Too many wallets! Found {bulkValidation.validWallets}, maximum 100,000 allowed. Please split your list.
-                </div>
-              )}
-
-              {bulkValidation.errorMessages && bulkValidation.errorMessages.length > 0 && (
-                <details className="mt-3">
-                  <summary className="cursor-pointer text-red-700 font-medium hover:text-red-800">
-                    View Sample Errors ({bulkValidation.errors} total)
-                  </summary>
-                  <div className="mt-2 max-h-32 overflow-y-auto bg-red-100 p-2 rounded text-xs">
-                    {bulkValidation.errorMessages.map((error, i) => (
-                      <div key={i} className="text-red-800 py-1">
-                        {error}
-                      </div>
-                    ))}
-                    {bulkValidation.errors > 10 && (
-                      <div className="text-red-600 text-center py-1 font-medium">
-                        ... and {bulkValidation.errors - 10} more errors
-                      </div>
-                    )}
-                  </div>
-                </details>
-              )}
-            </div>
-          )}
-
-          {showProgress && bulkLoading && (
-            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <div className="flex items-center space-x-3 mb-3">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                <div className="flex-1">
-                  <div className="font-medium text-blue-900">Bulk import in progress...</div>
-                  <div className="text-sm text-blue-700">
-                    {importProgress.total > 0 ? (
-                      <span>
-                        Phase: {importProgress.phase} • 
-                        {importProgress.current}/{importProgress.total} wallets • 
-                        Batch {importProgress.batch} • 
-                      </span>
-                    ) : (
-                      'Preparing optimized import...'
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {importProgress.total > 0 && (
-                <div className="space-y-2">
-                  <div className="w-full bg-blue-200 rounded-full h-3">
-                    <div
-                      className="bg-gradient-to-r from-blue-600 to-green-500 h-3 rounded-full transition-all duration-300 flex items-center justify-center"
-                      style={{ width: `${Math.min((importProgress.current / importProgress.total) * 100, 100)}%` }}
-                    >
-                      <span className="text-xs text-white font-medium">
-                        {Math.round((importProgress.current / importProgress.total) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-xs text-blue-600 text-center">
-                    Processing..
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {bulkResults && (
-            <div className={`mb-4 p-4 rounded-lg border ${bulkResults.type === 'success'
-                ? 'bg-green-50 border-green-200'
-                : bulkResults.type === 'warning'
-                  ? 'bg-yellow-50 border-yellow-200'
-                  : 'bg-red-50 border-red-200'
-              }`}>
-              <div className={`font-medium mb-3 ${bulkResults.type === 'success'
-                  ? 'text-green-900'
-                  : bulkResults.type === 'warning'
-                    ? 'text-yellow-900'
-                    : 'text-red-900'
-                }`}>
-                {bulkResults.message}
-              </div>
-
-              {bulkResults.details && (
-                <div className="text-sm space-y-3">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="text-center p-3 bg-white rounded">
-                      <div className="font-semibold text-xl text-gray-900">{bulkResults.details.total}</div>
-                      <div className="text-gray-600">Total Processed</div>
-                    </div>
-                    <div className="text-center p-3 bg-white rounded">
-                      <div className="font-semibold text-xl text-green-600">{bulkResults.details.successful}</div>
-                      <div className="text-gray-600">Successful</div>
-                    </div>
-                    <div className="text-center p-3 bg-white rounded">
-                      <div className="font-semibold text-xl text-red-600">{bulkResults.details.failed}</div>
-                      <div className="text-gray-600">Failed</div>
-                    </div>
-                  </div>
-
-                  {bulkResults.details.errors && bulkResults.details.errors.length > 0 && (
-                    <details className="mt-3">
-                      <summary className="cursor-pointer text-red-700 font-medium hover:text-red-800">
-                        View Errors ({bulkResults.details.errors.length})
-                      </summary>
-                      <div className="mt-2 max-h-48 overflow-y-auto bg-red-100 p-3 rounded text-xs">
-                        {bulkResults.details.errors.slice(0, 100).map((error, i) => (
-                          <div key={i} className="text-red-800 py-1 border-b border-red-200 last:border-b-0">
-                            <span className="font-mono">
-                              {error.address && error.address !== 'parse_error' && error.address !== 'duplicate'
-                                ? `${error.address.slice(0, 12)}...`
-                                : 'Error'
-                              }
-                            </span>
-                            {error.name && <span className="text-red-600"> ({error.name})</span>}
-                            <span className="text-red-700 ml-2">{error.error}</span>
-                          </div>
-                        ))}
-                        {bulkResults.details.errors.length > 100 && (
-                          <div className="text-red-600 text-center py-2 font-medium">
-                            ... and {bulkResults.details.errors.length - 100} more errors
-                          </div>
-                        )}
-                      </div>
-                    </details>
+                    {bulkValidation.validWallets} valid wallets found
+                  </span>
+                  {bulkValidation.canImport && (
+                    <span className="text-xs bg-green-600 text-green-100 px-2 py-1 rounded">Ready</span>
                   )}
                 </div>
-              )}
-            </div>
-          )}
+                
+                {bulkValidation.tooMany && (
+                  <div className="text-red-400 text-sm">
+                    Too many wallets! Maximum 100,000 allowed.
+                  </div>
+                )}
 
-          <form onSubmit={handleBulkSubmit} className="space-y-4">
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <label className="block text-sm font-medium text-gray-700">
-                  Wallet Addresses * (up to 100,000)
-                </label>
+                {bulkValidation.errorMessages && bulkValidation.errorMessages.length > 0 && (
+                  <div className="text-xs text-gray-400 mt-2">
+                    {bulkValidation.errors} errors found
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Progress */}
+            {showProgress && bulkLoading && (
+              <div className="mb-3 p-3 bg-blue-900/20 border border-blue-700 rounded">
+                <div className="flex items-center space-x-3 mb-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                  <span className="text-blue-400 text-sm">
+                    Phase: {importProgress.phase} • {importProgress.current}/{importProgress.total}
+                  </span>
+                </div>
+                {importProgress.total > 0 && (
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div
+                      className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min((importProgress.current / importProgress.total) * 100, 100)}%` }}
+                    ></div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Results */}
+            {bulkResults && (
+              <div className={`mb-3 p-3 rounded border ${
+                bulkResults.type === 'success'
+                  ? 'bg-green-900/20 border-green-700'
+                  : bulkResults.type === 'warning'
+                    ? 'bg-yellow-900/20 border-yellow-700'
+                    : 'bg-red-900/20 border-red-700'
+              }`}>
+                <div className={`text-sm font-medium mb-2 ${
+                  bulkResults.type === 'success' ? 'text-green-400' : 
+                  bulkResults.type === 'warning' ? 'text-yellow-400' : 'text-red-400'
+                }`}>
+                  {bulkResults.message}
+                </div>
+
+                {bulkResults.details && (
+                  <div className="grid grid-cols-3 gap-4 text-xs">
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-white">{bulkResults.details.total}</div>
+                      <div className="text-gray-400">Total</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-green-400">{bulkResults.details.successful}</div>
+                      <div className="text-gray-400">Success</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-lg font-bold text-red-400">{bulkResults.details.failed}</div>
+                      <div className="text-gray-400">Failed</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Form */}
+            <form onSubmit={handleBulkSubmit} className="space-y-3">
+              <div className="flex justify-between items-center">
+                <label className="text-gray-300 text-sm">Wallet Addresses</label>
                 <button
                   type="button"
                   onClick={clearBulkData}
-                  className="text-xs text-gray-500 hover:text-gray-700"
+                  className="text-xs text-gray-500 hover:text-gray-300"
                 >
-                  Clear All
+                  Clear
                 </button>
               </div>
               <textarea
                 value={bulkText}
                 onChange={handleBulkTextChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors font-mono text-sm"
-                placeholder="Paste wallet addresses here, one per line...
-
-# You can add comments like this
-9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Trading Wallet 1
+                className="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                placeholder="9yuiiicyZ2McJkFz7v7GvPPPXX92RX4jXDSdvhF5BkVd,Trading Wallet 1
 53nHsQXkzZUp5MF1BK6Qoa48ud3aXfDFJBbe1oECPucC
-Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet
-..."
-                rows={14}
+Cupjy3x8wfwCcLMkv5SqPtRjsJd5Zk8q7X2NGNGJGi5y,Important Wallet"
+                rows={6}
                 disabled={bulkLoading}
               />
-              <div className="mt-2 flex justify-between items-center text-sm">
-                <div className="text-gray-500">
-                  {bulkValidation ? (
-                    <span className={bulkValidation.canImport ? 'text-green-600' : 'text-red-600'}>
-                      {bulkValidation.validWallets} valid wallets detected
-                      {bulkValidation.errors > 0 && `, ${bulkValidation.errors} errors`}
-                    </span>
-                  ) : bulkText.trim() ? (
-                    <span className="text-blue-600">Validating...</span>
+
+              <div className="flex space-x-2">
+                <select
+                  value={groupId}
+                  onChange={(e) => setGroupId(e.target.value)}
+                  className="flex-1 bg-gray-700 border border-gray-600 text-white text-sm rounded px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  disabled={bulkLoading}
+                >
+                  <option value="">Select group (optional)</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name} ({group.wallet_count} wallets)
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="submit"
+                  disabled={bulkLoading || !bulkText.trim() || (bulkValidation && !bulkValidation.canImport)}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm px-6 py-2 rounded transition-colors flex items-center"
+                >
+                  {bulkLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-2"></div>
+                      Importing...
+                    </>
                   ) : (
-                    'Enter wallet addresses to validate'
+                    <>🚀 Import{bulkValidation && bulkValidation.validWallets > 0 ? ` ${bulkValidation.validWallets}` : ''}</>
                   )}
-                </div>
-                <div className="text-xs text-gray-400">
-                  Max: 100,000 wallets
-                </div>
+                </button>
               </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Group (Optional)
-              </label>
-              <select
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                disabled={bulkLoading}
-              >
-                <option value="">Select a group (optional)</option>
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name} ({group.wallet_count} wallets)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              disabled={bulkLoading || !bulkText.trim() || (bulkValidation && !bulkValidation.canImport)}
-              className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white py-3 px-4 rounded-lg hover:from-purple-700 hover:to-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors flex items-center justify-center font-medium"
-            >
-              {bulkLoading ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Import in Progress...
-                </>
-              ) : (
-                <>🚀 {bulkValidation && bulkValidation.validWallets > 0
-                  ? `Import ${bulkValidation.validWallets.toLocaleString()} Wallets`
-                  : 'Import Wallets'}</>
-              )}
-            </button>
-
-            {bulkValidation && bulkValidation.validWallets > 1000 && (
-              <p className="text-xs text-blue-600 text-center">
-                Large import detected. Using optimized parallel processing for maximum speed.
-              </p>
-            )}
-          </form>
-        </>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );
