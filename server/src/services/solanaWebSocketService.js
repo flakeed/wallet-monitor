@@ -10,8 +10,8 @@ const WS_READY_STATE_CLOSED = 3;
 
 class SolanaWebSocketService {
     constructor() {
-        this.solanaRpc = process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005';
-        this.wsUrl = process.env.WEBHOOK_URL || 'ws://45.134.108.167:5006/ws';
+        this.solanaRpc = process.env.SOLANA_RPC_URL || 'http://45.134.108.254:50111';
+        this.wsUrl = process.env.WEBHOOK_URL || 'ws://45.134.108.254:50111/ws';
         this.connection = new Connection(this.solanaRpc, {
             commitment: 'confirmed',
             wsEndpoint: this.wsUrl,

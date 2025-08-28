@@ -6,7 +6,7 @@ const Redis = require('ioredis');
 class WalletMonitoringService {
 constructor() {
         this.db = new Database();
-        this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.167:5005', {
+        this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.254:50111', {
             commitment: 'confirmed',
             httpHeaders: { 'Connection': 'keep-alive' }
         });
