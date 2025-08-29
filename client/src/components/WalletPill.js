@@ -7,10 +7,9 @@ function WalletPill({ wallet, tokenMint, transaction }) {
     
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
 
-    // Use backend-provided PNL if available, otherwise calculate
     const calculatedPnL = useMemo(() => {
-        if (transaction?.pnl) {
-            return transaction.pnl / solPrice; // Convert USD PNL to SOL
+        if (transaction?.pnl && solPrice) {
+            return transaction.pnl / solPrice;
         }
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) {
             return wallet.pnlSol || 0;
@@ -51,7 +50,7 @@ function WalletPill({ wallet, tokenMint, transaction }) {
     }, [calculatedPnL]);
 
     const displayPnL = totalPnL !== null ? totalPnL : (wallet.pnlSol || 0);
-    const pnlColor = displayPnL > 0 ? 'text-green-400' : displayPnL < 0 ? 'text-red-400' : 'text-gray-400';
+    const pnlColor = error ? 'text-gray-500' : displayPnL > 0 ? 'text-green-400' : displayPnL < 0 ? 'text-red-400' : 'text-gray-400';
 
     const openGmgnTokenWithMaker = () => {
         if (!tokenMint || !wallet.address) return;
@@ -98,8 +97,13 @@ function WalletPill({ wallet, tokenMint, transaction }) {
                     <div className={`text-xs font-semibold ${pnlColor} flex items-center`}>
                         {loading && tokenMint ? (
                             <div className="animate-spin rounded-full h-2 w-2 border border-gray-400 border-t-transparent mr-1"></div>
-                        ) : null}
-                        {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
+                        ) : error ? (
+                            <span title={error}>N/A</span>
+                        ) : (
+                            <>
+                                {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
+                            </>
+                        )}
                     </div>
                     <div className="text-gray-500 text-xs">
                         {(wallet.solSpent || 0).toFixed(2)}→{(wallet.solReceived || 0).toFixed(2)}

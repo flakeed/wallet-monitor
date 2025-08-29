@@ -8,7 +8,7 @@ function TokenTracker({ groupId, transactions, newTokens, timeframe, onTimeframe
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest');
-  const [view, setView] = useState('existing'); // 'existing' or 'new'
+  const [view, setView] = useState('existing');
 
   const aggregateTokens = (transactions, hours, groupId) => {
     const EXCLUDED_TOKENS = [
@@ -126,7 +126,7 @@ function TokenTracker({ groupId, transactions, newTokens, timeframe, onTimeframe
       symbol: token.priceData?.symbol || 'Unknown',
       name: token.priceData?.name || 'Unknown Token',
       decimals: token.priceData?.decimals || 6,
-      wallets: [], // No wallet data for new tokens initially
+      wallets: [],
       summary: {
         uniqueWallets: 0,
         totalBuys: 0,
@@ -187,7 +187,7 @@ function TokenTracker({ groupId, transactions, newTokens, timeframe, onTimeframe
       setItems(sortedTokens);
       setError(null);
     } catch (e) {
-      setError(e.message);
+      setError(`Failed to load tokens: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -233,7 +233,7 @@ function TokenTracker({ groupId, transactions, newTokens, timeframe, onTimeframe
         }}
         sortBy={sortBy}
         onSortChange={setSortBy}
-        includeMarketCap={true} // Add market cap sorting option
+        includeMarketCap={true}
       />
       
       <div className="flex-1 overflow-y-auto">

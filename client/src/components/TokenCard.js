@@ -4,11 +4,10 @@ import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
   const [showDetails, setShowDetails] = useState(false);
-  const { solPrice, tokenPrice: priceData, loading: loadingPrice } = usePrices(token.mint);
+  const { solPrice, tokenPrice: priceData, loading: loadingPrice, error: priceError } = usePrices(token.mint);
 
   const WALLETS_DISPLAY_LIMIT = 3;
 
-  // Format deployment time
   const formatDate = (dateStr) => {
     if (!dateStr) return 'Unknown';
     const date = new Date(dateStr);
@@ -21,18 +20,34 @@ function TokenCard({ token, onOpenChart }) {
     });
   };
 
-  // Format large numbers
   const formatNumber = (num, decimals = 2) => {
-    if (num === null || num === undefined) return '0';
+    if (num === null || num === undefined) return 'N/A';
     if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
     if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
     if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
     return num.toFixed(decimals);
   };
 
-  // Compact PnL calculation
   const groupPnL = useMemo(() => {
-    if (!priceData || !priceData.price || !solPrice) return null;
+    if (!priceData || !priceData.price || !solPrice) {
+      return {
+        totalPnLSOL: 0,
+        totalTokensBought: 0,
+        totalTokensSold: 0,
+        currentHoldings: 0,
+        soldTokens: 0,
+        totalSpentSOL: 0,
+        totalReceivedSOL: 0,
+        realizedPnLSOL: 0,
+        unrealizedPnLSOL: 0,
+        totalPnLUSD: 0,
+        currentPriceUSD: null,
+        marketCap: token.summary?.marketCap || 0,
+        deploymentTime: token.summary?.deploymentTime || null,
+        soldPercentage: 0,
+        holdingPercentage: 0
+      };
+    }
 
     let totalTokensBought = 0;
     let totalTokensSold = 0;
@@ -48,7 +63,25 @@ function TokenCard({ token, onOpenChart }) {
       totalPnLUSD += wallet.transactions?.reduce((sum, tx) => sum + (tx.pnl || 0), 0) || 0;
     });
 
-    if (totalTokensBought === 0) return null;
+    if (totalTokensBought === 0) {
+      return {
+        totalPnLSOL: 0,
+        totalTokensBought: 0,
+        totalTokensSold: 0,
+        currentHoldings: 0,
+        soldTokens: 0,
+        totalSpentSOL: 0,
+        totalReceivedSOL: 0,
+        realizedPnLSOL: 0,
+        unrealizedPnLSOL: 0,
+        totalPnLUSD: 0,
+        currentPriceUSD: priceData.price,
+        marketCap: priceData.marketCap,
+        deploymentTime: priceData.deploymentTime,
+        soldPercentage: 0,
+        holdingPercentage: 0
+      };
+    }
 
     const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
     const soldTokens = Math.min(totalTokensSold, totalTokensBought);
@@ -84,13 +117,13 @@ function TokenCard({ token, onOpenChart }) {
       unrealizedPnLUSD: unrealizedPnLSOL * solPrice,
       totalPnLUSD: totalPnLUSD || totalPnLSOL * solPrice,
       currentPriceUSD: priceData.price,
-      marketCap: priceData.marketCap,
-      deploymentTime: priceData.deploymentTime,
+      marketCap: priceData.marketCap || token.summary?.marketCap,
+      deploymentTime: priceData.deploymentTime || token.summary?.deploymentTime,
       solPrice,
       soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
       holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0
     };
-  }, [priceData, solPrice, token.wallets]);
+  }, [priceData, solPrice, token]);
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
@@ -102,13 +135,14 @@ function TokenCard({ token, onOpenChart }) {
     window.open(gmgnUrl, '_blank');
   };
 
-  const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
-    ? groupPnL.totalPnLSOL > 0
-      ? 'text-green-400'
-      : groupPnL.totalPnLSOL < 0
-      ? 'text-red-400'
-      : 'text-gray-400'
-    : 'text-gray-400';
+  const netColor = priceError ? 'text-gray-500' : 
+    groupPnL && groupPnL.totalPnLSOL !== undefined
+      ? groupPnL.totalPnLSOL > 0
+        ? 'text-green-400'
+        : groupPnL.totalPnLSOL < 0
+        ? 'text-red-400'
+        : 'text-gray-400'
+      : 'text-gray-400';
 
   return (
     <div className="bg-gray-900 border border-gray-700 hover:border-gray-600 transition-colors">
@@ -145,9 +179,13 @@ function TokenCard({ token, onOpenChart }) {
               {loadingPrice && (
                 <div className="animate-spin rounded-full h-3 w-3 border border-gray-400 border-t-transparent mr-1"></div>
               )}
-              {groupPnL && groupPnL.totalPnLSOL !== undefined
-                ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
-                : '0 SOL'}
+              {priceError ? (
+                <span title={priceError}>N/A</span>
+              ) : (
+                groupPnL && groupPnL.totalPnLSOL !== undefined
+                  ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
+                  : '0 SOL'
+              )}
             </div>
             <div className="text-xs text-gray-500">
               {token.summary.uniqueWallets}W · {token.summary.totalBuys}B · {token.summary.totalSells}S
@@ -195,25 +233,25 @@ function TokenCard({ token, onOpenChart }) {
               <div>
                 <div className="text-gray-400 mb-1">Realized PnL</div>
                 <div className={`font-medium ${groupPnL.realizedPnLSOL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
+                  {priceError ? 'N/A' : `${groupPnL.realizedPnLSOL >= 0 ? '+' : ''}${groupPnL.realizedPnLSOL.toFixed(4)} SOL`}
                 </div>
               </div>
               <div>
                 <div className="text-gray-400 mb-1">Unrealized PnL</div>
                 <div className={`font-medium ${groupPnL.unrealizedPnLSOL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
+                  {priceError ? 'N/A' : `${groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}${groupPnL.unrealizedPnLSOL.toFixed(4)} SOL`}
                 </div>
               </div>
               <div>
                 <div className="text-gray-400 mb-1">Total Spent/Received</div>
                 <div className="text-white font-medium">
-                  {groupPnL.totalSpentSOL.toFixed(4)} / {groupPnL.totalReceivedSOL.toFixed(4)} SOL
+                  {formatNumber(groupPnL.totalSpentSOL)} / {formatNumber(groupPnL.totalReceivedSOL)} SOL
                 </div>
               </div>
               <div>
                 <div className="text-gray-400 mb-1">Market Cap</div>
                 <div className="text-white font-medium">
-                  ${formatNumber(groupPnL.marketCap)}
+                  {formatNumber(groupPnL.marketCap)}
                 </div>
               </div>
               <div>
@@ -232,7 +270,7 @@ function TokenCard({ token, onOpenChart }) {
                 key={wallet.address}
                 wallet={wallet}
                 tokenMint={token.mint}
-                transaction={token.wallets.find(w => w.address === wallet.address)?.transactions?.[0]}
+                transaction={wallet.transactions?.[0]}
               />
             ))}
             

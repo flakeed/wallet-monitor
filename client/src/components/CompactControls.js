@@ -10,12 +10,11 @@ function CompactControls({
   onTimeframeChange,
   sortBy,
   onSortChange,
-  includeMarketCap // New prop to enable market cap sorting
+  includeMarketCap
 }) {
   return (
     <div className="bg-gray-800 border-b border-gray-700 px-4 py-2">
       <div className="flex items-center justify-between">
-        {/* Left side - Group and wallet count */}
         <div className="flex items-center space-x-4">
           <select
             value={selectedGroup || ''}
@@ -37,9 +36,7 @@ function CompactControls({
           )}
         </div>
 
-        {/* Right side - Filters */}
         <div className="flex items-center space-x-3">
-          {/* Timeframe */}
           <select
             value={timeframe}
             onChange={(e) => onTimeframeChange(e.target.value)}
@@ -52,7 +49,6 @@ function CompactControls({
             <option value="720">30d</option>
           </select>
 
-          {/* Sort */}
           <select
             value={sortBy}
             onChange={(e) => onSortChange(e.target.value)}

@@ -35,7 +35,7 @@ const processBatch = async () => {
     });
     
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      throw new Error(`HTTP ${response.status}: Failed to fetch token prices`);
     }
     
     const data = await response.json();
@@ -69,6 +69,8 @@ const processBatch = async () => {
           pendingRequests.delete(mint);
         }
       });
+    } else {
+      throw new Error(data.error || 'Invalid price data');
     }
   } catch (error) {
     console.error('[usePrices] Batch request failed:', error);
@@ -105,11 +107,13 @@ export const useSolPrice = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const isMountedRef = useRef(true);
+  const lastKnownPrice = useRef(null); // Cache last known good price
 
   const fetchSolPrice = useCallback(async () => {
     const cached = globalPriceCache.get('sol-price');
     if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
       setSolPrice(cached.data);
+      lastKnownPrice.current = cached.data;
       return cached.data;
     }
 
@@ -122,12 +126,12 @@ export const useSolPrice = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}: Failed to fetch SOL price`);
       }
 
       const data = await response.json();
       
-      if (data.success) {
+      if (data.success && data.price !== null) {
         const price = data.price;
         
         globalPriceCache.set('sol-price', {
@@ -137,18 +141,19 @@ export const useSolPrice = () => {
 
         if (isMountedRef.current) {
           setSolPrice(price);
+          lastKnownPrice.current = price;
         }
         return price;
       } else {
-        throw new Error(data.error || 'Failed to fetch SOL price');
+        throw new Error(data.error || 'Failed to fetch SOL price: null value');
       }
     } catch (err) {
       console.error('[useSolPrice] Error:', err);
       if (isMountedRef.current) {
-        setError(err.message);
-        setSolPrice(150);
+        setError('Unable to fetch SOL price. Using last known price.');
+        setSolPrice(lastKnownPrice.current || 150); // Use last known or fallback
       }
-      return 150;
+      return lastKnownPrice.current || 150;
     } finally {
       if (isMountedRef.current) {
         setLoading(false);
@@ -159,8 +164,10 @@ export const useSolPrice = () => {
   useEffect(() => {
     isMountedRef.current = true;
     fetchSolPrice();
+    const interval = setInterval(fetchSolPrice, 60000); // Retry every 60 seconds
     return () => {
       isMountedRef.current = false;
+      clearInterval(interval);
     };
   }, [fetchSolPrice]);
 
@@ -188,14 +195,18 @@ export const useTokenPrice = (tokenMint) => {
     try {
       const result = await queueTokenPrice(tokenMint);
       
-      if (isMountedRef.current) {
-        setPriceData(result);
+      if (result && result.price !== null) {
+        if (isMountedRef.current) {
+          setPriceData(result);
+        }
+        return result;
+      } else {
+        throw new Error('Invalid token price data');
       }
-      return result;
     } catch (err) {
       console.error(`[useTokenPrice] Error for ${tokenMint}:`, err);
       if (isMountedRef.current) {
-        setError(err.message);
+        setError(`Failed to fetch price for ${tokenMint}`);
         setPriceData(null);
       }
       return null;
@@ -255,7 +266,11 @@ export const useTokenPrices = (tokenMints) => {
         
         const newPrices = new Map();
         uncachedMints.forEach((mint, index) => {
-          newPrices.set(mint, results[index]);
+          if (results[index] && results[index].price !== null) {
+            newPrices.set(mint, results[index]);
+          } else {
+            console.warn(`[useTokenPrices] Null price for ${mint}`);
+          }
         });
 
         if (isMountedRef.current) {
@@ -264,7 +279,7 @@ export const useTokenPrices = (tokenMints) => {
       } catch (err) {
         console.error('[useTokenPrices] Error:', err);
         if (isMountedRef.current) {
-          setError(err.message);
+          setError('Failed to fetch some token prices');
         }
       } finally {
         if (isMountedRef.current) {
@@ -285,19 +300,6 @@ export const useTokenPrices = (tokenMints) => {
   return { prices, loading, error, refetch: fetchTokenPrices };
 };
 
-export const usePrices = (tokenMint = null) => {
-  const { solPrice, loading: solLoading, error: solError } = useSolPrice();
-  const { priceData: tokenPrice, loading: tokenLoading, error: tokenError } = useTokenPrice(tokenMint);
-
-  return {
-    solPrice,
-    tokenPrice,
-    loading: solLoading || tokenLoading,
-    error: solError || tokenError,
-    ready: solPrice !== null && (!tokenMint || tokenPrice !== undefined)
-  };
-};
-
 export const useNewTokens = () => {
   const [newTokens, setNewTokens] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -314,7 +316,7 @@ export const useNewTokens = () => {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}: Failed to fetch new tokens`);
       }
 
       const { tokens } = await response.json();
@@ -325,7 +327,7 @@ export const useNewTokens = () => {
     } catch (err) {
       console.error('[useNewTokens] Error:', err);
       if (isMountedRef.current) {
-        setError(err.message);
+        setError('Failed to fetch new tokens');
       }
     } finally {
       if (isMountedRef.current) {
@@ -337,7 +339,7 @@ export const useNewTokens = () => {
   useEffect(() => {
     isMountedRef.current = true;
     fetchNewTokens();
-    const interval = setInterval(fetchNewTokens, 60000); // Every 60 seconds
+    const interval = setInterval(fetchNewTokens, 60000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
@@ -345,4 +347,17 @@ export const useNewTokens = () => {
   }, [fetchNewTokens]);
 
   return { newTokens, loading, error, refetch: fetchNewTokens };
+};
+
+export const usePrices = (tokenMint = null) => {
+  const { solPrice, loading: solLoading, error: solError } = useSolPrice();
+  const { priceData: tokenPrice, loading: tokenLoading, error: tokenError } = useTokenPrice(tokenMint);
+
+  return {
+    solPrice,
+    tokenPrice,
+    loading: solLoading || tokenLoading,
+    error: solError || tokenError,
+    ready: solPrice !== null && (!tokenMint || tokenPrice !== undefined)
+  };
 };

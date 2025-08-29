@@ -20,7 +20,7 @@ function App() {
   // State management
   const [walletCount, setWalletCount] = useState(0);
   const [transactions, setTransactions] = useState([]);
-  const [newTokens, setNewTokens] = useState([]); // New state for new tokens
+  const [newTokens, setNewTokens] = useState([]);
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -30,6 +30,7 @@ function App() {
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedGroupInfo, setSelectedGroupInfo] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState('connected'); // New state for WebSocket status
 
   // Check authentication on app load
   useEffect(() => {
@@ -64,6 +65,7 @@ function App() {
       console.error('Session check error:', error);
       localStorage.removeItem('sessionToken');
       localStorage.removeItem('user');
+      setError('Authentication failed. Please try logging in again.');
     } finally {
       setIsCheckingAuth(false);
     }
@@ -82,9 +84,9 @@ function App() {
     setUser(null);
     setIsAuthenticated(false);
     setShowAdminPanel(false);
+    setConnectionStatus('disconnected');
   };
 
-  // Helper function to get auth headers
   const getAuthHeaders = () => {
     const sessionToken = localStorage.getItem('sessionToken');
     return {
@@ -93,7 +95,6 @@ function App() {
     };
   };
 
-  // Fetch new tokens
   const fetchNewTokens = async () => {
     try {
       const response = await fetch(`${API_BASE}/tokens/new`, {
@@ -104,16 +105,14 @@ function App() {
       setNewTokens(tokens);
     } catch (error) {
       console.error('Error fetching new tokens:', error);
-      setError('Failed to load new tokens');
+      setError('Failed to load new tokens. Retrying...');
     }
   };
 
-  // Ultra-fast initialization
   const ultraFastInit = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
-      const startTime = Date.now();
-
+      setLoading(true);
       const headers = getAuthHeaders();
       
       const initUrl = `${API_BASE}/init?hours=${hours}${type !== 'all' ? `&type=${type}` : ''}${groupId ? `&groupId=${groupId}` : ''}`;
@@ -125,16 +124,13 @@ function App() {
 
       const { data } = await response.json();
       
-      // Set all data instantly
       setTransactions(data.transactions);
       setMonitoringStatus(data.monitoring);
       setGroups(data.groups);
       setWalletCount(data.wallets.totalCount);
       
-      // Fetch new tokens
       await fetchNewTokens();
       
-      // Set selected group info
       if (groupId && data.wallets.selectedGroup) {
         setSelectedGroupInfo({
           groupId: data.wallets.selectedGroup.groupId,
@@ -146,7 +142,7 @@ function App() {
       }
 
     } catch (err) {
-      setError(err.message);
+      setError(`Initialization failed: ${err.message}. Retrying...`);
       console.error('Error in ultra-fast init:', err);
     } finally {
       setLoading(false);
@@ -167,7 +163,6 @@ function App() {
 
       const data = await response.json();
       
-      // Update counters from server response
       if (data.newCounts) {
         setWalletCount(data.newCounts.totalWallets);
         if (selectedGroup && data.newCounts.selectedGroup) {
@@ -192,6 +187,7 @@ function App() {
       setRefreshKey((prev) => prev + 1);
       return data;
     } catch (err) {
+      setError(`Failed to remove wallets: ${err.message}`);
       throw new Error(err.message);
     }
   };
@@ -210,9 +206,13 @@ function App() {
     }
 
     const eventSource = new EventSource(sseUrl.toString());
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
 
     eventSource.onopen = () => {
       setError(null);
+      setConnectionStatus('connected');
+      reconnectAttempts = 0;
     };
 
     eventSource.onmessage = (event) => {
@@ -245,28 +245,31 @@ function App() {
               },
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
-              pnl: newTransaction.pnl // New field from backend
+              pnl: newTransaction.pnl
             };
             return [formattedTransaction, ...prev].slice(0, 400);
           });
         }
       } catch (err) {
         console.error('Error parsing SSE message:', err);
+        setError('Failed to process real-time updates');
       }
     };
 
     eventSource.onerror = (error) => {
       console.error('SSE connection error:', error);
+      setConnectionStatus('disconnected');
       
-      if (eventSource.readyState === EventSource.CLOSED) {
-        setError('Real-time connection lost. Please refresh the page.');
+      if (eventSource.readyState === EventSource.CLOSED && reconnectAttempts < maxReconnectAttempts) {
+        setError(`Real-time connection lost. Attempting to reconnect (${reconnectAttempts + 1}/${maxReconnectAttempts})...`);
+        reconnectAttempts++;
+        setTimeout(() => {
+          setRefreshKey(prev => prev + 1);
+        }, 5000 * reconnectAttempts);
+      } else if (reconnectAttempts >= maxReconnectAttempts) {
+        setError('Real-time connection failed after multiple attempts. Please refresh the page.');
+        eventSource.close();
       }
-      
-      eventSource.close();
-      
-      setTimeout(() => {
-        setRefreshKey(prev => prev + 1);
-      }, 5000);
     };
 
     return () => {
@@ -274,11 +277,10 @@ function App() {
     };
   }, [timeframe, transactionType, selectedGroup, isAuthenticated, refreshKey]);
 
-  // Fetch new tokens periodically
   useEffect(() => {
     if (!isAuthenticated) return;
     fetchNewTokens();
-    const interval = setInterval(fetchNewTokens, 60000); // Every 60 seconds
+    const interval = setInterval(fetchNewTokens, 60000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
@@ -435,6 +437,7 @@ function App() {
 
     } catch (error) {
       console.error('Bulk import failed:', error);
+      setError(`Bulk import failed: ${error.message}`);
       throw new Error(`Bulk import failed: ${error.message}`);
     }
   };
@@ -456,6 +459,7 @@ function App() {
       setRefreshKey((prev) => prev + 1);
       return { success: true, message: data.message, group: data.group };
     } catch (err) {
+      setError(`Failed to create group: ${err.message}`);
       throw new Error(err.message);
     }
   };
@@ -476,7 +480,7 @@ function App() {
 
       setRefreshKey((prev) => prev + 1);
     } catch (err) {
-      setError(err.message);
+      setError(`Failed to toggle monitoring: ${err.message}`);
     }
   };
 
@@ -518,6 +522,12 @@ function App() {
       
       {error && <ErrorMessage error={error} />}
       
+      {connectionStatus === 'disconnected' && (
+        <div className="bg-red-900/20 border border-red-700 text-red-400 text-sm p-2 text-center">
+          Real-time updates unavailable. Retrying connection...
+        </div>
+      )}
+      
       <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
       
       <WalletManager 
@@ -530,7 +540,7 @@ function App() {
         <TokenTracker 
           groupId={selectedGroup} 
           transactions={transactions} 
-          newTokens={newTokens} // Pass new tokens
+          newTokens={newTokens}
           timeframe={timeframe}
           onTimeframeChange={handleTimeframeChange}
           groups={groups}
