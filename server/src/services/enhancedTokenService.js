@@ -6,8 +6,12 @@ constructor() {
     this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.254:50111', {
         commitment: 'confirmed'
     });
-    this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
-    
+    this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791', {
+        maxRetriesPerRequest: 10,
+        retryStrategy: (times) => Math.min(times * 500, 3000), // Exponential backoff
+        connectTimeout: 10000, // 10 seconds
+        keepAlive: 1000, // Send keep-alive every second
+      });
     // Known program addresses
     this.PROGRAMS = {
         RAYDIUM: '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
