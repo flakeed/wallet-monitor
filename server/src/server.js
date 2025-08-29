@@ -8,8 +8,11 @@ const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
 const PriceService = require('./services/priceService');
+const EnhancedTokenService = require('./services/enhancedTokenService');
 
-const priceService = new PriceService();
+// Replace the existing PriceService initialization with:
+const enhancedTokenService = new EnhancedTokenService();
+const priceService = new (require('./services/priceService'))();
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -1032,6 +1035,622 @@ app.post('/api/groups', auth.authRequired, async (req, res) => {
     } else {
       res.status(500).json({ error: 'Failed to create group' });
     }
+  }
+});
+
+app.get('/api/tokens/:mintAddress/info', auth.authRequired, async (req, res) => {
+  try {
+    const { mintAddress } = req.params;
+    
+    if (!mintAddress || mintAddress.length < 32) {
+      return res.status(400).json({ error: 'Valid mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🔍 Token info request for ${mintAddress}`);
+    const startTime = Date.now();
+    
+    const tokenInfo = await priceService.getTokenInfo(mintAddress);
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      data: tokenInfo,
+      responseTime: duration,
+      source: 'rpc_enhanced'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in enhanced token info endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch token information',
+      details: error.message 
+    });
+  }
+});
+
+// Get token price with pool details
+app.get('/api/tokens/:mintAddress/price-detailed', auth.authRequired, async (req, res) => {
+  try {
+    const { mintAddress } = req.params;
+    
+    if (!mintAddress || mintAddress.length < 32) {
+      return res.status(400).json({ error: 'Valid mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 💰 Detailed price request for ${mintAddress}`);
+    const startTime = Date.now();
+    
+    const priceData = await priceService.enhancedTokenService.getTokenPrice(mintAddress);
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      data: priceData,
+      responseTime: duration,
+      timestamp: Date.now()
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in detailed price endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch detailed price data',
+      details: error.message 
+    });
+  }
+});
+
+// Batch token info endpoint for multiple tokens
+app.post('/api/tokens/batch-info', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 50) {
+      return res.status(400).json({ error: 'Maximum 50 tokens allowed per batch request' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📦 Batch token info request for ${mints.length} tokens`);
+    const startTime = Date.now();
+    
+    const results = {};
+    const errors = {};
+    
+    // Process in smaller batches to avoid overwhelming the RPC
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < mints.length; i += BATCH_SIZE) {
+      const batch = mints.slice(i, i + BATCH_SIZE);
+      
+      const batchPromises = batch.map(async (mint) => {
+        try {
+          const tokenInfo = await priceService.getTokenInfo(mint);
+          return { mint, data: tokenInfo };
+        } catch (error) {
+          console.error(`[${new Date().toISOString()}] ❌ Error getting info for ${mint}:`, error.message);
+          return { mint, error: error.message };
+        }
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      
+      batchResults.forEach(({ mint, data, error }) => {
+        if (data) {
+          results[mint] = data;
+        } else {
+          errors[mint] = error;
+        }
+      });
+
+      // Small delay between batches
+      if (i + BATCH_SIZE < mints.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      data: results,
+      errors: Object.keys(errors).length > 0 ? errors : null,
+      count: Object.keys(results).length,
+      responseTime: duration,
+      source: 'rpc_enhanced'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in batch token info endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch batch token information',
+      details: error.message 
+    });
+  }
+});
+
+// Get new tokens (deployed recently)
+app.get('/api/tokens/new', auth.authRequired, async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 24;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    
+    console.log(`[${new Date().toISOString()}] 🆕 New tokens request: last ${hours}h, limit ${limit}`);
+    
+    const newTokens = await db.pool.query(`
+      SELECT DISTINCT tk.mint, tk.symbol, tk.name, tk.decimals, tk.created_at,
+             COUNT(to_.id) as transaction_count,
+             SUM(CASE WHEN t.transaction_type = 'buy' THEN t.sol_spent ELSE 0 END) as total_buy_volume,
+             COUNT(DISTINCT t.wallet_id) as unique_wallets
+      FROM tokens tk
+      JOIN token_operations to_ ON tk.id = to_.token_id
+      JOIN transactions t ON to_.transaction_id = t.id
+      WHERE tk.created_at >= NOW() - INTERVAL '${hours} hours'
+      GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals, tk.created_at
+      HAVING COUNT(to_.id) >= 5
+      ORDER BY tk.created_at DESC, total_buy_volume DESC
+      LIMIT $1
+    `, [limit]);
+    
+    // Enhance with current price data for top tokens
+    const enhancedTokens = await Promise.all(
+      newTokens.rows.slice(0, 20).map(async (token) => {
+        try {
+          const [priceData, tokenInfo] = await Promise.allSettled([
+            priceService.enhancedTokenService.getTokenPrice(token.mint),
+            priceService.enhancedTokenService.getTokenInfo(token.mint)
+          ]);
+          
+          const ageHours = Math.floor((Date.now() - new Date(token.created_at).getTime()) / (1000 * 60 * 60));
+          
+          return {
+            ...token,
+            ageHours,
+            currentPrice: priceData.status === 'fulfilled' ? priceData.value.priceUsd || 0 : 0,
+            marketCap: priceData.status === 'fulfilled' ? priceData.value.marketCap || 0 : 0,
+            liquidity: priceData.status === 'fulfilled' ? priceData.value.liquidity || 0 : 0,
+            pools: priceData.status === 'fulfilled' ? priceData.value.pools?.length || 0 : 0,
+            deployedAt: tokenInfo.status === 'fulfilled' ? tokenInfo.value.deployedAt : null
+          };
+        } catch (error) {
+          const ageHours = Math.floor((Date.now() - new Date(token.created_at).getTime()) / (1000 * 60 * 60));
+          return { ...token, ageHours, currentPrice: 0, marketCap: 0, liquidity: 0, pools: 0 };
+        }
+      })
+    );
+    
+    res.json({
+      success: true,
+      data: enhancedTokens,
+      count: newTokens.rows.length,
+      enhanced: Math.min(enhancedTokens.length, 20),
+      timeframe: `${hours}h`,
+      source: 'database_with_rpc'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in new tokens endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch new tokens',
+      details: error.message 
+    });
+  }
+});
+
+// Get trending tokens (high activity)
+app.get('/api/tokens/trending', auth.authRequired, async (req, res) => {
+  try {
+    const hours = parseInt(req.query.hours) || 4;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    
+    console.log(`[${new Date().toISOString()}] 🔥 Trending tokens request: last ${hours}h, limit ${limit}`);
+    
+    const trendingTokens = await db.pool.query(`
+      SELECT tk.mint, tk.symbol, tk.name, tk.decimals,
+             COUNT(DISTINCT t.id) as transaction_count,
+             COUNT(DISTINCT t.wallet_id) as unique_wallets,
+             SUM(CASE WHEN t.transaction_type = 'buy' THEN t.sol_spent ELSE 0 END) as buy_volume,
+             SUM(CASE WHEN t.transaction_type = 'sell' THEN t.sol_received ELSE 0 END) as sell_volume,
+             MAX(t.block_time) as last_activity
+      FROM tokens tk
+      JOIN token_operations to_ ON tk.id = to_.token_id
+      JOIN transactions t ON to_.transaction_id = t.id
+      WHERE t.block_time >= NOW() - INTERVAL '${hours} hours'
+        AND tk.mint NOT IN ('So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
+      GROUP BY tk.id, tk.mint, tk.symbol, tk.name, tk.decimals
+      HAVING COUNT(DISTINCT t.id) >= 10 AND COUNT(DISTINCT t.wallet_id) >= 5
+      ORDER BY (COUNT(DISTINCT t.id) * COUNT(DISTINCT t.wallet_id)) DESC, buy_volume DESC
+      LIMIT $1
+    `, [limit]);
+    
+    // Enhance top trending tokens with current price data
+    const enhancedTrending = await Promise.all(
+      trendingTokens.rows.slice(0, 25).map(async (token) => {
+        try {
+          const priceData = await priceService.enhancedTokenService.getTokenPrice(token.mint);
+          const totalVolume = parseFloat(token.buy_volume || 0) + parseFloat(token.sell_volume || 0);
+          const activityScore = token.transaction_count * token.unique_wallets;
+          
+          return {
+            ...token,
+            totalVolume,
+            activityScore,
+            currentPrice: priceData.priceUsd || 0,
+            marketCap: priceData.marketCap || 0,
+            liquidity: priceData.liquidity || 0,
+            pools: priceData.pools?.length || 0,
+            lastActivity: token.last_activity
+          };
+        } catch (error) {
+          const totalVolume = parseFloat(token.buy_volume || 0) + parseFloat(token.sell_volume || 0);
+          const activityScore = token.transaction_count * token.unique_wallets;
+          
+          return {
+            ...token,
+            totalVolume,
+            activityScore,
+            currentPrice: 0,
+            marketCap: 0,
+            liquidity: 0,
+            pools: 0,
+            lastActivity: token.last_activity
+          };
+        }
+      })
+    );
+    
+    res.json({
+      success: true,
+      data: enhancedTrending,
+      count: trendingTokens.rows.length,
+      enhanced: Math.min(enhancedTrending.length, 25),
+      timeframe: `${hours}h`,
+      source: 'database_with_rpc'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in trending tokens endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch trending tokens',
+      details: error.message 
+    });
+  }
+});
+
+// Get token pools information
+app.get('/api/tokens/:mintAddress/pools', auth.authRequired, async (req, res) => {
+  try {
+    const { mintAddress } = req.params;
+    
+    if (!mintAddress || mintAddress.length < 32) {
+      return res.status(400).json({ error: 'Valid mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🏊 Pools request for ${mintAddress}`);
+    const startTime = Date.now();
+    
+    const pools = await priceService.enhancedTokenService.findTokenPools(mintAddress);
+    
+    // Get detailed pool information
+    const detailedPools = await Promise.allSettled(
+      pools.slice(0, 10).map(async (pool) => {
+        try {
+          const poolPrice = await priceService.enhancedTokenService.getPoolPrice(pool, mintAddress);
+          return { ...pool, ...poolPrice, verified: pool.dex !== 'UNKNOWN' };
+        } catch (error) {
+          return { ...pool, error: error.message, price: 0, liquidity: 0, verified: false };
+        }
+      })
+    );
+    
+    const validPools = detailedPools
+      .filter(result => result.status === 'fulfilled')
+      .map(result => result.value)
+      .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0));
+    
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      data: {
+        pools: validPools,
+        summary: {
+          totalPools: pools.length,
+          detailedPools: validPools.length,
+          totalLiquidity: validPools.reduce((sum, pool) => sum + (pool.liquidity || 0), 0),
+          dexDistribution: validPools.reduce((acc, pool) => {
+            acc[pool.dex] = (acc[pool.dex] || 0) + 1;
+            return acc;
+          }, {})
+        }
+      },
+      responseTime: duration,
+      source: 'rpc_pools'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in pools endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch pool information',
+      details: error.message 
+    });
+  }
+});
+
+// Get wallet PnL for a specific token with accurate pricing
+app.get('/api/wallets/:walletAddress/pnl/:mintAddress', auth.authRequired, async (req, res) => {
+  try {
+    const { walletAddress, mintAddress } = req.params;
+    
+    if (!walletAddress || walletAddress.length < 32 || !mintAddress || mintAddress.length < 32) {
+      return res.status(400).json({ error: 'Valid wallet and mint addresses are required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 PnL calculation for wallet ${walletAddress.slice(0, 8)}... token ${mintAddress.slice(0, 8)}...`);
+    const startTime = Date.now();
+    
+    // Get wallet's transactions for this token
+    const walletTransactions = await db.pool.query(`
+      SELECT t.*, to_.amount, to_.operation_type
+      FROM transactions t
+      JOIN token_operations to_ ON t.id = to_.transaction_id
+      JOIN tokens tk ON to_.token_id = tk.id
+      JOIN wallets w ON t.wallet_id = w.id
+      WHERE w.address = $1 AND tk.mint = $2
+      ORDER BY t.block_time ASC
+    `, [walletAddress, mintAddress]);
+    
+    if (walletTransactions.rows.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          wallet: walletAddress,
+          token: mintAddress,
+          pnl: {
+            realizedPnL: 0,
+            unrealizedPnL: 0,
+            totalPnL: 0,
+            totalInvested: 0,
+            currentValue: 0,
+            tokensBought: 0,
+            tokensSold: 0,
+            currentHoldings: 0,
+            transactions: 0
+          }
+        },
+        message: 'No transactions found for this wallet-token pair'
+      });
+    }
+
+    // Calculate PnL with accurate current price
+    const [currentPrice, tokenInfo] = await Promise.all([
+      priceService.enhancedTokenService.getTokenPrice(mintAddress),
+      priceService.enhancedTokenService.getTokenInfo(mintAddress)
+    ]);
+
+    let totalTokensBought = 0;
+    let totalTokensSold = 0;
+    let totalSOLSpent = 0;
+    let totalSOLReceived = 0;
+    
+    const transactionHistory = [];
+
+    for (const tx of walletTransactions.rows) {
+      const amount = parseFloat(tx.amount);
+      const solAmount = tx.operation_type === 'buy' ? parseFloat(tx.sol_spent) : parseFloat(tx.sol_received);
+      
+      if (tx.operation_type === 'buy') {
+        totalTokensBought += amount;
+        totalSOLSpent += solAmount;
+      } else {
+        totalTokensSold += amount;
+        totalSOLReceived += solAmount;
+      }
+      
+      transactionHistory.push({
+        signature: tx.signature,
+        time: tx.block_time,
+        type: tx.operation_type,
+        tokenAmount: amount,
+        solAmount: solAmount,
+        runningBalance: totalTokensBought - totalTokensSold
+      });
+    }
+
+    const currentHoldings = Math.max(0, totalTokensBought - totalTokensSold);
+    const soldTokens = Math.min(totalTokensSold, totalTokensBought);
+    
+    // Calculate average buy price
+    const avgBuyPriceSOL = totalSOLSpent / totalTokensBought;
+    
+    // Calculate realized PnL (for tokens that have been sold)
+    let realizedPnLSOL = 0;
+    if (soldTokens > 0) {
+      const soldTokensCostBasisSOL = soldTokens * avgBuyPriceSOL;
+      realizedPnLSOL = totalSOLReceived - soldTokensCostBasisSOL;
+    }
+    
+    // Calculate unrealized PnL (for tokens still held)
+    let unrealizedPnLSOL = 0;
+    if (currentHoldings > 0 && currentPrice.priceUsd > 0) {
+      const solPrice = await priceService.getSolPrice();
+      const remainingCostBasisSOL = currentHoldings * avgBuyPriceSOL;
+      const currentMarketValueSOL = (currentHoldings * currentPrice.priceUsd) / solPrice.price;
+      unrealizedPnLSOL = currentMarketValueSOL - remainingCostBasisSOL;
+    }
+    
+    const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
+    const solPrice = await priceService.getSolPrice();
+    
+    const pnlData = {
+      wallet: walletAddress,
+      token: mintAddress,
+      tokenInfo: {
+        symbol: tokenInfo.symbol,
+        name: tokenInfo.name,
+        decimals: tokenInfo.decimals
+      },
+      pnl: {
+        realizedPnL: {
+          sol: realizedPnLSOL,
+          usd: realizedPnLSOL * solPrice.price
+        },
+        unrealizedPnL: {
+          sol: unrealizedPnLSOL,
+          usd: unrealizedPnLSOL * solPrice.price
+        },
+        totalPnL: {
+          sol: totalPnLSOL,
+          usd: totalPnLSOL * solPrice.price
+        },
+        totalInvested: {
+          sol: totalSOLSpent,
+          usd: totalSOLSpent * solPrice.price
+        },
+        currentValue: {
+          sol: currentHoldings > 0 ? (currentHoldings * currentPrice.priceUsd) / solPrice.price : 0,
+          usd: currentHoldings * currentPrice.priceUsd
+        },
+        tokensBought: totalTokensBought,
+        tokensSold: totalTokensSold,
+        currentHoldings: currentHoldings,
+        avgBuyPrice: {
+          sol: avgBuyPriceSOL,
+          usd: avgBuyPriceSOL * solPrice.price
+        },
+        currentPrice: {
+          sol: currentPrice.priceUsd / solPrice.price,
+          usd: currentPrice.priceUsd
+        },
+        transactions: walletTransactions.rows.length,
+        profitMargin: totalSOLSpent > 0 ? ((totalPnLSOL / totalSOLSpent) * 100) : 0
+      },
+      transactionHistory: transactionHistory.slice(-10), // Last 10 transactions
+      calculatedAt: Date.now(),
+      priceSource: currentPrice.source
+    };
+    
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      data: pnlData,
+      responseTime: duration,
+      source: 'enhanced_calculation'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in PnL calculation endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to calculate PnL',
+      details: error.message 
+    });
+  }
+});
+
+// Get service statistics including RPC performance
+app.get('/api/tokens/service-stats', auth.authRequired, auth.adminRequired, (req, res) => {
+  try {
+    const stats = priceService.getStats();
+    
+    res.json({
+      success: true,
+      data: {
+        ...stats,
+        endpoints: {
+          '/api/tokens/:mint/info': 'Comprehensive token information',
+          '/api/tokens/:mint/price-detailed': 'Detailed price with pools',
+          '/api/tokens/new': 'Recently deployed tokens',
+          '/api/tokens/trending': 'High activity tokens',
+          '/api/tokens/:mint/pools': 'DEX pools information'
+        },
+        features: [
+          'Direct RPC access for real-time data',
+          'Multi-DEX pool aggregation',
+          'Token deployment tracking',
+          'Accurate PnL calculations',
+          'No external API limits',
+          'Comprehensive market data'
+        ]
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting enhanced service stats:`, error.message);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get service statistics' 
+    });
+  }
+});
+
+// Test endpoint for RPC connectivity
+app.get('/api/tokens/rpc-test', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const testMint = req.query.mint || 'So11111111111111111111111111111111111111112';
+    
+    console.log(`[${new Date().toISOString()}] 🧪 RPC test for mint ${testMint}`);
+    const startTime = Date.now();
+    
+    const results = {
+      rpcEndpoint: priceService.enhancedTokenService.connection.rpcEndpoint,
+      tests: {}
+    };
+    
+    // Test basic connection
+    try {
+      const slot = await priceService.enhancedTokenService.connection.getSlot();
+      results.tests.connection = { success: true, currentSlot: slot };
+    } catch (error) {
+      results.tests.connection = { success: false, error: error.message };
+    }
+    
+    // Test token info
+    try {
+      const tokenInfo = await priceService.enhancedTokenService.getTokenInfo(testMint);
+      results.tests.tokenInfo = { success: true, data: tokenInfo };
+    } catch (error) {
+      results.tests.tokenInfo = { success: false, error: error.message };
+    }
+    
+    // Test price data
+    try {
+      const priceData = await priceService.enhancedTokenService.getTokenPrice(testMint);
+      results.tests.priceData = { 
+        success: true, 
+        price: priceData.priceUsd, 
+        pools: priceData.pools?.length || 0,
+        source: priceData.source 
+      };
+    } catch (error) {
+      results.tests.priceData = { success: false, error: error.message };
+    }
+    
+    const totalTime = Date.now() - startTime;
+    results.totalTime = totalTime;
+    results.overallSuccess = Object.values(results.tests).every(test => test.success);
+    
+    res.json({
+      success: true,
+      data: results,
+      message: results.overallSuccess ? 
+        `RPC tests completed successfully in ${totalTime}ms` :
+        'Some RPC tests failed - check individual test results'
+    });
+    
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in RPC test endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'RPC test failed',
+      details: error.message 
+    });
   }
 });
 
