@@ -1,302 +1,279 @@
-const Redis = require('ioredis');
 const { Connection, PublicKey } = require('@solana/web3.js');
-const { getMint, MintLayout } = require('@solana/spl-token');
+const axios = require('axios');
+const NodeCache = require('node-cache');
+
+// Initialize Solana connection with custom node
+const connection = new Connection('http://45.134.108.254:50111', 'confirmed');
+
+// Cache for token prices (TTL: 30 seconds)
+const priceCache = new NodeCache({ stdTTL: 30, checkperiod: 10 });
+
+// Supported DEXs
+const DEXS = {
+  RAYDIUM: 'raydium',
+  ORCA: 'orca',
+  METEORA: 'meteora',
+  JUPITER: 'jupiter'
+};
+
+// Program IDs for DEXs
+const RAYDIUM_PROGRAM_ID = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
+const ORCA_PROGRAM_ID = new PublicKey('9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP');
+const METEORA_PROGRAM_ID = new PublicKey('DLendnZuH1w3qhwk6zSzw6sBdsnR7U1Z2D4T3V7W85x1'); // Example Meteora program ID
 
 class PriceService {
-    constructor() {
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
-        this.connection = new Connection(process.env.SOLANA_RPC_URL || 'http://45.134.108.254:50111', {
-            commitment: 'confirmed',
-            httpHeaders: { 'Connection': 'keep-alive' }
-        });
-        this.solPriceCache = {
-            price: 150,
-            lastUpdated: 0,
-            cacheTimeout: 30000 // 30 seconds
+  // Fetch token price from a specific DEX
+  async fetchPriceFromDex(tokenMint, dex) {
+    try {
+      const mintKey = new PublicKey(tokenMint);
+      let poolData;
+
+      switch (dex) {
+        case DEXS.RAYDIUM:
+          poolData = await this.getRaydiumPoolData(mintKey);
+          break;
+        case DEXS.ORCA:
+          poolData = await this.getOrcaPoolData(mintKey);
+          break;
+        case DEXS.METEORA:
+          poolData = await this.getMeteoraPoolData(mintKey);
+          break;
+        default:
+          throw new Error(`Unsupported DEX: ${dex}`);
+      }
+
+      if (!poolData) {
+        throw new Error(`No liquidity pool found for ${tokenMint} on ${dex}`);
+      }
+
+      return {
+        price: poolData.price,
+        marketCap: poolData.marketCap,
+        deployTime: poolData.deployTime,
+        timeSinceDeployMs: Date.now() - new Date(poolData.deployTime).getTime()
+      };
+    } catch (error) {
+      console.error(`[PriceService] Error fetching price from ${dex} for ${tokenMint}:`, error.message);
+      throw error;
+    }
+  }
+
+  // Fetch Raydium pool data
+  async getRaydiumPoolData(mintKey) {
+    try {
+      const accounts = await connection.getProgramAccounts(RAYDIUM_PROGRAM_ID, {
+        filters: [
+          { dataSize: 560 }, // Raydium AMM pool account size
+          { memcmp: { offset: 32, bytes: mintKey.toBase58() } } // Token A or B mint
+        ]
+      });
+
+      if (accounts.length === 0) {
+        return null;
+      }
+
+      // Simplified: Assume first account is the pool
+      const poolAccount = accounts[0];
+      // Placeholder: Parse pool data to extract price (use Raydium SDK for real implementation)
+      const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
+      const totalSupply = await this.getTokenSupply(mintKey);
+      const deployTime = await this.getTokenDeployTime(mintKey);
+
+      return {
+        price,
+        marketCap: price * totalSupply,
+        deployTime
+      };
+    } catch (error) {
+      console.error(`[PriceService] Error fetching Raydium pool for ${mintKey.toBase58()}:`, error.message);
+      return null;
+    }
+  }
+
+  // Fetch Orca pool data
+  async getOrcaPoolData(mintKey) {
+    try {
+      const accounts = await connection.getProgramAccounts(ORCA_PROGRAM_ID, {
+        filters: [
+          { dataSize: 712 }, // Orca pool account size
+          { memcmp: { offset: 8, bytes: mintKey.toBase58() } } // Token A or B mint
+        ]
+      });
+
+      if (accounts.length === 0) {
+        return null;
+      }
+
+      // Simplified: Assume first account is the pool
+      const poolAccount = accounts[0];
+      const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
+      const totalSupply = await this.getTokenSupply(mintKey);
+      const deployTime = await this.getTokenDeployTime(mintKey);
+
+      return {
+        price,
+        marketCap: price * totalSupply,
+        deployTime
+      };
+    } catch (error) {
+      console.error(`[PriceService] Error fetching Orca pool for ${mintKey.toBase58()}:`, error.message);
+      return null;
+    }
+  }
+
+  // Fetch Meteora pool data
+  async getMeteoraPoolData(mintKey) {
+    try {
+      const accounts = await connection.getProgramAccounts(METEORA_PROGRAM_ID, {
+        filters: [
+          { dataSize: 600 }, // Example Meteora pool account size
+          { memcmp: { offset: 16, bytes: mintKey.toBase58() } } // Token mint
+        ]
+      });
+
+      if (accounts.length === 0) {
+        return null;
+      }
+
+      // Simplified: Assume first account is the pool
+      const poolAccount = accounts[0];
+      const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
+      const totalSupply = await this.getTokenSupply(mintKey);
+      const deployTime = await this.getTokenDeployTime(mintKey);
+
+      return {
+        price,
+        marketCap: price * totalSupply,
+        deployTime
+      };
+    } catch (error) {
+      console.error(`[PriceService] Error fetching Meteora pool for ${mintKey.toBase58()}:`, error.message);
+      return null;
+    }
+  }
+
+  // Placeholder for calculating price from pool data
+  async calculatePoolPrice(poolAccount) {
+    // Implement actual logic to parse pool reserves and calculate price
+    // Example: price = (reserve_token_b / reserve_token_a) * solPrice
+    return 0.1234; // Placeholder
+  }
+
+  // Fetch price from Jupiter API as a fallback
+  async fetchPriceFromJupiter(tokenMint) {
+    try {
+      const response = await axios.get(`https://price.jup.ag/v4/price?ids=${tokenMint}`);
+      const data = response.data.data[tokenMint];
+
+      if (!data) {
+        throw new Error(`No price data found for ${tokenMint}`);
+      }
+
+      const totalSupply = await this.getTokenSupply(tokenMint);
+      const deployTime = await this.getTokenDeployTime(tokenMint);
+
+      return {
+        price: data.price,
+        marketCap: data.price * totalSupply,
+        deployTime,
+        timeSinceDeployMs: Date.now() - new Date(deployTime).getTime()
+      };
+    } catch (error) {
+      console.error(`[PriceService] Error fetching price from Jupiter for ${tokenMint}:`, error.message);
+      throw error;
+    }
+  }
+
+  // Fetch token total supply
+  async getTokenSupply(tokenMint) {
+    try {
+      const mintKey = new PublicKey(tokenMint);
+      const mintInfo = await connection.getAccountInfo(mintKey);
+      if (!mintInfo) {
+        throw new Error(`Mint ${tokenMint} not found`);
+      }
+      // Parse supply from mint account data (SPL token layout)
+      const supply = mintInfo.data.readBigUInt64LE(36); // Offset for supply in mint account
+      return Number(supply) / 1e9; // Adjust for decimals (assuming 9 decimals)
+    } catch (error) {
+      console.error(`[PriceService] Error fetching token supply for ${tokenMint}:`, error.message);
+      return 1_000_000_000; // Fallback supply
+    }
+  }
+
+  // Fetch token deploy time
+  async getTokenDeployTime(tokenMint) {
+    try {
+      const mintKey = new PublicKey(tokenMint);
+      const signatures = await connection.getSignaturesForAddress(mintKey, { limit: 1 });
+      if (signatures.length === 0) {
+        return new Date().toISOString();
+      }
+      const tx = await connection.getTransaction(signatures[0].signature, { maxSupportedTransactionVersion: 0 });
+      return new Date(tx.blockTime * 1000).toISOString();
+    } catch (error) {
+      console.error(`[PriceService] Error fetching deploy time for ${tokenMint}:`, error.message);
+      return new Date().toISOString();
+    }
+  }
+
+  // Main method to fetch token price
+  async getTokenPrice(tokenMint) {
+    const cacheKey = `price-${tokenMint}`;
+    const cached = priceCache.get(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+
+    const dexes = [DEXS.RAYDIUM, DEXS.ORCA, DEXS.METEORA];
+
+    for (const dex of dexes) {
+      try {
+        const priceData = await this.fetchPriceFromDex(tokenMint, dex);
+        priceCache.set(cacheKey, priceData);
+        return priceData;
+      } catch (error) {
+        console.warn(`[PriceService] Failed to fetch price from ${dex} for ${tokenMint}, trying next DEX`);
+      }
+    }
+
+    // Fallback to Jupiter API
+    try {
+      const priceData = await this.fetchPriceFromJupiter(tokenMint);
+      priceCache.set(cacheKey, priceData);
+      return priceData;
+    } catch (error) {
+      console.error(`[PriceService] All price sources failed for ${tokenMint}`);
+      return {
+        price: null,
+        marketCap: null,
+        deployTime: null,
+        timeSinceDeployMs: null
+      };
+    }
+  }
+
+  // Batch fetch token prices
+  async getTokenPrices(tokenMints) {
+    const results = {};
+    const promises = tokenMints.map(async (mint) => {
+      try {
+        const priceData = await this.getTokenPrice(mint);
+        results[mint] = priceData;
+      } catch (error) {
+        results[mint] = {
+          price: null,
+          marketCap: null,
+          deployTime: null,
+          timeSinceDeployMs: null
         };
-        this.tokenPriceCache = new Map();
-        this.maxCacheSize = 1000;
-        this.startBackgroundUpdates();
-    }
+      }
+    });
 
-    startBackgroundUpdates() {
-        setInterval(async () => {
-            try {
-                await this.updateSolPriceInBackground();
-            } catch (error) {
-                console.error(`[${new Date().toISOString()}] ❌ Background SOL price update failed:`, error.message);
-            }
-        }, 30000);
-
-        setInterval(() => {
-            this.cleanTokenPriceCache();
-        }, 300000);
-    }
-
-    async updateSolPriceInBackground() {
-        try {
-            const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112', {
-                timeout: 5000,
-                headers: { 'Accept': 'application/json' }
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            if (data.pairs && data.pairs.length > 0) {
-                const bestPair = data.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                const newPrice = parseFloat(bestPair.priceUsd || 150);
-                this.solPriceCache = {
-                    price: newPrice,
-                    lastUpdated: Date.now(),
-                    cacheTimeout: 30000
-                };
-                await this.redis.setex('sol_price', 60, JSON.stringify(this.solPriceCache));
-                console.log(`[${new Date().toISOString()}] ✅ Updated SOL price in background: $${newPrice}`);
-            }
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Failed to update SOL price in background:`, error.message);
-        }
-    }
-
-    async getSolPrice() {
-        const now = Date.now();
-        if (now - this.solPriceCache.lastUpdated < this.solPriceCache.cacheTimeout) {
-            return {
-                success: true,
-                price: this.solPriceCache.price,
-                source: 'cache',
-                lastUpdated: this.solPriceCache.lastUpdated
-            };
-        }
-        try {
-            const redisPrice = await this.redis.get('sol_price');
-            if (redisPrice) {
-                const cached = JSON.parse(redisPrice);
-                if (now - cached.lastUpdated < cached.cacheTimeout) {
-                    this.solPriceCache = cached;
-                    return {
-                        success: true,
-                        price: cached.price,
-                        source: 'redis',
-                        lastUpdated: cached.lastUpdated
-                    };
-                }
-            }
-        } catch (error) {
-            console.warn(`[${new Date().toISOString()}] ⚠️ Redis price fetch failed:`, error.message);
-        }
-        try {
-            const response = await fetch('https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112', {
-                timeout: 5000,
-                headers: { 'Accept': 'application/json' }
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            if (data.pairs && data.pairs.length > 0) {
-                const bestPair = data.pairs.reduce((prev, current) =>
-                    (current.volume?.h24 || 0) > (prev.volume?.h24 || 0) ? current : prev
-                );
-                const newPrice = parseFloat(bestPair.priceUsd || 150);
-                this.solPriceCache = {
-                    price: newPrice,
-                    lastUpdated: now,
-                    cacheTimeout: 30000
-                };
-                await this.redis.setex('sol_price', 60, JSON.stringify(this.solPriceCache));
-                return {
-                    success: true,
-                    price: newPrice,
-                    source: 'fresh',
-                    lastUpdated: now
-                };
-            }
-            throw new Error('No price data found');
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching fresh SOL price:`, error.message);
-            return {
-                success: true,
-                price: this.solPriceCache.price,
-                source: 'fallback',
-                lastUpdated: this.solPriceCache.lastUpdated,
-                error: error.message
-            };
-        }
-    }
-
-    async getTokenPriceFromPool(mint) {
-        // Пример: предположим, что мы используем Raydium для получения цены
-        // Замените на реальный адрес пула ликвидности и программу (например, Raydium program ID)
-        const RAYDIUM_PROGRAM_ID = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'); // Raydium program
-        const mintPubkey = new PublicKey(mint);
-
-        try {
-            // Получаем все аккаунты, связанные с программой Raydium и данным токеном
-            const accounts = await this.connection.getProgramAccounts(RAYDIUM_PROGRAM_ID, {
-                filters: [
-                    { memcmp: { offset: 0, bytes: mintPubkey.toBase58() } } // Фильтр по mint
-                ]
-            });
-
-            if (!accounts || accounts.length === 0) {
-                throw new Error('No liquidity pool found for this token');
-            }
-
-            // Предполагаем, что первый аккаунт — это пул ликвидности
-            const poolAccount = accounts[0];
-            const poolData = poolAccount.account.data; // Декодируйте данные пула (зависит от структуры пула)
-
-            // Здесь нужно декодировать данные пула (например, запасы токена и SOL)
-            // Это пример, нужно адаптировать под конкретную структуру данных Raydium
-            // Для простоты предположим, что poolData содержит tokenAmount и solAmount
-            const tokenAmount = 1000000; // Пример: нужно извлечь из poolData
-            const solAmount = 100; // Пример: нужно извлечь из poolData
-
-            const solPrice = (await this.getSolPrice()).price;
-            const tokenPrice = (solAmount / tokenAmount) * solPrice;
-
-            return {
-                price: tokenPrice,
-                liquidity: solAmount * solPrice, // Пример ликвидности
-                source: 'rpc'
-            };
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching token price for ${mint}:`, error.message);
-            return { price: 0, liquidity: 0, source: 'error', error: error.message };
-        }
-    }
-
-    async getTokenMarketCap(mint) {
-        try {
-            const mintPubkey = new PublicKey(mint);
-            const mintInfo = await getMint(this.connection, mintPubkey);
-            const totalSupply = Number(mintInfo.supply) / Math.pow(10, mintInfo.decimals);
-            const priceData = await this.getTokenPriceFromPool(mint);
-            const marketCap = totalSupply * priceData.price;
-            return marketCap;
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error calculating market cap for ${mint}:`, error.message);
-            return 0;
-        }
-    }
-
-    async getTokenDeployTime(mint) {
-        try {
-            const mintPubkey = new PublicKey(mint);
-            const signatures = await this.connection.getSignaturesForAddress(mintPubkey, { limit: 1 });
-            if (signatures.length === 0) {
-                throw new Error('No transactions found for token mint');
-            }
-            const blockTime = signatures[0].blockTime * 1000; // Время в миллисекундах
-            const now = Date.now();
-            const timeSinceDeploy = now - blockTime;
-            return {
-                deployTime: new Date(blockTime).toISOString(),
-                timeSinceDeployMs: timeSinceDeploy
-            };
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error fetching deploy time for ${mint}:`, error.message);
-            return { deployTime: null, timeSinceDeployMs: 0, error: error.message };
-        }
-    }
-
-    async getTokenPrices(tokenMints) {
-        if (!tokenMints || tokenMints.length === 0) {
-            return new Map();
-        }
-
-        const results = new Map();
-        const uncachedMints = [];
-        const now = Date.now();
-
-        for (const mint of tokenMints) {
-            const cached = this.tokenPriceCache.get(mint);
-            if (cached && (now - cached.timestamp) < 60000) {
-                results.set(mint, cached.data);
-            } else {
-                uncachedMints.push(mint);
-            }
-        }
-
-        if (uncachedMints.length > 0) {
-            const BATCH_SIZE = 10;
-            for (let i = 0; i < uncachedMints.length; i += BATCH_SIZE) {
-                const batch = uncachedMints.slice(i, i + BATCH_SIZE);
-                const batchPromises = batch.map(async (mint) => {
-                    try {
-                        const priceData = await this.getTokenPriceFromPool(mint);
-                        const marketCap = await this.getTokenMarketCap(mint);
-                        const deployInfo = await this.getTokenDeployTime(mint);
-                        const data = {
-                            price: priceData.price,
-                            liquidity: priceData.liquidity,
-                            marketCap: marketCap,
-                            deployTime: deployInfo.deployTime,
-                            timeSinceDeployMs: deployInfo.timeSinceDeployMs
-                        };
-                        this.tokenPriceCache.set(mint, { data, timestamp: now });
-                        return { mint, data };
-                    } catch (error) {
-                        console.error(`[${new Date().toISOString()}] ❌ Error processing ${mint}:`, error.message);
-                        return { mint, data: null };
-                    }
-                });
-
-                const batchResults = await Promise.all(batchPromises);
-                batchResults.forEach(({ mint, data }) => {
-                    results.set(mint, data);
-                });
-
-                if (i + BATCH_SIZE < uncachedMints.length) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                }
-            }
-        }
-
-        return results;
-    }
-
-    cleanTokenPriceCache() {
-        if (this.tokenPriceCache.size <= this.maxCacheSize) return;
-
-        const now = Date.now();
-        const entries = Array.from(this.tokenPriceCache.entries());
-        const validEntries = entries.filter(([, value]) => 
-            (now - value.timestamp) < 300000
-        );
-
-        if (validEntries.length > this.maxCacheSize) {
-            validEntries.sort((a, b) => b[1].timestamp - a[1].timestamp);
-            validEntries.length = this.maxCacheSize;
-        }
-
-        this.tokenPriceCache.clear();
-        validEntries.forEach(([key, value]) => {
-            this.tokenPriceCache.set(key, value);
-        });
-
-        console.log(`[${new Date().toISOString()}] 🧹 Cleaned token price cache: ${validEntries.length} entries remaining`);
-    }
-
-    getStats() {
-        return {
-            solPrice: {
-                current: this.solPriceCache.price,
-                lastUpdated: this.solPriceCache.lastUpdated,
-                age: Date.now() - this.solPriceCache.lastUpdated
-            },
-            tokenCache: {
-                size: this.tokenPriceCache.size,
-                maxSize: this.maxCacheSize,
-                utilization: Math.round((this.tokenPriceCache.size / this.maxCacheSize) * 100)
-            }
-        };
-    }
-
-    async close() {
-        await this.redis.quit();
-        console.log(`[${new Date().toISOString()}] ✅ Price service closed`);
-    }
+    await Promise.all(promises);
+    return { success: true, prices: results };
+  }
 }
 
-module.exports = PriceService;
+module.exports = new PriceService();
