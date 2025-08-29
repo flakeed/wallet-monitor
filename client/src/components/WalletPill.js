@@ -1,16 +1,17 @@
-// client/src/components/WalletPill.js - Ultra-compact wallet pill for token cards
-
 import { usePrices } from '../hooks/usePrices';
 import { useState, useEffect, useMemo } from 'react';
 
-function WalletPill({ wallet, tokenMint }) {
+function WalletPill({ wallet, tokenMint, transaction }) {
     const [totalPnL, setTotalPnL] = useState(null);
     const { solPrice, tokenPrice, loading, error, ready } = usePrices(tokenMint);
     
     const label = wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`;
 
-    // Compact PnL calculation
+    // Use backend-provided PNL if available, otherwise calculate
     const calculatedPnL = useMemo(() => {
+        if (transaction?.pnl) {
+            return transaction.pnl / solPrice; // Convert USD PNL to SOL
+        }
         if (!tokenMint || !ready || !solPrice || !tokenPrice?.price) {
             return wallet.pnlSol || 0;
         }
@@ -43,7 +44,7 @@ function WalletPill({ wallet, tokenMint }) {
         }
 
         return realizedPnLSOL + unrealizedPnLSOL;
-    }, [tokenMint, ready, solPrice, tokenPrice, wallet.tokensBought, wallet.tokensSold, wallet.solSpent, wallet.solReceived]);
+    }, [tokenMint, ready, solPrice, tokenPrice, wallet, transaction]);
 
     useEffect(() => {
         setTotalPnL(calculatedPnL);
@@ -64,7 +65,6 @@ function WalletPill({ wallet, tokenMint }) {
 
     return (
         <div className="flex items-center justify-between bg-gray-800/60 hover:bg-gray-700/60 p-2 rounded text-xs transition-colors">
-            {/* Wallet info */}
             <div className="flex items-center space-x-2 min-w-0 flex-1">
                 <div className="min-w-0">
                     <div className="flex items-center space-x-1">
@@ -93,14 +93,13 @@ function WalletPill({ wallet, tokenMint }) {
                 </div>
             </div>
 
-            {/* PnL and actions */}
             <div className="flex items-center space-x-2">
                 <div className="text-right">
                     <div className={`text-xs font-semibold ${pnlColor} flex items-center`}>
                         {loading && tokenMint ? (
                             <div className="animate-spin rounded-full h-2 w-2 border border-gray-400 border-t-transparent mr-1"></div>
                         ) : null}
-                        {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)}
+                        {displayPnL > 0 ? '+' : ''}{displayPnL.toFixed(4)} SOL
                     </div>
                     <div className="text-gray-500 text-xs">
                         {(wallet.solSpent || 0).toFixed(2)}→{(wallet.solReceived || 0).toFixed(2)}

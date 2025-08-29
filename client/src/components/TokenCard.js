@@ -1,13 +1,34 @@
-// client/src/components/TokenCard.js - Ultra-compact token card for maximum density
-
 import React, { useState, useMemo } from 'react';
 import { usePrices } from '../hooks/usePrices';
+import WalletPill from './WalletPill';
 
 function TokenCard({ token, onOpenChart }) {
   const [showDetails, setShowDetails] = useState(false);
   const { solPrice, tokenPrice: priceData, loading: loadingPrice } = usePrices(token.mint);
 
   const WALLETS_DISPLAY_LIMIT = 3;
+
+  // Format deployment time
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'Unknown';
+    const date = new Date(dateStr);
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: true
+    });
+  };
+
+  // Format large numbers
+  const formatNumber = (num, decimals = 2) => {
+    if (num === null || num === undefined) return '0';
+    if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
+    if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
+    if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
+    return num.toFixed(decimals);
+  };
 
   // Compact PnL calculation
   const groupPnL = useMemo(() => {
@@ -17,12 +38,14 @@ function TokenCard({ token, onOpenChart }) {
     let totalTokensSold = 0;
     let totalSpentSOL = 0;
     let totalReceivedSOL = 0;
+    let totalPnLUSD = 0;
 
     token.wallets.forEach(wallet => {
       totalTokensBought += wallet.tokensBought || 0;
       totalTokensSold += wallet.tokensSold || 0;
       totalSpentSOL += wallet.solSpent || 0;
       totalReceivedSOL += wallet.solReceived || 0;
+      totalPnLUSD += wallet.transactions?.reduce((sum, tx) => sum + (tx.pnl || 0), 0) || 0;
     });
 
     if (totalTokensBought === 0) return null;
@@ -46,7 +69,7 @@ function TokenCard({ token, onOpenChart }) {
     }
 
     const totalPnLSOL = realizedPnLSOL + unrealizedPnLSOL;
-    
+
     return {
       totalTokensBought,
       totalTokensSold,
@@ -59,8 +82,10 @@ function TokenCard({ token, onOpenChart }) {
       totalPnLSOL,
       realizedPnLUSD: realizedPnLSOL * solPrice,
       unrealizedPnLUSD: unrealizedPnLSOL * solPrice,
-      totalPnLUSD: totalPnLSOL * solPrice,
+      totalPnLUSD: totalPnLUSD || totalPnLSOL * solPrice,
       currentPriceUSD: priceData.price,
+      marketCap: priceData.marketCap,
+      deploymentTime: priceData.deploymentTime,
       solPrice,
       soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
       holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0
@@ -77,13 +102,6 @@ function TokenCard({ token, onOpenChart }) {
     window.open(gmgnUrl, '_blank');
   };
 
-  const formatNumber = (num, decimals = 2) => {
-    if (num === null || num === undefined) return '0';
-    if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
-    if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
-    return num.toFixed(decimals);
-  };
-
   const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
     ? groupPnL.totalPnLSOL > 0
       ? 'text-green-400'
@@ -94,10 +112,8 @@ function TokenCard({ token, onOpenChart }) {
 
   return (
     <div className="bg-gray-900 border border-gray-700 hover:border-gray-600 transition-colors">
-      {/* Header Row */}
       <div className="flex items-center justify-between p-3 border-b border-gray-800">
         <div className="flex items-center space-x-3 min-w-0 flex-1">
-          {/* Token info */}
           <div className="min-w-0 flex-1">
             <div className="flex items-center space-x-2">
               <span className="bg-blue-600 text-white text-xs font-bold px-2 py-0.5 rounded">
@@ -124,7 +140,6 @@ function TokenCard({ token, onOpenChart }) {
             </div>
           </div>
 
-          {/* Stats */}
           <div className="text-right">
             <div className={`text-sm font-bold ${netColor} flex items-center`}>
               {loadingPrice && (
@@ -140,7 +155,6 @@ function TokenCard({ token, onOpenChart }) {
           </div>
         </div>
 
-        {/* Action buttons */}
         <div className="flex items-center space-x-1 ml-3">
           <button
             onClick={() => setShowDetails(!showDetails)}
@@ -165,10 +179,8 @@ function TokenCard({ token, onOpenChart }) {
         </div>
       </div>
 
-      {/* Details (collapsible) */}
       {showDetails && (
         <div className="p-3 bg-gray-800/50">
-          {/* PnL breakdown */}
           {groupPnL && (
             <div className="grid grid-cols-2 gap-4 mb-3 text-xs">
               <div>
@@ -198,26 +210,30 @@ function TokenCard({ token, onOpenChart }) {
                   {groupPnL.totalSpentSOL.toFixed(4)} / {groupPnL.totalReceivedSOL.toFixed(4)} SOL
                 </div>
               </div>
+              <div>
+                <div className="text-gray-400 mb-1">Market Cap</div>
+                <div className="text-white font-medium">
+                  ${formatNumber(groupPnL.marketCap)}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400 mb-1">Deployment Time</div>
+                <div className="text-white font-medium">
+                  {formatDate(groupPnL.deploymentTime)}
+                </div>
+              </div>
             </div>
           )}
 
-          {/* Top wallets */}
           <div className="space-y-1">
             <div className="text-gray-400 text-xs mb-2">Top Wallets</div>
             {token.wallets.slice(0, WALLETS_DISPLAY_LIMIT).map((wallet) => (
-              <div key={wallet.address} className="flex items-center justify-between bg-gray-900/50 p-2 rounded text-xs">
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-300 font-medium">
-                    {wallet.name || `${wallet.address.slice(0, 4)}...${wallet.address.slice(-4)}`}
-                  </span>
-                  <span className="text-gray-500">
-                    {wallet.txBuys}B · {wallet.txSells}S
-                  </span>
-                </div>
-                <div className={`font-medium ${wallet.pnlSol > 0 ? 'text-green-400' : wallet.pnlSol < 0 ? 'text-red-400' : 'text-gray-400'}`}>
-                  {wallet.pnlSol > 0 ? '+' : ''}{wallet.pnlSol.toFixed(4)} SOL
-                </div>
-              </div>
+              <WalletPill
+                key={wallet.address}
+                wallet={wallet}
+                tokenMint={token.mint}
+                transaction={token.wallets.find(w => w.address === wallet.address)?.transactions?.[0]}
+              />
             ))}
             
             {token.wallets.length > WALLETS_DISPLAY_LIMIT && (
@@ -229,7 +245,6 @@ function TokenCard({ token, onOpenChart }) {
             )}
           </div>
 
-          {/* Action buttons */}
           <div className="flex space-x-2 mt-3">
             <button
               onClick={onOpenChart}

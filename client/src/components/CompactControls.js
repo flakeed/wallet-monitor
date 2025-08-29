@@ -1,5 +1,3 @@
-// Compact controls bar component for filters and group selection
-
 import React from 'react';
 
 function CompactControls({ 
@@ -11,7 +9,8 @@ function CompactControls({
   timeframe,
   onTimeframeChange,
   sortBy,
-  onSortChange
+  onSortChange,
+  includeMarketCap // New prop to enable market cap sorting
 }) {
   return (
     <div className="bg-gray-800 border-b border-gray-700 px-4 py-2">
@@ -20,7 +19,7 @@ function CompactControls({
         <div className="flex items-center space-x-4">
           <select
             value={selectedGroup || ''}
-            onChange={(e) => onGroupChange(e.target.value)}
+            onChange={(e) => onGroupChange(e.target.value || '')}
             className="bg-gray-700 border border-gray-600 text-white text-sm rounded px-3 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="">All Groups ({walletCount.toLocaleString()} wallets)</option>
@@ -49,6 +48,8 @@ function CompactControls({
             <option value="1">1h</option>
             <option value="6">6h</option>
             <option value="24">24h</option>
+            <option value="168">7d</option>
+            <option value="720">30d</option>
           </select>
 
           {/* Sort */}
@@ -62,6 +63,7 @@ function CompactControls({
             <option value="loss">Loss</option>
             <option value="volume">Volume</option>
             <option value="activity">Activity</option>
+            {includeMarketCap && <option value="marketCap">Market Cap</option>}
           </select>
         </div>
       </div>

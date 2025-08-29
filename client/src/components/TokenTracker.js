@@ -1,15 +1,14 @@
-// client/src/components/TokenTracker.js - Compact version with maximum screen utilization
-
 import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
 import CompactControls from './CompactControls';
 
-function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, groups, selectedGroup, onGroupChange, walletCount, selectedGroupInfo }) {
+function TokenTracker({ groupId, transactions, newTokens, timeframe, onTimeframeChange, groups, selectedGroup, onGroupChange, walletCount, selectedGroupInfo }) {
   const [items, setItems] = useState([]);
   const [hours, setHours] = useState(timeframe || '24');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest');
+  const [view, setView] = useState('existing'); // 'existing' or 'new'
 
   const aggregateTokens = (transactions, hours, groupId) => {
     const EXCLUDED_TOKENS = [
@@ -50,6 +49,8 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
               totalReceivedSOL: 0,
               netSOL: 0,
               latestActivity: null,
+              marketCap: token.marketCap || 0,
+              deploymentTime: token.deploymentTime || null
             },
           });
         }
@@ -75,9 +76,10 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
             solReceived: tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0,
             tokensBought: tx.transactionType === 'buy' ? token.amount || 0 : 0,
             tokensSold: tx.transactionType === 'sell' ? token.amount || 0 : 0,
-            pnlSol: (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
+            pnlSol: tx.pnl ? tx.pnl / (priceData?.solPrice || 150) : (tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0) - 
                     (tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0),
             lastActivity: tx.time,
+            transactions: [{ ...tx, tokens: tokens }]
           });
           tokenData.summary.uniqueWallets.add(walletAddress);
         } else {
@@ -87,17 +89,21 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
           wallet.solReceived += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
           wallet.tokensBought += tx.transactionType === 'buy' ? token.amount || 0 : 0;
           wallet.tokensSold += tx.transactionType === 'sell' ? token.amount || 0 : 0;
-          wallet.pnlSol = wallet.solReceived - wallet.solSpent;
-          
+          wallet.pnlSol = wallet.transactions?.reduce((sum, t) => sum + (t.pnl ? t.pnl / (priceData?.solPrice || 150) : 0), 0) || 
+                         (wallet.solReceived - wallet.solSpent);
           if (txTime > new Date(wallet.lastActivity)) {
             wallet.lastActivity = tx.time;
           }
+          wallet.transactions = wallet.transactions || [];
+          wallet.transactions.push({ ...tx, tokens: tokens });
         }
 
         tokenData.summary.totalBuys += tx.transactionType === 'buy' ? 1 : 0;
         tokenData.summary.totalSells += tx.transactionType === 'sell' ? 1 : 0;
         tokenData.summary.totalSpentSOL += tx.transactionType === 'buy' ? parseFloat(tx.solSpent) || 0 : 0;
         tokenData.summary.totalReceivedSOL += tx.transactionType === 'sell' ? parseFloat(tx.solReceived) || 0 : 0;
+        tokenData.summary.marketCap = token.marketCap || tokenData.summary.marketCap;
+        tokenData.summary.deploymentTime = token.deploymentTime || tokenData.summary.deploymentTime;
       });
     });
 
@@ -112,6 +118,27 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
     }));
 
     return result;
+  };
+
+  const aggregateNewTokens = (newTokens) => {
+    return newTokens.map(token => ({
+      mint: token.mint,
+      symbol: token.priceData?.symbol || 'Unknown',
+      name: token.priceData?.name || 'Unknown Token',
+      decimals: token.priceData?.decimals || 6,
+      wallets: [], // No wallet data for new tokens initially
+      summary: {
+        uniqueWallets: 0,
+        totalBuys: 0,
+        totalSells: 0,
+        totalSpentSOL: 0,
+        totalReceivedSOL: 0,
+        netSOL: 0,
+        latestActivity: token.timestamp,
+        marketCap: token.priceData?.marketCap || 0,
+        deploymentTime: token.priceData?.deploymentTime || token.timestamp
+      }
+    }));
   };
 
   const sortTokens = (tokens, sortBy) => {
@@ -139,6 +166,9 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
           (b.summary.totalBuys + b.summary.totalSells) - (a.summary.totalBuys + a.summary.totalSells)
         );
       
+      case 'marketCap':
+        return sortedTokens.sort((a, b) => (b.summary.marketCap || 0) - (a.summary.marketCap || 0));
+      
       default:
         return sortedTokens;
     }
@@ -147,7 +177,12 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
   useEffect(() => {
     setLoading(true);
     try {
-      const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
+      let aggregatedTokens = [];
+      if (view === 'existing') {
+        aggregatedTokens = aggregateTokens(transactions, hours, groupId);
+      } else {
+        aggregatedTokens = aggregateNewTokens(newTokens);
+      }
       const sortedTokens = sortTokens(aggregatedTokens, sortBy);
       setItems(sortedTokens);
       setError(null);
@@ -156,7 +191,7 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
     } finally {
       setLoading(false);
     }
-  }, [transactions, hours, groupId, sortBy]);
+  }, [transactions, newTokens, hours, groupId, sortBy, view]);
 
   useEffect(() => {
     setHours(timeframe);
@@ -170,7 +205,21 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
 
   return (
     <div className="h-full flex flex-col bg-gray-900">
-      {/* Compact Controls */}
+      <div className="flex border-b border-gray-800">
+        <button
+          className={`flex-1 py-2 text-sm font-medium ${view === 'existing' ? 'bg-gray-800 text-white' : 'text-gray-500'} hover:text-gray-300 transition-colors`}
+          onClick={() => setView('existing')}
+        >
+          Existing Tokens
+        </button>
+        <button
+          className={`flex-1 py-2 text-sm font-medium ${view === 'new' ? 'bg-gray-800 text-white' : 'text-gray-500'} hover:text-gray-300 transition-colors`}
+          onClick={() => setView('new')}
+        >
+          New Tokens
+        </button>
+      </div>
+      
       <CompactControls
         groups={groups}
         selectedGroup={selectedGroup}
@@ -184,9 +233,9 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
         }}
         sortBy={sortBy}
         onSortChange={setSortBy}
+        includeMarketCap={true} // Add market cap sorting option
       />
       
-      {/* Token Cards - Full height scrollable */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center py-8">
@@ -208,7 +257,7 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
             </div>
             <p className="text-gray-400 text-lg">No token activity found</p>
             <p className="text-sm text-gray-500 mt-1">
-              No token transactions detected for the selected timeframe and group
+              {view === 'existing' ? 'No token transactions detected for the selected timeframe and group' : 'No new tokens detected'}
             </p>
           </div>
         ) : (

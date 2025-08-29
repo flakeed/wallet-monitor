@@ -1,5 +1,3 @@
-// client/src/App.js - Trading-style compact interface
-
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
 import WalletManager from './components/WalletManager';
@@ -22,6 +20,7 @@ function App() {
   // State management
   const [walletCount, setWalletCount] = useState(0);
   const [transactions, setTransactions] = useState([]);
+  const [newTokens, setNewTokens] = useState([]); // New state for new tokens
   const [monitoringStatus, setMonitoringStatus] = useState({ isMonitoring: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -94,6 +93,21 @@ function App() {
     };
   };
 
+  // Fetch new tokens
+  const fetchNewTokens = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/tokens/new`, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) throw new Error('Failed to fetch new tokens');
+      const { tokens } = await response.json();
+      setNewTokens(tokens);
+    } catch (error) {
+      console.error('Error fetching new tokens:', error);
+      setError('Failed to load new tokens');
+    }
+  };
+
   // Ultra-fast initialization
   const ultraFastInit = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
@@ -116,6 +130,9 @@ function App() {
       setMonitoringStatus(data.monitoring);
       setGroups(data.groups);
       setWalletCount(data.wallets.totalCount);
+      
+      // Fetch new tokens
+      await fetchNewTokens();
       
       // Set selected group info
       if (groupId && data.wallets.selectedGroup) {
@@ -228,6 +245,7 @@ function App() {
               },
               tokensBought: newTransaction.transactionType === 'buy' ? newTransaction.tokens : [],
               tokensSold: newTransaction.transactionType === 'sell' ? newTransaction.tokens : [],
+              pnl: newTransaction.pnl // New field from backend
             };
             return [formattedTransaction, ...prev].slice(0, 400);
           });
@@ -255,6 +273,14 @@ function App() {
       eventSource.close();
     };
   }, [timeframe, transactionType, selectedGroup, isAuthenticated, refreshKey]);
+
+  // Fetch new tokens periodically
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    fetchNewTokens();
+    const interval = setInterval(fetchNewTokens, 60000); // Every 60 seconds
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
 
   const handleTimeframeChange = (newTimeframe) => {
     setTimeframe(newTimeframe);
@@ -314,7 +340,6 @@ function App() {
         successfulWallets: []
       };
 
-      // Process chunks sequentially
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         
@@ -348,7 +373,6 @@ function App() {
             throw new Error(result.error || 'Unknown server error');
           }
 
-          // Aggregate results
           totalResults.successful += result.results.successful || 0;
           totalResults.failed += result.results.failed || 0;
 
@@ -360,11 +384,9 @@ function App() {
             totalResults.successfulWallets.push(...result.results.successfulWallets);
           }
 
-          // Update wallet count instantly from server response
           if (result.results.newCounts && result.results.successful > 0) {
             setWalletCount(result.results.newCounts.totalWallets);
             
-            // Update group info
             if (selectedGroupInfo && (!groupId || groupId === selectedGroupInfo.groupId)) {
               const newGroupCount = result.results.newCounts.groupCounts?.find(gc => gc.groupId === selectedGroupInfo.groupId)?.count;
               if (newGroupCount !== undefined) {
@@ -387,7 +409,6 @@ function App() {
           });
         }
 
-        // Short pause between chunks
         if (i < chunks.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -465,7 +486,6 @@ function App() {
     }
   }, [refreshKey, isAuthenticated]);
 
-  // Show loading while checking authentication
   if (isCheckingAuth) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -474,7 +494,6 @@ function App() {
     );
   }
 
-  // Show login if not authenticated
   if (!isAuthenticated) {
     return <TelegramLogin onLogin={handleLogin} botUsername={TELEGRAM_BOT_USERNAME} />;
   }
@@ -495,27 +514,23 @@ function App() {
 
   return (
     <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
-      {/* Header */}
       <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
       
-      {/* Error */}
       {error && <ErrorMessage error={error} />}
       
-      {/* Monitoring Status */}
       <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
       
-      {/* Wallet Manager (Collapsible) */}
       <WalletManager 
         onAddWalletsBulk={handleAddWalletsBulk} 
         onCreateGroup={createGroup} 
         groups={groups} 
       />
       
-      {/* Token Tracker - Full height */}
       <div className="flex-1 overflow-hidden">
         <TokenTracker 
           groupId={selectedGroup} 
           transactions={transactions} 
+          newTokens={newTokens} // Pass new tokens
           timeframe={timeframe}
           onTimeframeChange={handleTimeframeChange}
           groups={groups}
@@ -526,7 +541,6 @@ function App() {
         />
       </div>
 
-      {/* Admin Panel Modal */}
       {showAdminPanel && user?.isAdmin && (
         <AdminPanel user={user} onClose={() => setShowAdminPanel(false)} />
       )}

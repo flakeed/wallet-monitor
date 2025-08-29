@@ -8,7 +8,6 @@ const CACHE_TTL = 30000; // 30 seconds
 const BATCH_DELAY = 100; // 100ms delay for batching requests
 const MAX_BATCH_SIZE = 50;
 
-// Helper function to get auth headers
 const getAuthHeaders = () => {
   const sessionToken = localStorage.getItem('sessionToken');
   return {
@@ -17,7 +16,6 @@ const getAuthHeaders = () => {
   };
 };
 
-// Batch queue for token price requests
 let batchQueue = new Set();
 let batchTimer = null;
 
@@ -45,17 +43,29 @@ const processBatch = async () => {
     if (data.success && data.prices) {
       const now = Date.now();
       
-      // Cache all results
       Object.entries(data.prices).forEach(([mint, priceData]) => {
         globalPriceCache.set(`token-${mint}`, {
-          data: priceData,
+          data: {
+            price: priceData.price,
+            marketCap: priceData.marketCap,
+            deploymentTime: priceData.deploymentTime,
+            liquidity: priceData.liquidity,
+            change24h: priceData.change24h,
+            volume24h: priceData.volume24h
+          },
           timestamp: now
         });
         
-        // Resolve pending requests
         const pending = pendingRequests.get(mint);
         if (pending) {
-          pending.forEach(({ resolve }) => resolve(priceData));
+          pending.forEach(({ resolve }) => resolve({
+            price: priceData.price,
+            marketCap: priceData.marketCap,
+            deploymentTime: priceData.deploymentTime,
+            liquidity: priceData.liquidity,
+            change24h: priceData.change24h,
+            volume24h: priceData.volume24h
+          }));
           pendingRequests.delete(mint);
         }
       });
@@ -63,7 +73,6 @@ const processBatch = async () => {
   } catch (error) {
     console.error('[usePrices] Batch request failed:', error);
     
-    // Reject all pending requests for this batch
     mints.forEach(mint => {
       const pending = pendingRequests.get(mint);
       if (pending) {
@@ -76,16 +85,13 @@ const processBatch = async () => {
 
 const queueTokenPrice = (mint) => {
   return new Promise((resolve, reject) => {
-    // Add to pending requests
     if (!pendingRequests.has(mint)) {
       pendingRequests.set(mint, []);
     }
     pendingRequests.get(mint).push({ resolve, reject });
     
-    // Add to batch queue
     batchQueue.add(mint);
     
-    // Set batch timer
     if (batchTimer) {
       clearTimeout(batchTimer);
     }
@@ -101,7 +107,6 @@ export const useSolPrice = () => {
   const isMountedRef = useRef(true);
 
   const fetchSolPrice = useCallback(async () => {
-    // Check cache first
     const cached = globalPriceCache.get('sol-price');
     if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
       setSolPrice(cached.data);
@@ -125,7 +130,6 @@ export const useSolPrice = () => {
       if (data.success) {
         const price = data.price;
         
-        // Cache the result
         globalPriceCache.set('sol-price', {
           data: price,
           timestamp: Date.now()
@@ -142,7 +146,7 @@ export const useSolPrice = () => {
       console.error('[useSolPrice] Error:', err);
       if (isMountedRef.current) {
         setError(err.message);
-        setSolPrice(150); // Fallback
+        setSolPrice(150);
       }
       return 150;
     } finally {
@@ -172,7 +176,6 @@ export const useTokenPrice = (tokenMint) => {
   const fetchTokenPrice = useCallback(async () => {
     if (!tokenMint) return null;
 
-    // Check cache first
     const cached = globalPriceCache.get(`token-${tokenMint}`);
     if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
       setPriceData(cached.data);
@@ -216,7 +219,6 @@ export const useTokenPrice = (tokenMint) => {
   return { priceData, loading, error, refetch: fetchTokenPrice };
 };
 
-// Hook for multiple token prices
 export const useTokenPrices = (tokenMints) => {
   const [prices, setPrices] = useState(new Map());
   const [loading, setLoading] = useState(false);
@@ -230,7 +232,6 @@ export const useTokenPrices = (tokenMints) => {
     const cachedPrices = new Map();
     const uncachedMints = [];
 
-    // Check cache for all mints
     tokenMints.forEach(mint => {
       const cached = globalPriceCache.get(`token-${mint}`);
       if (cached && (now - cached.timestamp) < CACHE_TTL) {
@@ -240,12 +241,10 @@ export const useTokenPrices = (tokenMints) => {
       }
     });
 
-    // Set cached prices immediately
     if (cachedPrices.size > 0 && isMountedRef.current) {
       setPrices(prev => new Map([...prev, ...cachedPrices]));
     }
 
-    // Fetch uncached prices
     if (uncachedMints.length > 0) {
       setLoading(true);
       setError(null);
@@ -286,7 +285,6 @@ export const useTokenPrices = (tokenMints) => {
   return { prices, loading, error, refetch: fetchTokenPrices };
 };
 
-// Combined hook for both SOL and token price
 export const usePrices = (tokenMint = null) => {
   const { solPrice, loading: solLoading, error: solError } = useSolPrice();
   const { priceData: tokenPrice, loading: tokenLoading, error: tokenError } = useTokenPrice(tokenMint);
@@ -298,4 +296,53 @@ export const usePrices = (tokenMint = null) => {
     error: solError || tokenError,
     ready: solPrice !== null && (!tokenMint || tokenPrice !== undefined)
   };
+};
+
+export const useNewTokens = () => {
+  const [newTokens, setNewTokens] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const isMountedRef = useRef(true);
+
+  const fetchNewTokens = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/tokens/new', {
+        headers: getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const { tokens } = await response.json();
+      
+      if (isMountedRef.current) {
+        setNewTokens(tokens);
+      }
+    } catch (err) {
+      console.error('[useNewTokens] Error:', err);
+      if (isMountedRef.current) {
+        setError(err.message);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    fetchNewTokens();
+    const interval = setInterval(fetchNewTokens, 60000); // Every 60 seconds
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, [fetchNewTokens]);
+
+  return { newTokens, loading, error, refetch: fetchNewTokens };
 };
