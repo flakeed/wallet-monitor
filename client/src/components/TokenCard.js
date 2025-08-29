@@ -1,15 +1,19 @@
-// client/src/components/TokenCard.js - Ultra-compact token card for maximum density
+// client/src/components/EnhancedTokenCard.js - Обновленная карточка токена с OnChain данными
 
 import React, { useState, useMemo } from 'react';
-import { usePrices } from '../hooks/usePrices';
+import { useEnhancedPrices, useTokenInfo, useTokenPools } from '../hooks/useEnhancedPrices';
 
-function TokenCard({ token, onOpenChart }) {
+function EnhancedTokenCard({ token, onOpenChart, showDetailedInfo = false }) {
   const [showDetails, setShowDetails] = useState(false);
-  const { solPrice, tokenPrice: priceData, loading: loadingPrice } = usePrices(token.mint);
+  const [showPoolInfo, setShowPoolInfo] = useState(false);
+  
+  const { solPrice, tokenPrice: priceData, loading: loadingPrice, metadata } = useEnhancedPrices(token.mint);
+  const { tokenInfo, loading: loadingInfo } = useTokenInfo(showDetailedInfo ? token.mint : null);
+  const { pools, summary: poolSummary, loading: loadingPools } = useTokenPools(showPoolInfo ? token.mint : null);
 
   const WALLETS_DISPLAY_LIMIT = 3;
 
-  // Compact PnL calculation
+  // Enhanced PnL calculation с использованием точных OnChain данных
   const groupPnL = useMemo(() => {
     if (!priceData || !priceData.price || !solPrice) return null;
 
@@ -63,9 +67,13 @@ function TokenCard({ token, onOpenChart }) {
       currentPriceUSD: priceData.price,
       solPrice,
       soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
-      holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0
+      holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0,
+      // Enhanced данные
+      priceSource: metadata?.token?.source || 'unknown',
+      marketCap: tokenInfo?.marketCap || 0,
+      liquidity: priceData?.liquidity || poolSummary?.totalLiquidity || 0
     };
-  }, [priceData, solPrice, token.wallets]);
+  }, [priceData, solPrice, token.wallets, metadata, tokenInfo, poolSummary]);
 
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
@@ -79,9 +87,16 @@ function TokenCard({ token, onOpenChart }) {
 
   const formatNumber = (num, decimals = 2) => {
     if (num === null || num === undefined) return '0';
+    if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
     if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
     if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
     return num.toFixed(decimals);
+  };
+
+  const formatCurrency = (num, currency = 'USD') => {
+    if (num === null || num === undefined) return '$0';
+    const formatted = formatNumber(num, 2);
+    return currency === 'USD' ? `$${formatted}` : `${formatted} ${currency}`;
   };
 
   const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
@@ -92,6 +107,39 @@ function TokenCard({ token, onOpenChart }) {
       : 'text-gray-400'
     : 'text-gray-400';
 
+  // Определить цвет источника данных
+  const getSourceColor = (source) => {
+    switch (source) {
+      case 'onchain':
+      case 'onchain_pools':
+        return 'text-green-500';
+      case 'memory_cache':
+      case 'redis_cache':
+        return 'text-blue-500';
+      case 'dexscreener':
+      case 'jupiter':
+        return 'text-yellow-500';
+      default:
+        return 'text-gray-500';
+    }
+  };
+
+  const getSourceIcon = (source) => {
+    switch (source) {
+      case 'onchain':
+      case 'onchain_pools':
+        return '⛓️';
+      case 'memory_cache':
+      case 'redis_cache':
+        return '💾';
+      case 'dexscreener':
+      case 'jupiter':
+        return '🌐';
+      default:
+        return '❓';
+    }
+  };
+
   return (
     <div className="bg-gray-900 border border-gray-700 hover:border-gray-600 transition-colors">
       {/* Header Row */}
@@ -101,12 +149,23 @@ function TokenCard({ token, onOpenChart }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center space-x-2">
               <span className="bg-blue-600 text-white text-xs font-bold px-2 py-0.5 rounded">
-                {token.symbol || 'UNK'}
+                {token.symbol || tokenInfo?.symbol || 'UNK'}
               </span>
               <span className="text-gray-300 text-sm truncate">
-                {token.name || 'Unknown Token'}
+                {token.name || tokenInfo?.name || 'Unknown Token'}
               </span>
+              
+              {/* Enhanced: Источник данных */}
+              {metadata?.token?.source && (
+                <span 
+                  className={`text-xs px-1 py-0.5 rounded ${getSourceColor(metadata.token.source)}`}
+                  title={`Price source: ${metadata.token.source}`}
+                >
+                  {getSourceIcon(metadata.token.source)}
+                </span>
+              )}
             </div>
+            
             <div className="flex items-center space-x-2 mt-1">
               <div className="text-gray-500 text-xs font-mono truncate max-w-32">
                 {token.mint}
@@ -127,15 +186,23 @@ function TokenCard({ token, onOpenChart }) {
           {/* Stats */}
           <div className="text-right">
             <div className={`text-sm font-bold ${netColor} flex items-center`}>
-              {loadingPrice && (
+              {(loadingPrice || loadingInfo) && (
                 <div className="animate-spin rounded-full h-3 w-3 border border-gray-400 border-t-transparent mr-1"></div>
               )}
               {groupPnL && groupPnL.totalPnLSOL !== undefined
                 ? `${groupPnL.totalPnLSOL >= 0 ? '+' : ''}${groupPnL.totalPnLSOL.toFixed(4)} SOL`
                 : '0 SOL'}
             </div>
+            
+            {/* Enhanced: Market Cap и Liquidity */}
             <div className="text-xs text-gray-500">
-              {token.summary.uniqueWallets}W · {token.summary.totalBuys}B · {token.summary.totalSells}S
+              {tokenInfo?.marketCap > 0 && (
+                <span>MC: {formatCurrency(tokenInfo.marketCap)} • </span>
+              )}
+              {groupPnL?.liquidity > 0 && (
+                <span>LIQ: {formatCurrency(groupPnL.liquidity)} • </span>
+              )}
+              <span>{token.summary.uniqueWallets}W · {token.summary.totalBuys}B · {token.summary.totalSells}S</span>
             </div>
           </div>
         </div>
@@ -152,6 +219,19 @@ function TokenCard({ token, onOpenChart }) {
                 d={!showDetails ? "M19 9l-7 7-7-7" : "M5 15l7-7 7 7"} />
             </svg>
           </button>
+          
+          {/* Enhanced: Pool info button */}
+          <button
+            onClick={() => setShowPoolInfo(!showPoolInfo)}
+            className="p-1 text-gray-500 hover:text-purple-400 transition-colors"
+            title="Pool information"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </button>
+          
           <button
             onClick={openGmgnChart}
             className="p-1 text-gray-500 hover:text-blue-400 transition-colors"
@@ -165,10 +245,58 @@ function TokenCard({ token, onOpenChart }) {
         </div>
       </div>
 
+      {/* Enhanced Pool Information */}
+      {showPoolInfo && (
+        <div className="p-3 bg-purple-900/20 border-b border-purple-800/30">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-purple-400 text-sm font-medium">Pool Information</h4>
+            {loadingPools && (
+              <div className="animate-spin rounded-full h-4 w-4 border border-purple-400 border-t-transparent"></div>
+            )}
+          </div>
+          
+          {poolSummary ? (
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <div className="text-gray-400">Total Pools</div>
+                <div className="text-white font-medium">
+                  {poolSummary.totalPools} ({poolSummary.activePools} active)
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400">Total Liquidity</div>
+                <div className="text-white font-medium">
+                  {formatCurrency(poolSummary.totalLiquidity)}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400">DEXes</div>
+                <div className="text-white font-medium">
+                  {poolSummary.dexes.join(', ')}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400">Best Pool</div>
+                <div className="text-white font-medium text-xs">
+                  {poolSummary.bestPool ? 
+                    `${poolSummary.bestPool.dex} (${formatCurrency(poolSummary.bestPool.priceData?.liquidity || 0)})` : 
+                    'N/A'
+                  }
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-gray-500 text-sm">
+              {loadingPools ? 'Loading pool information...' : 'No pool data available'}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Details (collapsible) */}
       {showDetails && (
         <div className="p-3 bg-gray-800/50">
-          {/* PnL breakdown */}
+          {/* Enhanced PnL breakdown */}
           {groupPnL && (
             <div className="grid grid-cols-2 gap-4 mb-3 text-xs">
               <div>
@@ -181,17 +309,51 @@ function TokenCard({ token, onOpenChart }) {
                 </div>
               </div>
               <div>
+                <div className="text-gray-400 mb-1">Current Price</div>
+                <div className="text-white font-medium">
+                  {formatCurrency(groupPnL.currentPriceUSD)}
+                  <span className={`ml-1 text-xs ${getSourceColor(groupPnL.priceSource)}`}>
+                    {getSourceIcon(groupPnL.priceSource)}
+                  </span>
+                </div>
+              </div>
+              <div>
                 <div className="text-gray-400 mb-1">Realized PnL</div>
                 <div className={`font-medium ${groupPnL.realizedPnLSOL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {groupPnL.realizedPnLSOL >= 0 ? '+' : ''}{groupPnL.realizedPnLSOL.toFixed(4)} SOL
+                  <div className="text-xs text-gray-500">
+                    {formatCurrency(groupPnL.realizedPnLUSD)}
+                  </div>
                 </div>
               </div>
               <div>
                 <div className="text-gray-400 mb-1">Unrealized PnL</div>
                 <div className={`font-medium ${groupPnL.unrealizedPnLSOL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {groupPnL.unrealizedPnLSOL >= 0 ? '+' : ''}{groupPnL.unrealizedPnLSOL.toFixed(4)} SOL
+                  <div className="text-xs text-gray-500">
+                    {formatCurrency(groupPnL.unrealizedPnLUSD)}
+                  </div>
                 </div>
               </div>
+              
+              {/* Enhanced data row */}
+              {(groupPnL.marketCap > 0 || groupPnL.liquidity > 0) && (
+                <>
+                  <div>
+                    <div className="text-gray-400 mb-1">Market Cap</div>
+                    <div className="text-white font-medium">
+                      {groupPnL.marketCap > 0 ? formatCurrency(groupPnL.marketCap) : 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-gray-400 mb-1">Total Liquidity</div>
+                    <div className="text-white font-medium">
+                      {groupPnL.liquidity > 0 ? formatCurrency(groupPnL.liquidity) : 'N/A'}
+                    </div>
+                  </div>
+                </>
+              )}
+              
               <div>
                 <div className="text-gray-400 mb-1">Total Spent/Received</div>
                 <div className="text-white font-medium">
@@ -229,6 +391,16 @@ function TokenCard({ token, onOpenChart }) {
             )}
           </div>
 
+          {/* Enhanced: Token creation info */}
+          {tokenInfo?.createdAt && (
+            <div className="mt-3 pt-3 border-t border-gray-700">
+              <div className="text-xs text-gray-500">
+                Created: {new Date(tokenInfo.createdAt).toLocaleDateString()} • 
+                Age: {Math.floor((Date.now() - new Date(tokenInfo.createdAt).getTime()) / (1000 * 60 * 60 * 24))} days
+              </div>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="flex space-x-2 mt-3">
             <button
@@ -244,6 +416,19 @@ function TokenCard({ token, onOpenChart }) {
             >
               GMGN
             </button>
+            
+            {/* Enhanced: Direct pool link */}
+            {poolSummary?.bestPool && (
+              <button
+                onClick={() => {
+                  const poolUrl = `https://dexscreener.com/solana/${poolSummary.bestPool.address}`;
+                  window.open(poolUrl, '_blank');
+                }}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white py-2 rounded text-sm font-medium transition-colors"
+              >
+                Pool
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -251,4 +436,4 @@ function TokenCard({ token, onOpenChart }) {
   );
 }
 
-export default TokenCard;
+export default EnhancedTokenCard;

@@ -7,15 +7,19 @@ const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
-const PriceService = require('./services/priceService');
 
-const priceService = new PriceService();
 const app = express();
 const port = process.env.PORT || 5001;
 
 const https = require('https');
 const fs = require('fs');
 
+const EnhancedPriceService = require('./services/enhancedPriceService');
+const OnChainTokenService = require('./services/onChainTokenService');
+
+// Заменить существующий priceService на:
+const priceService = new EnhancedPriceService();
+const onChainService = new OnChainTokenService();
 const monitoringService = new WalletMonitoringService();
 const solanaWebSocketService = new SolanaWebSocketService();
 const db = new Database();
@@ -228,6 +232,483 @@ app.delete('/api/admin/whitelist/:telegramId', auth.authRequired, auth.adminRequ
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error removing from whitelist:`, error);
     res.status(500).json({ error: 'Failed to remove user from whitelist' });
+  }
+});
+
+app.get('/api/solana/price/enhanced', auth.authRequired, async (req, res) => {
+  try {
+      console.log(`[${new Date().toISOString()}] 📊 Enhanced SOL price request`);
+      const priceData = await priceService.getSolPrice();
+      
+      res.json({
+          success: priceData.success,
+          price: priceData.price,
+          source: priceData.source,
+          liquidity: priceData.liquidity || 0,
+          poolCount: priceData.poolCount || 0,
+          lastUpdated: priceData.lastUpdated,
+          responseTime: priceData.responseTime,
+          error: priceData.error
+      });
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in enhanced SOL price endpoint:`, error.message);
+      res.status(500).json({ 
+          success: false, 
+          error: 'Failed to fetch enhanced SOL price',
+          price: 150 // Fallback
+      });
+  }
+});
+
+// Обновленный batch эндпоинт для цен токенов
+app.post('/api/tokens/prices/enhanced', auth.authRequired, async (req, res) => {
+  try {
+      const { mints } = req.body;
+      
+      if (!mints || !Array.isArray(mints)) {
+          return res.status(400).json({ error: 'Mints array is required' });
+      }
+
+      if (mints.length > 100) {
+          return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
+      }
+
+      console.log(`[${new Date().toISOString()}] 📊 Enhanced batch price request for ${mints.length} tokens`);
+      const startTime = Date.now();
+      
+      const prices = await priceService.getTokenPrices(mints);
+      const duration = Date.now() - startTime;
+      
+      const result = {};
+      const stats = {
+          onchain: 0,
+          external: 0,
+          cached: 0
+      };
+
+      prices.forEach((data, mint) => {
+          result[mint] = data;
+          if (data) {
+              if (data.source === 'onchain' || data.source === 'onchain_pools') {
+                  stats.onchain++;
+              } else if (data.source === 'memory_cache' || data.source === 'redis_cache') {
+                  stats.cached++;
+              } else {
+                  stats.external++;
+              }
+          }
+      });
+      
+      console.log(`[${new Date().toISOString()}] ✅ Enhanced batch completed in ${duration}ms - OnChain: ${stats.onchain}, External: ${stats.external}, Cached: ${stats.cached}`);
+      
+      res.json({
+          success: true,
+          prices: result,
+          count: prices.size,
+          duration,
+          stats,
+          performance: {
+              onchainRatio: Math.round((stats.onchain / mints.length) * 100),
+              cacheHitRatio: Math.round((stats.cached / mints.length) * 100),
+              avgResponseTime: Math.round(duration / mints.length)
+          }
+      });
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in enhanced batch price endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to fetch enhanced token prices' });
+  }
+});
+
+// Новый эндпоинт для полной информации о токене
+app.get('/api/tokens/:mint/info', auth.authRequired, async (req, res) => {
+  try {
+      const { mint } = req.params;
+      
+      if (!mint || mint.length < 32) {
+          return res.status(400).json({ error: 'Valid mint address is required' });
+      }
+
+      console.log(`[${new Date().toISOString()}] 🔍 Full token info request for ${mint}`);
+      const startTime = Date.now();
+      
+      const tokenInfo = await onChainService.getTokenInfo(mint);
+      const duration = Date.now() - startTime;
+      
+      if (!tokenInfo) {
+          return res.status(404).json({ 
+              error: 'Token not found or no data available',
+              mint 
+          });
+      }
+
+      res.json({
+          success: true,
+          token: tokenInfo,
+          responseTime: duration,
+          dataAge: Date.now() - tokenInfo.timestamp
+      });
+      
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in token info endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to fetch token information' });
+  }
+});
+
+// Эндпоинт для поиска пулов токена
+app.get('/api/tokens/:mint/pools', auth.authRequired, async (req, res) => {
+  try {
+      const { mint } = req.params;
+      
+      if (!mint || mint.length < 32) {
+          return res.status(400).json({ error: 'Valid mint address is required' });
+      }
+
+      console.log(`[${new Date().toISOString()}] 🏊 Pool search request for ${mint}`);
+      const startTime = Date.now();
+      
+      const pools = await onChainService.findTokenPools(mint);
+      const duration = Date.now() - startTime;
+      
+      // Получить детальную информацию о пулах
+      const poolsWithDetails = await Promise.all(
+          pools.map(async (pool) => {
+              try {
+                  const priceData = await onChainService.calculatePoolPrice(mint, pool);
+                  return {
+                      ...pool,
+                      priceData: priceData || null,
+                      isActive: priceData && priceData.price > 0
+                  };
+              } catch (error) {
+                  return {
+                      ...pool,
+                      priceData: null,
+                      isActive: false,
+                      error: error.message
+                  };
+              }
+          })
+      );
+
+      const activePools = poolsWithDetails.filter(p => p.isActive);
+      const totalLiquidity = activePools.reduce((sum, pool) => 
+          sum + (pool.priceData?.liquidity || 0), 0
+      );
+
+      res.json({
+          success: true,
+          mint,
+          pools: poolsWithDetails,
+          summary: {
+              totalPools: pools.length,
+              activePools: activePools.length,
+              totalLiquidity,
+              dexes: [...new Set(pools.map(p => p.dex))],
+              bestPool: activePools.length > 0 ? 
+                  activePools.reduce((best, current) => 
+                      (current.priceData?.liquidity || 0) > (best.priceData?.liquidity || 0) ? current : best
+                  ) : null
+          },
+          responseTime: duration
+      });
+      
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in pools endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to fetch token pools' });
+  }
+});
+
+// Эндпоинт для получения исторических данных токена (заглушка для будущего)
+app.get('/api/tokens/:mint/history', auth.authRequired, async (req, res) => {
+  try {
+      const { mint } = req.params;
+      const { timeframe = '1h', points = 100 } = req.query;
+      
+      // Пока что заглушка - в будущем можно добавить сбор исторических данных
+      res.json({
+          success: true,
+          mint,
+          timeframe,
+          points: parseInt(points),
+          data: [],
+          message: 'Historical data collection not yet implemented - coming soon!'
+      });
+      
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in history endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to fetch token history' });
+  }
+});
+
+// Эндпоинт для массового получения информации о токенах
+app.post('/api/tokens/batch-info', auth.authRequired, async (req, res) => {
+  try {
+      const { mints } = req.body;
+      
+      if (!mints || !Array.isArray(mints)) {
+          return res.status(400).json({ error: 'Mints array is required' });
+      }
+
+      if (mints.length > 50) {
+          return res.status(400).json({ error: 'Maximum 50 mints allowed per batch info request' });
+      }
+
+      console.log(`[${new Date().toISOString()}] 📊 Batch token info request for ${mints.length} tokens`);
+      const startTime = Date.now();
+      
+      const results = await onChainService.getTokensBatch(mints);
+      const duration = Date.now() - startTime;
+      
+      const response = {};
+      const stats = {
+          successful: 0,
+          failed: 0,
+          avgMarketCap: 0,
+          totalLiquidity: 0
+      };
+
+      let totalMarketCap = 0;
+      
+      results.forEach((data, mint) => {
+          if (data && data.price > 0) {
+              response[mint] = data;
+              stats.successful++;
+              totalMarketCap += data.marketCap || 0;
+              stats.totalLiquidity += data.liquidity || 0;
+          } else {
+              response[mint] = null;
+              stats.failed++;
+          }
+      });
+
+      if (stats.successful > 0) {
+          stats.avgMarketCap = Math.round(totalMarketCap / stats.successful);
+      }
+
+      res.json({
+          success: true,
+          tokens: response,
+          stats,
+          performance: {
+              duration,
+              tokensPerSecond: Math.round((mints.length / duration) * 1000),
+              successRate: Math.round((stats.successful / mints.length) * 100)
+          }
+      });
+      
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in batch info endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to fetch batch token info' });
+  }
+});
+
+// Эндпоинт для поиска новых токенов (по времени создания)
+app.get('/api/tokens/new', auth.authRequired, async (req, res) => {
+  try {
+      const { 
+          hours = 24, 
+          minLiquidity = 1000, 
+          limit = 50,
+          sortBy = 'created' 
+      } = req.query;
+
+      console.log(`[${new Date().toISOString()}] 🆕 New tokens search: ${hours}h, min liquidity: ${minLiquidity}`);
+
+      // Пока что заглушка - в будущем можно реализовать поиск новых токенов
+      // через мониторинг создания mint аккаунтов
+      
+      res.json({
+          success: true,
+          filters: {
+              timeframe: `${hours}h`,
+              minLiquidity: parseFloat(minLiquidity),
+              limit: parseInt(limit),
+              sortBy
+          },
+          tokens: [],
+          count: 0,
+          message: 'New token discovery feature coming soon! Will scan blockchain for recently created mints with sufficient liquidity.'
+      });
+      
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in new tokens endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to search new tokens' });
+  }
+});
+
+// Расширенный эндпоинт статистики
+app.get('/api/prices/stats/detailed', auth.authRequired, auth.adminRequired, (req, res) => {
+  try {
+      const detailedStats = priceService.getDetailedStats();
+      const onChainStats = onChainService.getStats();
+      
+      res.json({
+          success: true,
+          timestamp: Date.now(),
+          services: {
+              enhancedPriceService: detailedStats,
+              onChainTokenService: onChainStats
+          },
+          systemInfo: {
+              nodeVersion: process.version,
+              platform: process.platform,
+              uptime: process.uptime(),
+              memoryUsage: process.memoryUsage()
+          }
+      });
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error getting detailed stats:`, error.message);
+      res.status(500).json({ error: 'Failed to get detailed service stats' });
+  }
+});
+
+// Эндпоинт для тестирования производительности OnChain сервиса
+app.post('/api/tokens/performance-test', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+      const { 
+          mints,
+          iterations = 1,
+          includeExternal = false 
+      } = req.body;
+
+      if (!mints || !Array.isArray(mints) || mints.length === 0) {
+          return res.status(400).json({ error: 'Test mints array is required' });
+      }
+
+      if (mints.length > 10) {
+          return res.status(400).json({ error: 'Maximum 10 mints for performance test' });
+      }
+
+      console.log(`[${new Date().toISOString()}] 🧪 Performance test: ${mints.length} mints, ${iterations} iterations`);
+
+      const results = [];
+      
+      for (let i = 0; i < iterations; i++) {
+          const iterationStart = Date.now();
+          
+          // OnChain тест
+          const onChainStart = Date.now();
+          const onChainResults = await onChainService.getTokensBatch(mints);
+          const onChainDuration = Date.now() - onChainStart;
+          
+          let externalDuration = 0;
+          let externalResults = new Map();
+          
+          // External тест (если запрошен)
+          if (includeExternal) {
+              const externalStart = Date.now();
+              // Используем старый метод для сравнения
+              externalResults = await priceService.fetchTokenPricesFromExternal(mints);
+              externalDuration = Date.now() - externalStart;
+          }
+          
+          const totalDuration = Date.now() - iterationStart;
+          
+          results.push({
+              iteration: i + 1,
+              onChain: {
+                  duration: onChainDuration,
+                  tokensFound: onChainResults.size,
+                  avgPerToken: Math.round(onChainDuration / mints.length)
+              },
+              external: includeExternal ? {
+                  duration: externalDuration,
+                  tokensFound: externalResults.size,
+                  avgPerToken: Math.round(externalDuration / mints.length)
+              } : null,
+              total: {
+                  duration: totalDuration
+              }
+          });
+
+          // Пауза между итерациями
+          if (i < iterations - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+      }
+
+      // Вычислить средние значения
+      const avgOnChainDuration = Math.round(
+          results.reduce((sum, r) => sum + r.onChain.duration, 0) / results.length
+      );
+      
+      const avgExternalDuration = includeExternal ? Math.round(
+          results.reduce((sum, r) => sum + (r.external?.duration || 0), 0) / results.length
+      ) : 0;
+
+      res.json({
+          success: true,
+          testConfig: {
+              mints: mints.length,
+              iterations,
+              includeExternal
+          },
+          summary: {
+              avgOnChainDuration,
+              avgExternalDuration,
+              onChainAdvantage: includeExternal ? 
+                  `${Math.round(((avgExternalDuration - avgOnChainDuration) / avgExternalDuration) * 100)}% faster` : 
+                  'N/A',
+              tokensPerSecond: Math.round((mints.length / avgOnChainDuration) * 1000)
+          },
+          iterations: results,
+          recommendation: avgOnChainDuration < avgExternalDuration ? 
+              'OnChain service is performing better - recommended for production' :
+              'External APIs are faster - consider optimizing OnChain service'
+      });
+
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error in performance test:`, error.message);
+      res.status(500).json({ error: 'Performance test failed' });
+  }
+});
+
+// Эндпоинт для управления кэшем
+app.post('/api/cache/clear', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+      const { type = 'all' } = req.body;
+      
+      let cleared = 0;
+      const results = {};
+      
+      if (type === 'all' || type === 'prices') {
+          // Очистить кэш цен
+          const priceKeys = await priceService.redis.keys('enhanced_*price*');
+          if (priceKeys.length > 0) {
+              cleared += await priceService.redis.del(...priceKeys);
+              results.prices = priceKeys.length;
+          }
+      }
+      
+      if (type === 'all' || type === 'tokens') {
+          // Очистить кэш токенов
+          const tokenKeys = await onChainService.redis.keys('token_*');
+          if (tokenKeys.length > 0) {
+              cleared += await onChainService.redis.del(...tokenKeys);
+              results.tokens = tokenKeys.length;
+          }
+      }
+      
+      if (type === 'all' || type === 'memory') {
+          // Очистить кэш в памяти
+          priceService.memoryCache.clear();
+          results.memory = 'cleared';
+      }
+
+      console.log(`[${new Date().toISOString()}] 🧹 Cache cleared: ${cleared} keys removed`);
+      
+      res.json({
+          success: true,
+          message: `Cache cleared successfully`,
+          cleared: {
+              totalKeys: cleared,
+              ...results
+          }
+      });
+      
+  } catch (error) {
+      console.error(`[${new Date().toISOString()}] ❌ Error clearing cache:`, error.message);
+      res.status(500).json({ error: 'Failed to clear cache' });
   }
 });
 
@@ -940,52 +1421,51 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
 // Эндпоинты цен остаются прежними
 app.get('/api/solana/price', auth.authRequired, async (req, res) => {
   try {
-    const priceData = await priceService.getSolPrice();
-    res.json(priceData);
+      const priceData = await priceService.getSolPrice();
+      res.json(priceData);
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in price endpoint:`, error.message);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to fetch SOL price',
-      price: 150
-    });
+      console.error(`[${new Date().toISOString()}] ❌ Error in SOL price endpoint:`, error.message);
+      res.status(500).json({ 
+          success: false, 
+          error: 'Failed to fetch SOL price',
+          price: 150
+      });
   }
 });
 
 app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
   try {
-    const { mints } = req.body;
-    
-    if (!mints || !Array.isArray(mints)) {
-      return res.status(400).json({ error: 'Mints array is required' });
-    }
+      const { mints } = req.body;
+      
+      if (!mints || !Array.isArray(mints)) {
+          return res.status(400).json({ error: 'Mints array is required' });
+      }
 
-    if (mints.length > 100) {
-      return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
-    }
+      if (mints.length > 100) {
+          return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
+      }
 
-    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
-    const startTime = Date.now();
-    
-    const prices = await priceService.getTokenPrices(mints);
-    const duration = Date.now() - startTime;
-    
-    const result = {};
-    prices.forEach((data, mint) => {
-      result[mint] = data;
-    });
-    
-    console.log(`[${new Date().toISOString()}] ✅ Batch price request completed in ${duration}ms`);
-    
-    res.json({
-      success: true,
-      prices: result,
-      count: prices.size,
-      duration
-    });
+      console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
+      const startTime = Date.now();
+      
+      const prices = await priceService.getTokenPrices(mints);
+      const duration = Date.now() - startTime;
+      
+      const result = {};
+      prices.forEach((data, mint) => {
+          result[mint] = data;
+      });
+      
+      res.json({
+          success: true,
+          prices: result,
+          count: prices.size,
+          duration,
+          enhanced: true // Флаг что используется enhanced версия
+      });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in batch price endpoint:`, error.message);
-    res.status(500).json({ error: 'Failed to fetch token prices' });
+      console.error(`[${new Date().toISOString()}] ❌ Error in batch price endpoint:`, error.message);
+      res.status(500).json({ error: 'Failed to fetch token prices' });
   }
 });
 
