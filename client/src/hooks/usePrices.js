@@ -216,7 +216,6 @@ export const useTokenPrice = (tokenMint) => {
   return { priceData, loading, error, refetch: fetchTokenPrice };
 };
 
-// Hook for multiple token prices
 export const useTokenPrices = (tokenMints) => {
   const [prices, setPrices] = useState(new Map());
   const [loading, setLoading] = useState(false);
@@ -286,7 +285,6 @@ export const useTokenPrices = (tokenMints) => {
   return { prices, loading, error, refetch: fetchTokenPrices };
 };
 
-// Combined hook for both SOL and token price
 export const usePrices = (tokenMint = null) => {
   const { solPrice, loading: solLoading, error: solError } = useSolPrice();
   const { priceData: tokenPrice, loading: tokenLoading, error: tokenError } = useTokenPrice(tokenMint);

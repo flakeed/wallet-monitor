@@ -1,8 +1,7 @@
-// client/src/components/TokenTracker.js - Compact version with maximum screen utilization
-
 import React, { useState, useEffect } from 'react';
 import TokenCard from './TokenCard';
 import CompactControls from './CompactControls';
+import { useTokenPrices } from '../hooks/usePrices';
 
 function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, groups, selectedGroup, onGroupChange, walletCount, selectedGroupInfo }) {
   const [items, setItems] = useState([]);
@@ -10,6 +9,13 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [sortBy, setSortBy] = useState('latest');
+
+  const { prices, loading: pricesLoading, error: pricesError } = useTokenPrices(
+    transactions
+      .filter(tx => tx.transactionType === 'buy' ? tx.tokensBought?.length : tx.tokensSold?.length)
+      .flatMap(tx => (tx.transactionType === 'buy' ? tx.tokensBought : tx.tokensSold).map(token => token.mint))
+      .filter((mint, index, self) => self.indexOf(mint) === index)
+  );
 
   const aggregateTokens = (transactions, hours, groupId) => {
     const EXCLUDED_TOKENS = [
@@ -19,7 +25,7 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
     ];
 
     const byToken = new Map();
-    const now = new Date();
+    const now = Date.now();
     const filteredTransactions = transactions.filter((tx) => {
       const txTime = new Date(tx.time);
       const hoursDiff = (now - txTime) / (1000 * 60 * 60);
@@ -50,6 +56,8 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
               totalReceivedSOL: 0,
               netSOL: 0,
               latestActivity: null,
+              marketCap: prices.get(token.mint)?.marketCap || 0,
+              timeSinceDeployMs: prices.get(token.mint)?.timeSinceDeployMs || 0
             },
           });
         }
@@ -139,6 +147,15 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
           (b.summary.totalBuys + b.summary.totalSells) - (a.summary.totalBuys + a.summary.totalSells)
         );
       
+      case 'marketCap':
+        return sortedTokens.sort((a, b) => (b.summary.marketCap || 0) - (a.summary.marketCap || 0));
+      
+      case 'newest':
+        return sortedTokens.sort((a, b) => (a.summary.timeSinceDeployMs || 0) - (b.summary.timeSinceDeployMs || 0));
+      
+      case 'oldest':
+        return sortedTokens.sort((a, b) => (b.summary.timeSinceDeployMs || 0) - (a.summary.timeSinceDeployMs || 0));
+      
       default:
         return sortedTokens;
     }
@@ -150,13 +167,13 @@ function TokenTracker({ groupId, transactions, timeframe, onTimeframeChange, gro
       const aggregatedTokens = aggregateTokens(transactions, hours, groupId);
       const sortedTokens = sortTokens(aggregatedTokens, sortBy);
       setItems(sortedTokens);
-      setError(null);
+      setError(pricesError || null);
     } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(false);
+      setLoading(pricesLoading || false);
     }
-  }, [transactions, hours, groupId, sortBy]);
+  }, [transactions, hours, groupId, sortBy, prices, pricesLoading, pricesError]);
 
   useEffect(() => {
     setHours(timeframe);

@@ -1,5 +1,3 @@
-// Compact controls bar component for filters and group selection
-
 import React from 'react';
 
 function CompactControls({ 
@@ -49,6 +47,7 @@ function CompactControls({
             <option value="1">1h</option>
             <option value="6">6h</option>
             <option value="24">24h</option>
+            <option value="168">7d</option>
           </select>
 
           {/* Sort */}
@@ -57,11 +56,14 @@ function CompactControls({
             onChange={(e) => onSortChange(e.target.value)}
             className="bg-gray-700 border border-gray-600 text-white text-sm rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
-            <option value="latest">Latest</option>
+            <option value="latest">Latest Activity</option>
             <option value="profit">Profit</option>
             <option value="loss">Loss</option>
             <option value="volume">Volume</option>
             <option value="activity">Activity</option>
+            <option value="marketCap">Market Cap</option>
+            <option value="newest">Newest Tokens</option>
+            <option value="oldest">Oldest Tokens</option>
           </select>
         </div>
       </div>

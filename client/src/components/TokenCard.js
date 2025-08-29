@@ -1,5 +1,3 @@
-// client/src/components/TokenCard.js - Ultra-compact token card for maximum density
-
 import React, { useState, useMemo } from 'react';
 import { usePrices } from '../hooks/usePrices';
 
@@ -63,7 +61,10 @@ function TokenCard({ token, onOpenChart }) {
       currentPriceUSD: priceData.price,
       solPrice,
       soldPercentage: totalTokensBought > 0 ? (soldTokens / totalTokensBought) * 100 : 0,
-      holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0
+      holdingPercentage: totalTokensBought > 0 ? (currentHoldings / totalTokensBought) * 100 : 0,
+      marketCap: priceData.marketCap,
+      deployTime: priceData.deployTime,
+      timeSinceDeployMs: priceData.timeSinceDeployMs
     };
   }, [priceData, solPrice, token.wallets]);
 
@@ -79,9 +80,22 @@ function TokenCard({ token, onOpenChart }) {
 
   const formatNumber = (num, decimals = 2) => {
     if (num === null || num === undefined) return '0';
+    if (Math.abs(num) >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
     if (Math.abs(num) >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
     if (Math.abs(num) >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
     return num.toFixed(decimals);
+  };
+
+  const formatTimeSinceDeploy = (ms) => {
+    if (!ms) return 'N/A';
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    if (days > 0) return `${days}d`;
+    if (hours > 0) return `${hours}h`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${seconds}s`;
   };
 
   const netColor = groupPnL && groupPnL.totalPnLSOL !== undefined
@@ -168,7 +182,7 @@ function TokenCard({ token, onOpenChart }) {
       {/* Details (collapsible) */}
       {showDetails && (
         <div className="p-3 bg-gray-800/50">
-          {/* PnL breakdown */}
+          {/* PnL and Market Data breakdown */}
           {groupPnL && (
             <div className="grid grid-cols-2 gap-4 mb-3 text-xs">
               <div>
@@ -196,6 +210,18 @@ function TokenCard({ token, onOpenChart }) {
                 <div className="text-gray-400 mb-1">Total Spent/Received</div>
                 <div className="text-white font-medium">
                   {groupPnL.totalSpentSOL.toFixed(4)} / {groupPnL.totalReceivedSOL.toFixed(4)} SOL
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400 mb-1">Market Cap</div>
+                <div className="text-white font-medium">
+                  ${formatNumber(groupPnL.marketCap, 0)}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400 mb-1">Time Since Deploy</div>
+                <div className="text-white font-medium">
+                  {formatTimeSinceDeploy(groupPnL.timeSinceDeployMs)}
                 </div>
               </div>
             </div>

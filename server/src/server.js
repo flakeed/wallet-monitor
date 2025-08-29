@@ -955,28 +955,28 @@ app.get('/api/solana/price', auth.authRequired, async (req, res) => {
 app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
   try {
     const { mints } = req.body;
-    
     if (!mints || !Array.isArray(mints)) {
       return res.status(400).json({ error: 'Mints array is required' });
     }
-
     if (mints.length > 100) {
       return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
     }
-
     console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
     const startTime = Date.now();
-    
     const prices = await priceService.getTokenPrices(mints);
     const duration = Date.now() - startTime;
-    
     const result = {};
     prices.forEach((data, mint) => {
-      result[mint] = data;
+      result[mint] = {
+        price: data?.price || 0,
+        liquidity: data?.liquidity || 0,
+        marketCap: data?.marketCap || 0,
+        deployTime: data?.deployTime || null,
+        timeSinceDeployMs: data?.timeSinceDeployMs || 0,
+        error: data?.error || null
+      };
     });
-    
     console.log(`[${new Date().toISOString()}] ✅ Batch price request completed in ${duration}ms`);
-    
     res.json({
       success: true,
       prices: result,
