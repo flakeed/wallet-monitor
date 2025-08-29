@@ -7,9 +7,8 @@ const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
-const PriceService = require('./services/priceService');
+const PriceService = require('./services/priceService'); // Import instance directly
 const priceRoutes = require('./priceRoutes');
-const priceService = new PriceService();
 const app = express();
 const port = process.env.PORT || 5001;
 
