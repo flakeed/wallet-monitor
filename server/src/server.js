@@ -8,8 +8,10 @@ const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
 const PriceService = require('./services/priceService');
+const EnhancedPriceService = require('./services/enhancedPriceService');
 
-const priceService = new PriceService();
+// Замените создание priceService:
+const priceService = new EnhancedPriceService();
 const app = express();
 const port = process.env.PORT || 5001;
 
@@ -964,7 +966,7 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
     }
 
-    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
+    console.log(`[${new Date().toISOString()}] 📊 Hybrid price request for ${mints.length} tokens`);
     const startTime = Date.now();
     
     const prices = await priceService.getTokenPrices(mints);
@@ -975,27 +977,213 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
       result[mint] = data;
     });
     
-    console.log(`[${new Date().toISOString()}] ✅ Batch price request completed in ${duration}ms`);
+    console.log(`[${new Date().toISOString()}] ✅ Hybrid price request completed in ${duration}ms`);
     
     res.json({
       success: true,
       prices: result,
       count: prices.size,
-      duration
+      duration,
+      source: 'hybrid'
     });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in batch price endpoint:`, error.message);
+    console.error(`[${new Date().toISOString()}] ❌ Error in hybrid price endpoint:`, error.message);
     res.status(500).json({ error: 'Failed to fetch token prices' });
+  }
+});
+
+app.get('/api/tokens/price/:mint/best', auth.authRequired, async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Valid token mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🎯 Getting best price for ${mint.slice(0,8)}...`);
+    const startTime = Date.now();
+    
+    const bestPrice = await priceService.getBestTokenPrice(mint);
+    const duration = Date.now() - startTime;
+    
+    if (!bestPrice) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'No price data found for this token',
+        mint
+      });
+    }
+    
+    console.log(`[${new Date().toISOString()}] ✅ Best price found (${bestPrice.source}): $${bestPrice.price.toFixed(8)} in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      mint,
+      price: bestPrice,
+      duration,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting best price:`, error.message);
+    res.status(500).json({ error: 'Failed to get best token price' });
+  }
+});
+
+app.post('/api/tokens/price/:mint/refresh', auth.authRequired, async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Valid token mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🔄 Force refreshing price for ${mint.slice(0,8)}...`);
+    const startTime = Date.now();
+    
+    const updatedPrice = await priceService.forceUpdateTokenPrice(mint);
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      mint,
+      price: updatedPrice,
+      duration,
+      refreshed: true,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error refreshing price:`, error.message);
+    res.status(500).json({ error: 'Failed to refresh token price' });
   }
 });
 
 app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) => {
   try {
     const stats = priceService.getStats();
-    res.json(stats);
+    res.json({
+      success: true,
+      stats,
+      timestamp: Date.now()
+    });
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error getting price stats:`, error.message);
     res.status(500).json({ error: 'Failed to get price service stats' });
+  }
+});
+
+app.get('/api/tokens/pools/:mint', auth.authRequired, async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Valid token mint address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 🏊 Getting pools for ${mint.slice(0,8)}...`);
+    const startTime = Date.now();
+    
+    // Получаем пулы SOL и USDC
+    const [solPools, usdcPools] = await Promise.all([
+      priceService.poolService.findPoolsForToken(mint, priceService.poolService.WRAPPED_SOL_MINT),
+      priceService.poolService.findPoolsForToken(mint, priceService.poolService.USDC_MINT)
+    ]);
+    
+    const duration = Date.now() - startTime;
+    const allPools = [...solPools, ...usdcPools];
+    
+    res.json({
+      success: true,
+      mint,
+      pools: {
+        sol: solPools,
+        usdc: usdcPools,
+        total: allPools.length
+      },
+      duration,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting token pools:`, error.message);
+    res.status(500).json({ error: 'Failed to get token pools' });
+  }
+});
+
+// Эндпоинт для получения детальной информации о конкретном пуле
+app.get('/api/pools/:poolAddress', auth.authRequired, async (req, res) => {
+  try {
+    const { poolAddress } = req.params;
+    
+    if (!poolAddress || poolAddress.length < 32) {
+      return res.status(400).json({ error: 'Valid pool address is required' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Getting pool details for ${poolAddress.slice(0,8)}...`);
+    const startTime = Date.now();
+    
+    // Получаем информацию о пуле через RPC
+    const poolAccount = await priceService.poolService.connection.getAccountInfo(
+      new (require('@solana/web3.js').PublicKey)(poolAddress)
+    );
+    
+    if (!poolAccount) {
+      return res.status(404).json({ error: 'Pool not found' });
+    }
+    
+    // Здесь можно добавить детальный парсинг данных пула
+    // В зависимости от типа пула (Raydium, Orca, etc.)
+    
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      poolAddress,
+      poolData: {
+        owner: poolAccount.owner.toString(),
+        executable: poolAccount.executable,
+        lamports: poolAccount.lamports,
+        dataSize: poolAccount.data.length,
+        // Здесь можно добавить парсированные данные
+      },
+      duration,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error getting pool details:`, error.message);
+    res.status(500).json({ error: 'Failed to get pool details' });
+  }
+});
+
+app.post('/api/prices/strategy', auth.authRequired, auth.adminRequired, async (req, res) => {
+  try {
+    const { tokenType, strategies } = req.body;
+    
+    if (!tokenType || !Array.isArray(strategies)) {
+      return res.status(400).json({ 
+        error: 'tokenType and strategies array are required' 
+      });
+    }
+    
+    const validStrategies = ['pools', 'dexscreener'];
+    if (!strategies.every(s => validStrategies.includes(s))) {
+      return res.status(400).json({ 
+        error: 'Invalid strategy. Valid strategies: ' + validStrategies.join(', ')
+      });
+    }
+    
+    // Обновляем стратегию
+    priceService.strategies[tokenType.toUpperCase()] = strategies;
+    
+    console.log(`[${new Date().toISOString()}] ⚙️ Updated ${tokenType} price strategy:`, strategies);
+    
+    res.json({
+      success: true,
+      message: `Updated ${tokenType} price strategy`,
+      newStrategy: strategies,
+      allStrategies: priceService.strategies
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error updating price strategy:`, error.message);
+    res.status(500).json({ error: 'Failed to update price strategy' });
   }
 });
 
@@ -1115,6 +1303,7 @@ process.on('SIGINT', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
   await solanaWebSocketService.shutdown(); 
+  await priceService.close();
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
@@ -1124,6 +1313,7 @@ process.on('SIGTERM', async () => {
   console.log(`[${new Date().toISOString()}] 🛑 Shutting down server...`);
   await monitoringService.close();
   await solanaWebSocketService.shutdown(); 
+  await priceService.close();
   await redis.quit();
   sseClients.forEach((client) => client.end());
   process.exit(0);
