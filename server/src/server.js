@@ -964,7 +964,7 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Maximum 100 mints allowed per request' });
     }
 
-    console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
+    console.log(`[${new Date().toISOString()}] 📊 Enhanced batch price request for ${mints.length} tokens`);
     const startTime = Date.now();
     
     const prices = await priceService.getTokenPrices(mints);
@@ -972,29 +972,215 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
     
     const result = {};
     prices.forEach((data, mint) => {
-      result[mint] = data;
+      result[mint] = data ? {
+        price: data.price,
+        change24h: data.change24h || 0,
+        volume24h: data.volume24h || 0,
+        liquidity: data.liquidity || 0,
+        marketCap: data.marketCap,
+        ageInHours: data.ageInHours,
+        pools: data.pools,
+        source: 'enhanced_pool_analysis'
+      } : null;
     });
     
-    console.log(`[${new Date().toISOString()}] ✅ Batch price request completed in ${duration}ms`);
+    console.log(`[${new Date().toISOString()}] ✅ Enhanced batch price request completed in ${duration}ms`);
     
     res.json({
       success: true,
       prices: result,
       count: prices.size,
-      duration
+      duration,
+      dataSource: 'onchain_pool_analysis'
     });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error in batch price endpoint:`, error.message);
+    console.error(`[${new Date().toISOString()}] ❌ Error in enhanced batch price endpoint:`, error.message);
     res.status(500).json({ error: 'Failed to fetch token prices' });
+  }
+});
+
+// New endpoint: Get newly created tokens
+app.get('/api/tokens/new', auth.authRequired, async (req, res) => {
+  try {
+    const maxAge = parseInt(req.query.maxAge) || 24; // Hours
+    const limit = parseInt(req.query.limit) || 50;
+    
+    console.log(`[${new Date().toISOString()}] 🆕 New tokens request: max age ${maxAge}h, limit ${limit}`);
+    
+    // This would need to be implemented with a database of tracked tokens
+    // For now, return placeholder response
+    res.json({
+      success: true,
+      data: [],
+      meta: {
+        maxAgeHours: maxAge,
+        limit,
+        note: 'New token discovery feature coming soon'
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in new tokens endpoint:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch new tokens' });
+  }
+});
+
+app.get('/api/tokens/:mint/data', auth.authRequired, async (req, res) => {
+  try {
+    const { mint } = req.params;
+    
+    if (!mint || mint.length < 32) {
+      return res.status(400).json({ error: 'Invalid token mint address' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Enhanced token data request for: ${mint}`);
+    const startTime = Date.now();
+    
+    const tokenData = await priceService.getTokenData(mint);
+    
+    if (!tokenData) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Token data not found or no pools available' 
+      });
+    }
+    
+    const duration = Date.now() - startTime;
+    
+    res.json({
+      success: true,
+      data: {
+        mint,
+        price: tokenData.price,
+        priceInSol: tokenData.priceInSol,
+        marketCap: tokenData.marketCap,
+        volume24h: tokenData.volume24h,
+        liquidity: tokenData.liquidity,
+        pools: tokenData.pools,
+        bestPool: tokenData.bestPool,
+        token: {
+          symbol: tokenData.symbol,
+          name: tokenData.name,
+          supply: tokenData.supply,
+          decimals: tokenData.decimals
+        },
+        age: {
+          createdAt: tokenData.createdAt,
+          ageInHours: tokenData.ageInHours,
+          isNew: tokenData.ageInHours < 24 // Less than 24 hours old
+        },
+        source: tokenData.source,
+        lastUpdated: tokenData.lastUpdated
+      },
+      meta: {
+        processingTime: duration,
+        dataSource: 'onchain_pool_analysis'
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in enhanced token data endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch token data',
+      details: error.message 
+    });
+  }
+});
+
+// Batch enhanced token data
+app.post('/api/tokens/batch-data', auth.authRequired, async (req, res) => {
+  try {
+    const { mints } = req.body;
+    
+    if (!mints || !Array.isArray(mints)) {
+      return res.status(400).json({ error: 'Mints array is required' });
+    }
+
+    if (mints.length > 50) {
+      return res.status(400).json({ error: 'Maximum 50 mints allowed per request' });
+    }
+
+    console.log(`[${new Date().toISOString()}] 📊 Batch enhanced token data request for ${mints.length} tokens`);
+    const startTime = Date.now();
+    
+    const tokenDataMap = await priceService.getTokenPrices(mints);
+    
+    const result = {};
+    mints.forEach(mint => {
+      const data = tokenDataMap.get(mint);
+      if (data) {
+        result[mint] = {
+          price: data.price,
+          priceInSol: data.priceInSol,
+          marketCap: data.marketCap,
+          liquidity: data.liquidity,
+          pools: data.pools,
+          bestPool: data.bestPool,
+          token: {
+            symbol: data.symbol,
+            name: data.name,
+            supply: data.supply,
+            decimals: data.decimals
+          },
+          age: {
+            createdAt: data.createdAt,
+            ageInHours: data.ageInHours,
+            isNew: data.ageInHours < 24
+          },
+          lastUpdated: data.lastUpdated
+        };
+      } else {
+        result[mint] = null;
+      }
+    });
+    
+    const duration = Date.now() - startTime;
+    const successCount = Object.values(result).filter(data => data !== null).length;
+    
+    console.log(`[${new Date().toISOString()}] ✅ Batch enhanced token data completed in ${duration}ms: ${successCount}/${mints.length} successful`);
+    
+    res.json({
+      success: true,
+      data: result,
+      meta: {
+        totalRequested: mints.length,
+        successfulResponses: successCount,
+        processingTime: duration,
+        dataSource: 'onchain_pool_analysis'
+      }
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error in batch enhanced token data endpoint:`, error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch batch token data',
+      details: error.message 
+    });
   }
 });
 
 app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) => {
   try {
     const stats = priceService.getStats();
-    res.json(stats);
+    
+    res.json({
+      ...stats,
+      enhanced: true,
+      capabilities: {
+        poolAnalysis: true,
+        marketCapCalculation: true,
+        tokenAgeTracking: true,
+        realTimePricing: true,
+        multiDexSupport: true,
+        batchProcessing: true
+      },
+      limits: {
+        batchSize: 100,
+        enhancedBatchSize: 50,
+        cacheTime: 30
+      }
+    });
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Error getting price stats:`, error.message);
+    console.error(`[${new Date().toISOString()}] ❌ Error getting enhanced price stats:`, error.message);
     res.status(500).json({ error: 'Failed to get price service stats' });
   }
 });
