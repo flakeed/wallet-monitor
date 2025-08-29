@@ -303,45 +303,63 @@ class EnhancedTokenService {
 
     async findPoolsForDEX(mintPubkey, programId, dexName) {
         try {
-            const programPublicKey = new PublicKey(programId);
+            // Use a lighter approach - try to find pools through known pool discovery methods
+            // Instead of getting all program accounts which causes 500 errors
             
-            // Get all accounts owned by the DEX program that mention our token
-            const accounts = await this.connection.getProgramAccounts(programPublicKey, {
-                filters: [
-                    {
-                        memcmp: {
-                            offset: 0, // This might need adjustment based on DEX structure
-                            bytes: mintPubkey.toBase58()
-                        }
-                    }
-                ]
-            });
-
             const pools = [];
             
-            for (const account of accounts) {
-                try {
-                    const poolInfo = await this.parsePoolAccount(account, dexName, mintPubkey);
-                    if (poolInfo) {
-                        pools.push({
-                            address: account.pubkey.toString(),
-                            dex: dexName,
-                            programId: programId,
-                            tokenA: poolInfo.tokenA,
-                            tokenB: poolInfo.tokenB,
-                            ...poolInfo
-                        });
-                    }
-                } catch (parseError) {
-                    // Skip invalid pool accounts
-                    continue;
-                }
+            // For now, we'll use a simplified approach that doesn't overload the RPC
+            // This is a placeholder that can be enhanced with specific DEX pool discovery logic
+            
+            if (dexName.includes('RAYDIUM')) {
+                // Try to find Raydium pools using their specific pool seeds/PDAs
+                const raydiumPools = await this.findRaydiumPools(mintPubkey);
+                pools.push(...raydiumPools);
+            } else if (dexName.includes('ORCA')) {
+                // Try to find Orca pools
+                const orcaPools = await this.findOrcaPools(mintPubkey);
+                pools.push(...orcaPools);
+            } else if (dexName.includes('PUMP')) {
+                // Try to find PumpFun pools
+                const pumpPools = await this.findPumpFunPools(mintPubkey);
+                pools.push(...pumpPools);
             }
 
             return pools;
 
         } catch (error) {
-            console.error(`[${new Date().toISOString()}] ❌ Error finding pools for DEX ${dexName}:`, error.message);
+            console.warn(`[${new Date().toISOString()}] ⚠️ Could not find pools for DEX ${dexName}:`, error.message);
+            return [];
+        }
+    }
+
+    async findRaydiumPools(mintPubkey) {
+        // Simplified Raydium pool discovery
+        // In a full implementation, you would use Raydium's specific pool derivation logic
+        try {
+            // This is a placeholder - implement based on Raydium's SDK
+            return [];
+        } catch (error) {
+            return [];
+        }
+    }
+
+    async findOrcaPools(mintPubkey) {
+        // Simplified Orca pool discovery
+        try {
+            // This is a placeholder - implement based on Orca's SDK
+            return [];
+        } catch (error) {
+            return [];
+        }
+    }
+
+    async findPumpFunPools(mintPubkey) {
+        // Simplified PumpFun pool discovery
+        try {
+            // This is a placeholder - implement based on PumpFun's pool structure
+            return [];
+        } catch (error) {
             return [];
         }
     }

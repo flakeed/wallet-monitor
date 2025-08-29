@@ -1322,6 +1322,7 @@ app.get('/api/tokens/trending', auth.authRequired, async (req, res) => {
   }
 });
 
+
 // Get token pools information
 app.get('/api/tokens/:mintAddress/pools', auth.authRequired, async (req, res) => {
   try {
