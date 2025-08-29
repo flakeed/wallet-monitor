@@ -1,4 +1,4 @@
-// client/src/App.js - Trading-style compact interface
+// client/src/App.js - Enhanced version with RPC token data integration
 
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
@@ -9,6 +9,7 @@ import ErrorMessage from './components/ErrorMessage';
 import TokenTracker from './components/TokenTracker';
 import TelegramLogin from './components/TelegramLogin';
 import AdminPanel from './components/AdminPanel';
+import NewTokensPanel from './components/NewTokensPanel';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'https://158.220.125.26:5001/api';
 const TELEGRAM_BOT_USERNAME = process.env.REACT_APP_TELEGRAM_BOT_USERNAME || 'test_walletpulse_bot';
@@ -18,6 +19,8 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showNewTokens, setShowNewTokens] = useState(false);
+  const [enhancedMode, setEnhancedMode] = useState(true); // Use enhanced RPC features
   
   // State management
   const [walletCount, setWalletCount] = useState(0);
@@ -31,11 +34,28 @@ function App() {
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [selectedGroupInfo, setSelectedGroupInfo] = useState(null);
+  
+  // Enhanced features state
+  const [solPrice, setSolPrice] = useState(150);
+  const [serviceStats, setServiceStats] = useState(null);
+  const [rpcConnected, setRpcConnected] = useState(false);
 
   // Check authentication on app load
   useEffect(() => {
     checkAuthentication();
   }, []);
+
+  // Check RPC connectivity and get SOL price
+  useEffect(() => {
+    if (isAuthenticated && enhancedMode) {
+      checkRpcConnectivity();
+      fetchSolPrice();
+      
+      // Update SOL price every 30 seconds
+      const interval = setInterval(fetchSolPrice, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [isAuthenticated, enhancedMode]);
 
   const checkAuthentication = async () => {
     const sessionToken = localStorage.getItem('sessionToken');
@@ -70,6 +90,55 @@ function App() {
     }
   };
 
+  const checkRpcConnectivity = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/tokens/rpc-test`, {
+        headers: getAuthHeaders()
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setRpcConnected(data.data?.overallSuccess || false);
+        console.log(`[${new Date().toISOString()}] 🔗 RPC connectivity:`, data.data?.overallSuccess ? 'Connected' : 'Issues detected');
+      }
+    } catch (error) {
+      console.warn('RPC connectivity check failed:', error.message);
+      setRpcConnected(false);
+    }
+  };
+
+  const fetchSolPrice = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/solana/price`, {
+        headers: getAuthHeaders()
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setSolPrice(data.price || 150);
+      }
+    } catch (error) {
+      console.warn('Failed to fetch SOL price:', error.message);
+    }
+  };
+
+  const fetchServiceStats = async () => {
+    if (!user?.isAdmin) return;
+    
+    try {
+      const response = await fetch(`${API_BASE}/tokens/service-stats`, {
+        headers: getAuthHeaders()
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setServiceStats(data.data);
+      }
+    } catch (error) {
+      console.warn('Failed to fetch service stats:', error.message);
+    }
+  };
+
   const handleLogin = (authData) => {
     setUser(authData.user);
     setIsAuthenticated(true);
@@ -83,6 +152,7 @@ function App() {
     setUser(null);
     setIsAuthenticated(false);
     setShowAdminPanel(false);
+    setServiceStats(null);
   };
 
   // Helper function to get auth headers
@@ -94,7 +164,7 @@ function App() {
     };
   };
 
-  // Ultra-fast initialization
+  // Ultra-fast initialization with enhanced features
   const ultraFastInit = async (hours = timeframe, type = transactionType, groupId = selectedGroup) => {
     try {
       setError(null);
@@ -127,6 +197,17 @@ function App() {
       } else {
         setSelectedGroupInfo(null);
       }
+
+      // If enhanced mode is enabled, fetch additional data
+      if (enhancedMode) {
+        fetchSolPrice();
+        if (user?.isAdmin) {
+          fetchServiceStats();
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      console.log(`[${new Date().toISOString()}] ⚡ Enhanced initialization completed in ${duration}ms`);
 
     } catch (err) {
       setError(err.message);
@@ -179,7 +260,7 @@ function App() {
     }
   };
 
-  // SSE connection for real-time updates
+  // Enhanced SSE connection with RPC integration
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -465,6 +546,18 @@ function App() {
     }
   }, [refreshKey, isAuthenticated]);
 
+  // Toggle enhanced mode
+  const toggleEnhancedMode = () => {
+    setEnhancedMode(!enhancedMode);
+    if (!enhancedMode) {
+      checkRpcConnectivity();
+      fetchSolPrice();
+      if (user?.isAdmin) {
+        fetchServiceStats();
+      }
+    }
+  };
+
   // Show loading while checking authentication
   if (isCheckingAuth) {
     return (
@@ -487,6 +580,9 @@ function App() {
           <div className="flex items-center space-x-3">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
             <span className="text-white">Loading wallets...</span>
+            {enhancedMode && (
+              <span className="text-green-400 text-sm">Enhanced Mode</span>
+            )}
           </div>
         </div>
       </div>
@@ -495,14 +591,52 @@ function App() {
 
   return (
     <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
-      {/* Header */}
-      <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+      {/* Header with Enhanced Mode Toggle */}
+      <div className="bg-gray-900 border-b border-gray-700 px-4 py-2">
+        <div className="flex items-center justify-between">
+          <Header user={user} onLogout={handleLogout} onOpenAdmin={() => setShowAdminPanel(true)} />
+          
+          {/* Enhanced Mode Controls */}
+          <div className="flex items-center space-x-4">
+            {enhancedMode && (
+              <>
+                <div className="text-sm text-gray-400">
+                  SOL: <span className="text-green-400 font-medium">${solPrice.toFixed(2)}</span>
+                </div>
+                <div className={`flex items-center space-x-1 text-xs ${rpcConnected ? 'text-green-400' : 'text-red-400'}`}>
+                  <div className={`w-2 h-2 rounded-full ${rpcConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                  <span>RPC {rpcConnected ? 'Connected' : 'Offline'}</span>
+                </div>
+              </>
+            )}
+            
+            <button
+              onClick={toggleEnhancedMode}
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                enhancedMode 
+                  ? 'bg-green-600 text-white hover:bg-green-700' 
+                  : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+              }`}
+            >
+              {enhancedMode ? '🚀 Enhanced' : '⚡ Basic'}
+            </button>
+          </div>
+        </div>
+      </div>
       
       {/* Error */}
       {error && <ErrorMessage error={error} />}
       
       {/* Monitoring Status */}
       <MonitoringStatus status={monitoringStatus} onToggle={toggleMonitoring} />
+      
+      {/* New & Trending Tokens Panel */}
+      {enhancedMode && (
+        <NewTokensPanel 
+          isExpanded={showNewTokens}
+          onToggle={() => setShowNewTokens(!showNewTokens)}
+        />
+      )}
       
       {/* Wallet Manager (Collapsible) */}
       <WalletManager 
@@ -523,12 +657,32 @@ function App() {
           onGroupChange={handleGroupChange}
           walletCount={walletCount}
           selectedGroupInfo={selectedGroupInfo}
+          enhancedMode={enhancedMode}
+          solPrice={solPrice}
         />
       </div>
 
       {/* Admin Panel Modal */}
       {showAdminPanel && user?.isAdmin && (
-        <AdminPanel user={user} onClose={() => setShowAdminPanel(false)} />
+        <AdminPanel 
+          user={user} 
+          onClose={() => setShowAdminPanel(false)}
+          serviceStats={serviceStats}
+          rpcConnected={rpcConnected}
+          enhancedMode={enhancedMode}
+        />
+      )}
+
+      {/* Enhanced Mode Notification */}
+      {enhancedMode && !rpcConnected && (
+        <div className="fixed bottom-4 right-4 bg-yellow-900 border border-yellow-600 text-yellow-200 px-4 py-2 rounded-lg shadow-lg">
+          <div className="flex items-center space-x-2">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 15.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+            <span className="text-sm">RPC connection issues detected</span>
+          </div>
+        </div>
       )}
     </div>
   );
