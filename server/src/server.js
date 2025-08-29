@@ -7,7 +7,7 @@ const WalletMonitoringService = require('./services/monitoringService');
 const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
-const PriceService = require('./services/priceService'); // Import instance directly
+const PriceService = require('./services/priceService');
 const priceRoutes = require('./priceRoutes');
 const app = express();
 const port = process.env.PORT || 5001;
@@ -58,7 +58,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Authentication routes - остаются прежними для входа пользователей
+// Authentication routes
 app.post('/api/auth/telegram-simple', async (req, res) => {
   try {
     const { id, first_name, last_name, username } = req.body;
@@ -192,7 +192,7 @@ app.post('/api/auth/logout', auth.authRequired, async (req, res) => {
   }
 });
 
-// Admin routes - остаются прежними
+// Admin routes
 app.get('/api/admin/whitelist', auth.authRequired, auth.adminRequired, async (req, res) => {
   try {
     const whitelist = await auth.getWhitelist();
@@ -319,7 +319,7 @@ app.get('/api/admin/stats', auth.authRequired, auth.adminRequired, async (req, r
   }
 });
 
-// ОБНОВЛЕНО: SSE без фильтрации по пользователям - все пользователи видят все транзакции
+// SSE endpoint for transactions
 app.get('/api/transactions/stream', async (req, res) => {
   try {
     const token = req.query.token || (req.headers.authorization && req.headers.authorization.substring(7));
@@ -361,7 +361,6 @@ app.get('/api/transactions/stream', async (req, res) => {
         try {
           const transaction = JSON.parse(message);
           
-          // Фильтруем только по группе если указана
           if (groupId && transaction.groupId !== groupId) {
             return;
           }
@@ -396,7 +395,7 @@ app.get('/api/transactions/stream', async (req, res) => {
   }
 });
 
-// ОБНОВЛЕНО: Глобальные эндпоинты кошельков - без фильтрации по пользователям
+// Wallet endpoints
 app.get('/api/wallets/count', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
@@ -432,7 +431,6 @@ app.post('/api/wallets/validate', auth.authRequired, async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] ⚡ Validating ${addresses.length} wallet addresses globally`);
 
-    // ОБНОВЛЕНО: Валидация без пользователя - проверяем глобальные дубликаты
     const existingQuery = `
       SELECT address 
       FROM wallets 
@@ -574,7 +572,6 @@ app.delete('/api/wallets/:address', auth.authRequired, async (req, res) => {
       return res.status(400).json({ error: 'Invalid Solana wallet address format' });
     }
 
-    // ОБНОВЛЕНО: Проверяем существование кошелька глобально (без пользователя)
     const wallet = await db.getWalletByAddress(address);
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet not found' });
@@ -601,7 +598,6 @@ app.delete('/api/wallets', auth.authRequired, async (req, res) => {
     
     console.log(`[${new Date().toISOString()}] 🗑️ Global removal request${groupId ? ` for group ${groupId}` : ''}`);
     
-    // ОБНОВЛЕНО: Удаляем кошельки глобально (без фильтрации по пользователю)
     await solanaWebSocketService.removeAllWallets(groupId);
     
     const newCounts = await db.getWalletCountFast(groupId);
@@ -622,7 +618,6 @@ app.delete('/api/wallets', auth.authRequired, async (req, res) => {
   }
 });
 
-// ОБНОВЛЕНО: Глобальный эндпоинт инициализации
 app.get('/api/init', auth.authRequired, async (req, res) => {
   try {
     const groupId = req.query.groupId || null;
@@ -632,7 +627,6 @@ app.get('/api/init', auth.authRequired, async (req, res) => {
     console.log(`[${new Date().toISOString()}] 🚀 Global app initialization${groupId ? ` for group ${groupId}` : ''}`);
     const startTime = Date.now();
     
-    // ОБНОВЛЕНО: Загрузка данных глобально (без userId)
     const [walletCounts, transactions, monitoringStatus, groups] = await Promise.all([
       db.getWalletCountFast(groupId),
       db.getRecentTransactionsOptimized(hours, 400, transactionType, groupId),
@@ -691,7 +685,6 @@ app.get('/api/transactions', auth.authRequired, async (req, res) => {
 
     console.log(`[${new Date().toISOString()}] ⚡ Global transactions request${groupId ? ` for group ${groupId}` : ''}, hours ${hours}, type ${type}`);
 
-    // ОБНОВЛЕНО: Получаем транзакции глобально (без userId)
     const transactions = await db.getRecentTransactionsOptimized(hours, limit, type, groupId);
     
     console.log(`[${new Date().toISOString()}] ✅ Returning ${transactions.length} global transactions${groupId ? ` for group ${groupId}` : ''}`);
@@ -709,7 +702,6 @@ app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
     
     console.log(`[${new Date().toISOString()}] ⚡ Global monitoring status${groupId ? ` for group ${groupId}` : ''}`);
     
-    // ОБНОВЛЕНО: Статус мониторинга глобально (без userId)
     const [websocketStatus, dbStats] = await Promise.all([
       Promise.resolve(solanaWebSocketService.getStatus()),
       db.getMonitoringStatusFast(groupId)
@@ -735,13 +727,12 @@ app.get('/api/monitoring/status', auth.authRequired, async (req, res) => {
   }
 });
 
-// ОБНОВЛЕНО: Глобальное переключение мониторинга - без ограничения пользователя
 app.post('/api/monitoring/toggle', auth.authRequired, async (req, res) => {
   try {
     const { action, groupId } = req.body;
 
     if (action === 'start') {
-      await solanaWebSocketService.start(groupId); // Убрали параметр userId
+      await solanaWebSocketService.start(groupId);
       res.json({ success: true, message: `Global WebSocket monitoring started${groupId ? ` for group ${groupId}` : ''}` });
     } else if (action === 'stop') {
       await solanaWebSocketService.stop();
@@ -755,13 +746,12 @@ app.post('/api/monitoring/toggle', auth.authRequired, async (req, res) => {
   }
 });
 
-// ОБНОВЛЕНО: Глобальный массовый импорт кошельков
 app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   const startTime = Date.now();
   
   try {
     const { wallets, groupId } = req.body;
-    const addedBy = req.user.id; // Отслеживаем кто добавил
+    const addedBy = req.user.id;
 
     console.log(`[${new Date().toISOString()}] 🚀 Global bulk import: ${wallets?.length || 0} wallets by user ${req.user.username || req.user.id}`);
 
@@ -789,7 +779,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       newCounts: null
     };
 
-    // Быстрая локальная валидация
     console.log(`[${new Date().toISOString()}] ⚡ Global validation...`);
     const validationStart = Date.now();
 
@@ -851,7 +840,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       });
     }
 
-    // Глобальная база данных batch insert
     console.log(`[${new Date().toISOString()}] 🗄️ Global database operation...`);
     const dbStart = Date.now();
 
@@ -871,7 +859,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
         addedBy: wallet.added_by
       }));
 
-      // Обновляем счетчики
       const newCounts = await db.getWalletCountFast(groupId);
       results.newCounts = newCounts;
 
@@ -880,7 +867,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
       throw new Error(`Database operation failed: ${dbError.message}`);
     }
 
-    // Неблокирующая подписка WebSocket
     if (results.successful > 0) {
       console.log(`[${new Date().toISOString()}] 🔗 Starting global WebSocket subscriptions...`);
       
@@ -888,7 +874,6 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
         try {
           const addressesToSubscribe = results.successfulWallets.map(w => w.address);
           
-          // Подписываемся если релевантно для активного мониторинга
           const relevantAddresses = results.successfulWallets
             .filter(wallet => !solanaWebSocketService.activeGroupId || wallet.groupId === solanaWebSocketService.activeGroupId)
             .map(w => w.address);
@@ -936,10 +921,10 @@ app.post('/api/wallets/bulk-optimized', auth.authRequired, async (req, res) => {
   }
 });
 
-// Эндпоинты цен остаются прежними
+// Price endpoints
 app.get('/api/solana/price', auth.authRequired, async (req, res) => {
   try {
-    const priceData = await priceService.getSolPrice();
+    const priceData = await PriceService.getSolPrice(); // Fixed: Use PriceService instead of priceService
     res.json(priceData);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error in price endpoint:`, error.message);
@@ -964,7 +949,7 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
     }
     console.log(`[${new Date().toISOString()}] 📊 Batch price request for ${mints.length} tokens`);
     const startTime = Date.now();
-    const prices = await priceService.getTokenPrices(mints);
+    const prices = await PriceService.getTokenPrices(mints);
     const duration = Date.now() - startTime;
     const result = {};
     prices.forEach((data, mint) => {
@@ -992,7 +977,7 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
 
 app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) => {
   try {
-    const stats = priceService.getStats();
+    const stats = PriceService.getStats();
     res.json(stats);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Error getting price stats:`, error.message);
@@ -1000,7 +985,7 @@ app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) =
   }
 });
 
-// ОБНОВЛЕНО: Глобальные группы - без владения пользователями
+// Group endpoints
 app.get('/api/groups', auth.authRequired, async (req, res) => {
   try {
     const groups = await db.getGroups();
@@ -1036,12 +1021,10 @@ app.post('/api/groups', auth.authRequired, async (req, res) => {
   }
 });
 
-// ОБНОВЛЕНО: Глобальное переключение групп - без ограничения пользователя
 app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
   try {
     const { groupId } = req.body;
     
-    // Проверяем существование группы если указан groupId
     if (groupId) {
       const query = `SELECT id FROM groups WHERE id = $1`;
       const result = await db.pool.query(query, [groupId]);
@@ -1050,7 +1033,7 @@ app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
       }
     }
     
-    await solanaWebSocketService.switchGroup(groupId); // Убрали параметр userId
+    await solanaWebSocketService.switchGroup(groupId);
     res.json({
       success: true,
       message: `Switched to global group ${groupId || 'all'}`,
@@ -1061,7 +1044,7 @@ app.post('/api/groups/switch', auth.authRequired, async (req, res) => {
   }
 });
 
-// Периодическая очистка истекших сессий
+// Periodic session cleanup
 setInterval(async () => {
   try {
     const cleaned = await auth.cleanExpiredSessions();
@@ -1137,7 +1120,7 @@ const startWebSocketService = async () => {
 
   while (retries < maxRetries) {
     try {
-      await solanaWebSocketService.start(); // Убрали параметр userId
+      await solanaWebSocketService.start();
       console.log(`[${new Date().toISOString()}] 🚀 Global Solana WebSocket service started successfully`);
       return;
     } catch (error) {
