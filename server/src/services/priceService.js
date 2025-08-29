@@ -1,9 +1,13 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const axios = require('axios');
 const NodeCache = require('node-cache');
+const Redis = require('ioredis');
 
 // Initialize Solana connection with custom node
 const connection = new Connection('http://45.134.108.254:50111', 'confirmed');
+
+// Initialize Redis with the same URL as in your main application
+const redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
 
 // Cache for token prices (TTL: 30 seconds)
 const priceCache = new NodeCache({ stdTTL: 30, checkperiod: 10 });
@@ -19,9 +23,91 @@ const DEXS = {
 // Program IDs for DEXs
 const RAYDIUM_PROGRAM_ID = new PublicKey('675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8');
 const ORCA_PROGRAM_ID = new PublicKey('9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP');
-const METEORA_PROGRAM_ID = new PublicKey('DLendnZuH1w3qhwk6zSzw6sBdsnR7U1Z2D4T3V7W85x1'); // Example Meteora program ID
+const METEORA_PROGRAM_ID = new PublicKey('DLendnZuH1w3qhwk6zSzw6sBdsnR7U1Z2D4T3V7W85x1'); // Verify this ID for Meteora
 
 class PriceService {
+  // Fetch SOL price (in USD)
+  async getSolPrice() {
+    const cacheKey = 'solana-price';
+    const redisKey = 'solana:price';
+
+    // Check local cache first
+    const cached = priceCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    // Check Redis cache
+    try {
+      const redisCached = await redis.get(redisKey);
+      if (redisCached) {
+        const priceData = JSON.parse(redisCached);
+        priceCache.set(cacheKey, priceData);
+        return priceData;
+      }
+    } catch (redisError) {
+      console.error(`[PriceService] Error checking Redis cache for SOL price:`, redisError.message);
+    }
+
+    try {
+      // Fetch from Jupiter API
+      const response = await axios.get('https://price.jup.ag/v4/price?ids=SOL');
+      const data = response.data.data.SOL;
+
+      if (!data || !data.price) {
+        throw new Error('No price data found for SOL');
+      }
+
+      const priceData = {
+        success: true,
+        price: data.price,
+        timestamp: new Date().toISOString()
+      };
+
+      // Cache in both local cache and Redis
+      priceCache.set(cacheKey, priceData);
+      try {
+        await redis.set(redisKey, JSON.stringify(priceData), 'EX', 300); // 5-minute TTL
+      } catch (redisError) {
+        console.error(`[PriceService] Error caching SOL price in Redis:`, redisError.message);
+      }
+      return priceData;
+    } catch (error) {
+      console.error(`[PriceService] Error fetching SOL price from Jupiter:`, error.message);
+      // Fallback to CoinGecko
+      try {
+        const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+        const data = response.data.solana;
+
+        if (!data || !data.usd) {
+          throw new Error('No price data found for SOL on CoinGecko');
+        }
+
+        const priceData = {
+          success: true,
+          price: data.usd,
+          timestamp: new Date().toISOString()
+        };
+
+        priceCache.set(cacheKey, priceData);
+        try {
+          await redis.set(redisKey, JSON.stringify(priceData), 'EX', 300);
+        } catch (redisError) {
+          console.error(`[PriceService] Error caching SOL price in Redis:`, redisError.message);
+        }
+        return priceData;
+      } catch (fallbackError) {
+        console.error(`[PriceService] Error fetching SOL price from CoinGecko:`, fallbackError.message);
+        return {
+          success: false,
+          price: null,
+          timestamp: new Date().toISOString(),
+          error: 'Failed to fetch SOL price from all sources'
+        };
+      }
+    }
+  }
+
   // Fetch token price from a specific DEX
   async fetchPriceFromDex(tokenMint, dex) {
     try {
@@ -74,7 +160,7 @@ class PriceService {
 
       // Simplified: Assume first account is the pool
       const poolAccount = accounts[0];
-      // Placeholder: Parse pool data to extract price (use Raydium SDK for real implementation)
+      // Placeholder: Parse pool data to extract price
       const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
       const totalSupply = await this.getTokenSupply(mintKey);
       const deployTime = await this.getTokenDeployTime(mintKey);
@@ -256,23 +342,34 @@ class PriceService {
 
   // Batch fetch token prices
   async getTokenPrices(tokenMints) {
-    const results = {};
+    const results = new Map();
     const promises = tokenMints.map(async (mint) => {
       try {
         const priceData = await this.getTokenPrice(mint);
-        results[mint] = priceData;
+        results.set(mint, priceData);
       } catch (error) {
-        results[mint] = {
+        results.set(mint, {
           price: null,
           marketCap: null,
           deployTime: null,
-          timeSinceDeployMs: null
-        };
+          timeSinceDeployMs: null,
+          error: error.message
+        });
       }
     });
 
     await Promise.all(promises);
-    return { success: true, prices: results };
+    return results;
+  }
+
+  // Get price service stats
+  getStats() {
+    return {
+      totalRequests: priceCache.getStats().keys,
+      cacheHits: priceCache.getStats().hits,
+      cacheMisses: priceCache.getStats().misses,
+      lastRequest: new Date().toISOString()
+    };
   }
 }
 
