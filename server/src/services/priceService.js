@@ -1,11 +1,11 @@
 
 const Redis = require('ioredis');
-const SimplifiedTokenService = require('./simplifiedTokenService');
+const EnhancedTokenService = require('./enhancedTokenService');
 
 class PriceService {
     constructor() {
         this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
-        this.simplifiedTokenService = new SimplifiedTokenService();
+        this.enhancedTokenService = new EnhancedTokenService();
 
         // Fallback to DexScreener for some operations
         this.fallbackEnabled = true;
@@ -156,7 +156,7 @@ class PriceService {
             // Try RPC first
             let newPrice;
             try {
-                newPrice = await this.simplifiedTokenService.getSolPrice();
+                newPrice = await this.enhancedTokenService.getSolPrice();
                 this.stats.rpcRequests++;
             } catch (rpcError) {
                 console.warn(`[${new Date().toISOString()}] ⚠️ RPC SOL price failed, using fallback:`, rpcError.message);
@@ -253,7 +253,7 @@ class PriceService {
 
             try {
                 // Use simplified token service for batch price fetching
-                const enhancedPrices = await this.simplifiedTokenService.getTokenPrices(uncachedMints);
+                const enhancedPrices = await this.enhancedTokenService.getTokenPrices(uncachedMints);
 
                 for (const [mint, priceData] of enhancedPrices) {
                     // Convert enhanced service format to our format
