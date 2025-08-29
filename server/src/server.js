@@ -8,7 +8,7 @@ const Database = require('./database/connection');
 const SolanaWebSocketService = require('./services/solanaWebSocketService');
 const AuthMiddleware = require('./middleware/authMiddleware');
 const PriceService = require('./services/priceService');
-
+const priceRoutes = require('./priceRoutes');
 const priceService = new PriceService();
 const app = express();
 const port = process.env.PORT || 5001;
@@ -951,6 +951,8 @@ app.get('/api/solana/price', auth.authRequired, async (req, res) => {
     });
   }
 });
+
+app.use('/api/tokens', priceRoutes);
 
 app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
   try {
