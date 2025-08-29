@@ -49,9 +49,9 @@ class PriceService {
       console.error(`[PriceService] Error checking Redis cache for SOL price:`, redisError.message);
     }
 
+    // Try Jupiter API
     try {
-      // Fetch from Jupiter API
-      const response = await axios.get('https://price.jup.ag/v4/price?ids=SOL');
+      const response = await axios.get('https://price.jup.ag/v4/price?ids=SOL', { timeout: 5000 });
       const data = response.data.data.SOL;
 
       if (!data || !data.price) {
@@ -76,7 +76,7 @@ class PriceService {
       console.error(`[PriceService] Error fetching SOL price from Jupiter:`, error.message);
       // Fallback to CoinGecko
       try {
-        const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+        const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', { timeout: 5000 });
         const data = response.data.solana;
 
         if (!data || !data.usd) {
@@ -98,6 +98,17 @@ class PriceService {
         return priceData;
       } catch (fallbackError) {
         console.error(`[PriceService] Error fetching SOL price from CoinGecko:`, fallbackError.message);
+        // Fallback to cached Redis price if available
+        try {
+          const redisFallback = await redis.get(redisKey);
+          if (redisFallback) {
+            const priceData = JSON.parse(redisFallback);
+            priceCache.set(cacheKey, priceData);
+            return priceData;
+          }
+        } catch (redisError) {
+          console.error(`[PriceService] Error fetching fallback SOL price from Redis:`, redisError.message);
+        }
         return {
           success: false,
           price: null,
@@ -134,6 +145,7 @@ class PriceService {
 
       return {
         price: poolData.price,
+        liquidity: poolData.liquidity,
         marketCap: poolData.marketCap,
         deployTime: poolData.deployTime,
         timeSinceDeployMs: Date.now() - new Date(poolData.deployTime).getTime()
@@ -150,7 +162,8 @@ class PriceService {
       const accounts = await connection.getProgramAccounts(RAYDIUM_PROGRAM_ID, {
         filters: [
           { dataSize: 560 }, // Raydium AMM pool account size
-          { memcmp: { offset: 32, bytes: mintKey.toBase58() } } // Token A or B mint
+          { memcmp: { offset: 32, bytes: mintKey.toBase58() } }, // Token A mint
+          { memcmp: { offset: 64, bytes: mintKey.toBase58() } }  // Token B mint
         ]
       });
 
@@ -160,13 +173,13 @@ class PriceService {
 
       // Simplified: Assume first account is the pool
       const poolAccount = accounts[0];
-      // Placeholder: Parse pool data to extract price
-      const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
+      const { price, liquidity } = await this.calculatePoolPrice(poolAccount);
       const totalSupply = await this.getTokenSupply(mintKey);
       const deployTime = await this.getTokenDeployTime(mintKey);
 
       return {
         price,
+        liquidity,
         marketCap: price * totalSupply,
         deployTime
       };
@@ -182,7 +195,8 @@ class PriceService {
       const accounts = await connection.getProgramAccounts(ORCA_PROGRAM_ID, {
         filters: [
           { dataSize: 712 }, // Orca pool account size
-          { memcmp: { offset: 8, bytes: mintKey.toBase58() } } // Token A or B mint
+          { memcmp: { offset: 8, bytes: mintKey.toBase58() } },  // Token A mint
+          { memcmp: { offset: 40, bytes: mintKey.toBase58() } }  // Token B mint
         ]
       });
 
@@ -192,12 +206,13 @@ class PriceService {
 
       // Simplified: Assume first account is the pool
       const poolAccount = accounts[0];
-      const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
+      const { price, liquidity } = await this.calculatePoolPrice(poolAccount);
       const totalSupply = await this.getTokenSupply(mintKey);
       const deployTime = await this.getTokenDeployTime(mintKey);
 
       return {
         price,
+        liquidity,
         marketCap: price * totalSupply,
         deployTime
       };
@@ -212,8 +227,8 @@ class PriceService {
     try {
       const accounts = await connection.getProgramAccounts(METEORA_PROGRAM_ID, {
         filters: [
-          { dataSize: 600 }, // Example Meteora pool account size
-          { memcmp: { offset: 16, bytes: mintKey.toBase58() } } // Token mint
+          { dataSize: 600 }, // Example Meteora pool account size (verify)
+          { memcmp: { offset: 16, bytes: mintKey.toBase58() } } // Token mint (verify offset)
         ]
       });
 
@@ -223,12 +238,13 @@ class PriceService {
 
       // Simplified: Assume first account is the pool
       const poolAccount = accounts[0];
-      const price = await this.calculatePoolPrice(poolAccount); // Implement actual logic
+      const { price, liquidity } = await this.calculatePoolPrice(poolAccount);
       const totalSupply = await this.getTokenSupply(mintKey);
       const deployTime = await this.getTokenDeployTime(mintKey);
 
       return {
         price,
+        liquidity,
         marketCap: price * totalSupply,
         deployTime
       };
@@ -240,15 +256,19 @@ class PriceService {
 
   // Placeholder for calculating price from pool data
   async calculatePoolPrice(poolAccount) {
-    // Implement actual logic to parse pool reserves and calculate price
+    // TODO: Implement actual logic using DEX SDK (e.g., Raydium SDK, Orca SDK)
     // Example: price = (reserve_token_b / reserve_token_a) * solPrice
-    return 0.1234; // Placeholder
+    // For now, return placeholder values
+    return {
+      price: 0.1234, // Placeholder
+      liquidity: 100000 // Placeholder
+    };
   }
 
   // Fetch price from Jupiter API as a fallback
   async fetchPriceFromJupiter(tokenMint) {
     try {
-      const response = await axios.get(`https://price.jup.ag/v4/price?ids=${tokenMint}`);
+      const response = await axios.get(`https://price.jup.ag/v4/price?ids=${tokenMint}`, { timeout: 5000 });
       const data = response.data.data[tokenMint];
 
       if (!data) {
@@ -260,6 +280,7 @@ class PriceService {
 
       return {
         price: data.price,
+        liquidity: data.liquidity || 0, // Jupiter may not provide liquidity
         marketCap: data.price * totalSupply,
         deployTime,
         timeSinceDeployMs: Date.now() - new Date(deployTime).getTime()
@@ -306,10 +327,24 @@ class PriceService {
   // Main method to fetch token price
   async getTokenPrice(tokenMint) {
     const cacheKey = `price-${tokenMint}`;
+    const redisKey = `token:price:${tokenMint}`;
+    
+    // Check local cache
     const cached = priceCache.get(cacheKey);
-
     if (cached) {
       return cached;
+    }
+
+    // Check Redis cache
+    try {
+      const redisCached = await redis.get(redisKey);
+      if (redisCached) {
+        const priceData = JSON.parse(redisCached);
+        priceCache.set(cacheKey, priceData);
+        return priceData;
+      }
+    } catch (redisError) {
+      console.error(`[PriceService] Error checking Redis cache for ${tokenMint}:`, redisError.message);
     }
 
     const dexes = [DEXS.RAYDIUM, DEXS.ORCA, DEXS.METEORA];
@@ -318,6 +353,11 @@ class PriceService {
       try {
         const priceData = await this.fetchPriceFromDex(tokenMint, dex);
         priceCache.set(cacheKey, priceData);
+        try {
+          await redis.set(redisKey, JSON.stringify(priceData), 'EX', 300);
+        } catch (redisError) {
+          console.error(`[PriceService] Error caching price for ${tokenMint} in Redis:`, redisError.message);
+        }
         return priceData;
       } catch (error) {
         console.warn(`[PriceService] Failed to fetch price from ${dex} for ${tokenMint}, trying next DEX`);
@@ -328,14 +368,31 @@ class PriceService {
     try {
       const priceData = await this.fetchPriceFromJupiter(tokenMint);
       priceCache.set(cacheKey, priceData);
+      try {
+        await redis.set(redisKey, JSON.stringify(priceData), 'EX', 300);
+      } catch (redisError) {
+        console.error(`[PriceService] Error caching price for ${tokenMint} in Redis:`, redisError.message);
+      }
       return priceData;
     } catch (error) {
       console.error(`[PriceService] All price sources failed for ${tokenMint}`);
+      try {
+        const redisFallback = await redis.get(redisKey);
+        if (redisFallback) {
+          const priceData = JSON.parse(redisFallback);
+          priceCache.set(cacheKey, priceData);
+          return priceData;
+        }
+      } catch (redisError) {
+        console.error(`[PriceService] Error fetching fallback price from Redis for ${tokenMint}:`, redisError.message);
+      }
       return {
         price: null,
+        liquidity: null,
         marketCap: null,
         deployTime: null,
-        timeSinceDeployMs: null
+        timeSinceDeployMs: null,
+        error: `All price sources failed for ${tokenMint}`
       };
     }
   }
@@ -350,6 +407,7 @@ class PriceService {
       } catch (error) {
         results.set(mint, {
           price: null,
+          liquidity: null,
           marketCap: null,
           deployTime: null,
           timeSinceDeployMs: null,
