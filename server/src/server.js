@@ -989,6 +989,21 @@ app.post('/api/tokens/prices', auth.authRequired, async (req, res) => {
   }
 });
 
+app.get('/api/tokens/new', auth.authRequired, async (req, res) => {
+  try {
+    const newTokens = await redis.lrange('new_tokens', 0, 100);
+    const parsedTokens = newTokens.map(data => JSON.parse(data));
+    res.json({
+      success: true,
+      tokens: parsedTokens,
+      count: parsedTokens.length
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Error fetching new tokens:`, error.message);
+    res.status(500).json({ error: 'Failed to fetch new tokens' });
+  }
+});
+
 app.get('/api/prices/stats', auth.authRequired, auth.adminRequired, (req, res) => {
   try {
     const stats = priceService.getStats();
