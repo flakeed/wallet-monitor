@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const PriceService = require('./priceService');
+const PriceService = require('./services/priceService');
 
 router.post('/prices', async (req, res) => {
   const { mints } = req.body;
