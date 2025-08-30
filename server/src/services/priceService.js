@@ -2,7 +2,7 @@ const Redis = require('ioredis');
 
 class PriceService {
     constructor() {
-        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
+        this.redis = new Redis(process.env.REDIS_URL || 'redis://default:oiDGlYjibqdRRYabNWXCtkhKDJbRSSHd@trolley.proxy.rlwy.net:20290');
         this.solPriceCache = {
             price: 150,
             lastUpdated: 0,

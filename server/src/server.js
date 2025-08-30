@@ -345,7 +345,7 @@ app.get('/api/transactions/stream', async (req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Cache-Control');
     res.flushHeaders();
 
-    const subscriber = new Redis(process.env.REDIS_URL || 'redis://default:sDFxdVgjQtqENxXvirslAnoaAYhsJLJF@tramway.proxy.rlwy.net:37791');
+    const subscriber = new Redis(process.env.REDIS_URL || 'redis://default:oiDGlYjibqdRRYabNWXCtkhKDJbRSSHd@trolley.proxy.rlwy.net:20290');
 
     subscriber.subscribe('transactions', (err) => {
       if (err) {
