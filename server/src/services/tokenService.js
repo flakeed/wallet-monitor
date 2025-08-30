@@ -6,7 +6,7 @@ const Redis = require('ioredis');
 
 let isProcessingQueue = false;
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://default:oiDGlYjibqdRRYabNWXCtkhKDJbRSSHd@trolley.proxy.rlwy.net:20290');
+const redis = new Redis(process.env.REDIS_URL || 'redis://:123@localhost:6379');
 
 redis.on('connect', () => {
     console.log(`[${new Date().toISOString()}] ✅ Connected to Redis`);
